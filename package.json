@@ -1,0 +1,32 @@
+{
+  "name": "rehearsal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "REHEARSAL: a PayPal sandbox scenario engine. Day-1 gate scripts only.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "gate:0": "tsx gate/00-preflight.ts",
+    "gate:1": "tsx gate/01-card-order.ts",
+    "gate:2": "tsx gate/02-partial-refund.ts",
+    "gate:3": "tsx gate/03-payout-unclaimed.ts",
+    "gate:4": "tsx gate/04-invoice.ts",
+    "gate:5": "tsx gate/05-webhooks.ts",
+    "gate:6": "tsx gate/06-dispute.ts"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
