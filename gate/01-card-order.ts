@@ -3,6 +3,7 @@ import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf } from "../src/core/idempotency";
 import { toMinor } from "../src/core/money";
 import { classify } from "../src/core/outcome";
+import { CURRENCY, cardOrderBody } from "./_fixtures";
 import { errorSummary, pick, runGate, saveState } from "./_harness";
 
 /**
@@ -14,24 +15,7 @@ import { errorSummary, pick, runGate, saveState } from "./_harness";
  * code, that is the finding the scope decision needs.
  */
 
-const CURRENCY = "USD";
 const AMOUNT = "42.00";
-
-// Published PayPal sandbox test Visa, from developer.paypal.com's card-testing
-// page. A test value, not a secret, so it belongs in the repo.
-const CARD = {
-  number: "4012000033330026",
-  expiry: "2030-01",
-  security_code: "123",
-  name: "Rehearsal Gate",
-  billing_address: {
-    address_line_1: "1 Test Street",
-    admin_area_2: "San Jose",
-    admin_area_1: "CA",
-    postal_code: "95131",
-    country_code: "US",
-  },
-};
 
 await runGate({
   id: "1",
@@ -50,17 +34,7 @@ await runGate({
       // Without this the response is a bare id and status, and the capture id
       // we need for gate 2 never arrives.
       extraHeaders: { Prefer: "return=representation" },
-      body: {
-        intent: "CAPTURE",
-        purchase_units: [
-          {
-            reference_id: "rehearsal-gate-1",
-            description: "REHEARSAL sample store, gate 1",
-            amount: { currency_code: CURRENCY, value: AMOUNT },
-          },
-        ],
-        payment_source: { card: CARD },
-      },
+      body: cardOrderBody(AMOUNT, "rehearsal-gate-1"),
     });
 
     const orderId = pick(res.body, ["id"]);

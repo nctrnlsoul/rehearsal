@@ -2,6 +2,7 @@ import { credentialsFor } from "../src/adapters/env";
 import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf, senderBatchId } from "../src/core/idempotency";
 import { classify } from "../src/core/outcome";
+import { unclaimedReceiver } from "./_fixtures";
 import { errorSummary, pick, runGate, saveState, sleep } from "./_harness";
 
 /**
@@ -27,9 +28,7 @@ await runGate({
       minIntervalMs: 300,
     });
 
-    // example.com is reserved and can never be a real PayPal account, so the
-    // item has to sit UNCLAIMED rather than settling.
-    const receiver = `rehearsal-unclaimed-${ctx.runId.slice(-6)}@example.com`;
+    const receiver = unclaimedReceiver(ctx.runId);
     const batchId = senderBatchId(seedOf(["gate3", "batch", ctx.runId]));
     ctx.log(`receiver ${receiver}`);
     ctx.record("sender_batch_id", batchId);
