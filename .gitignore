@@ -4,7 +4,7 @@ node_modules/
 !.env.example
 .vercel/
 *.log
-out.txt
+/*.txt
 gate/runs/
 receiver/node_modules/
 receiver/.next/
