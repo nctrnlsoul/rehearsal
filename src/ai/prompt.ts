@@ -41,12 +41,15 @@ const FIELD_DOCS: Record<(typeof STEP_KINDS)[number], string> = {
 
 export function buildPlannerPrompt(args: {
   description: string;
-  currency: string;
   allowedEventOrigins: readonly string[];
   caps?: Caps;
 }): { system: string; prompt: string } {
   const caps = args.caps ?? DEFAULT_CAPS;
-  const { description, currency } = args;
+  const { description } = args;
+  // One source of truth. The caps are denominated in a currency, and comparing
+  // amounts across currencies is meaningless, so the scenario currency IS the
+  // caps currency rather than a separate argument that could disagree with it.
+  const currency = caps.currency;
 
   if (description.trim() === "") {
     throw new UnsafeDescriptionError("it is blank");
@@ -89,7 +92,10 @@ export function buildPlannerPrompt(args: {
     "  - A step with `from` must be able to reach that step through needs.",
     "    refund.from must be a card_order. invoice_send/record_payment/cancel.from",
     "    must be an invoice_create.",
+    `  - currency must be exactly "${currency}". Any other currency is rejected.`,
     `  - At most ${caps.maxSteps} steps (the hard structural limit is ${MAX_STEPS}).`,
+    `  - At most ${caps.maxDisputes} open_dispute steps: each consumes a pre-approved`,
+    "    purchase that needed a human to click an approval link.",
     `  - No single amount over ${currency} ${fromMinor(caps.maxStepAmountMinor, currency)}.`,
     `  - The whole run may move at most ${currency} ${fromMinor(caps.maxTotalMinor, currency)}.`,
     "  - A webhook target must be exactly one of these origins:",

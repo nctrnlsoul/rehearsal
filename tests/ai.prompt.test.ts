@@ -11,7 +11,7 @@ import {
 const STORE = "https://store.test";
 
 const build = (description: string, origins: readonly string[] = [STORE]) =>
-  buildPlannerPrompt({ description, currency: "USD", allowedEventOrigins: origins });
+  buildPlannerPrompt({ description, allowedEventOrigins: origins });
 
 describe("buildPlannerPrompt system message", () => {
   // Guards against drift: a new step kind must be documented, not silently
@@ -56,6 +56,12 @@ describe("buildPlannerPrompt system message", () => {
 
   it("requires decimal string amounts", () => {
     expect(build("a shop").system).toMatch(/DECIMAL STRINGS/);
+  });
+
+  it("pins the currency and caps the dispute count", () => {
+    const { system } = build("a shop");
+    expect(system).toMatch(/currency must be exactly "USD"/);
+    expect(system).toMatch(/At most 2 open_dispute steps/);
   });
 });
 

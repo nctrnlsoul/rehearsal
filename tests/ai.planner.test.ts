@@ -145,6 +145,28 @@ describe("planScenario rejects model output it cannot trust", () => {
     expect(out.violations[0]!.code).toBe("step-amount-too-large");
   });
 
+  // A currency switch would otherwise measure the plan against the wrong cap.
+  it("rejects a scenario in a currency the caps are not set in", async () => {
+    const out = await plan({
+      ...GOOD,
+      currency: "JPY",
+      steps: [{ id: "o1", kind: "card_order", amount: "1000" }],
+    }).run();
+    expect(out.ok).toBe(false);
+    if (out.ok || out.reason !== "over-caps") return;
+    expect(out.violations[0]!.code).toBe("currency-mismatch");
+  });
+
+  it("rejects a plan that would drain the purchase bank", async () => {
+    const out = await plan({
+      ...GOOD,
+      steps: Array.from({ length: 5 }, (_, i) => ({ id: `d${i}`, kind: "open_dispute" })),
+    }).run();
+    expect(out.ok).toBe(false);
+    if (out.ok || out.reason !== "over-caps") return;
+    expect(out.violations.some((v) => v.code === "too-many-disputes")).toBe(true);
+  });
+
   it("rejects a run whose total is over the cap", async () => {
     const out = await plan({
       ...GOOD,

@@ -82,14 +82,12 @@ function refusalOf(value: unknown): string | null {
 export async function planScenario(
   args: {
     description: string;
-    currency?: string;
     allowedEventOrigins: readonly string[];
     caps?: Caps;
   },
   deps: { generate: GenerateFn; budget?: AiBudgetTracker },
 ): Promise<PlanOutcome> {
   const caps = args.caps ?? DEFAULT_CAPS;
-  const currency = args.currency ?? "USD";
   const budget = deps.budget ?? new AiBudgetTracker();
 
   // Sized before it reaches the model, and before a call is even reserved.
@@ -97,7 +95,6 @@ export async function planScenario(
 
   const { system, prompt } = buildPlannerPrompt({
     description: args.description,
-    currency,
     allowedEventOrigins: args.allowedEventOrigins,
     caps,
   });
