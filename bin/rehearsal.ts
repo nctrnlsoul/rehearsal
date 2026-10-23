@@ -1,7 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { credentialsFor, optionalEnv } from "../src/adapters/env";
+import { AiBudgetTracker, aiBudgetFromEnv } from "../src/ai/budget";
+import {
+  DEFAULT_PLANNER_MODEL,
+  anthropicGenerator,
+  planScenario,
+} from "../src/ai/planner";
+import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
+import { capsFromEnv } from "../src/core/caps";
 import { JsonStore } from "../src/adapters/jsonStore";
 import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf } from "../src/core/idempotency";
@@ -96,12 +103,86 @@ function dryRun(rest: string[]): void {
   for (const line of dryRunLines(scenario)) console.log(line);
 }
 
+// ---------------------------------------------------------------- plan
+
+async function planCommand(rest: string[]): Promise<void> {
+  const description = rest[0] !== undefined && !rest[0].startsWith("--") ? rest[0] : "";
+  const flags = args(rest.slice(description === "" ? 0 : 1));
+
+  if (description === "") {
+    console.error('usage: rehearsal plan "<business description>" [--out <file>] [--yes]');
+    process.exit(1);
+  }
+
+  const apiKey = requiredEnv("ANTHROPIC_API_KEY");
+  const model = optionalEnv("REHEARSAL_PLANNER_MODEL") ?? DEFAULT_PLANNER_MODEL;
+  const caps = capsFromEnv(process.env);
+  const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
+  const origins = allowedEventOrigins();
+
+  console.log(`planning with ${model}`);
+  const outcome = await planScenario(
+    { description, allowedEventOrigins: origins, caps },
+    { generate: anthropicGenerator({ apiKey, model }), budget },
+  );
+  console.log(`model spend: ${budget.summary()}`);
+  console.log("");
+
+  if (!outcome.ok) {
+    // Each of these is a refusal, not a crash. Nothing ran.
+    switch (outcome.reason) {
+      case "refused-by-model":
+        console.error(`REFUSED by the model: ${outcome.detail}`);
+        break;
+      case "unparseable":
+        console.error(`REFUSED: ${outcome.detail}`);
+        break;
+      case "schema-invalid":
+        console.error("REFUSED: the plan does not pass the scenario schema, so it will not run:");
+        for (const e of outcome.errors) console.error(`  ${e}`);
+        break;
+      case "over-caps":
+        console.error("REFUSED: the plan exceeds the spend caps, so it will not run:");
+        for (const v of outcome.violations) console.error(`  ${v.code}: ${v.message}`);
+        break;
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  for (const line of dryRunLines(outcome.scenario)) console.log(line);
+
+  const out = flags["out"];
+  if (out !== undefined && out !== "true") {
+    writeFileSync(resolve(out), `${JSON.stringify(outcome.scenario, null, 2)}\n`, "utf8");
+    console.log("");
+    console.log(`scenario written to ${resolve(out)}`);
+  }
+
+  if (flags["yes"] !== "true") {
+    console.log("");
+    console.log("Nothing has run. This plan was generated from an untrusted description,");
+    console.log("so read it, then re-run the same command with --yes to execute it.");
+    return;
+  }
+
+  console.log("");
+  console.log("--yes given, executing this plan against the sandbox");
+  await executeAndReport(outcome.scenario, {});
+}
+
 // ---------------------------------------------------------------- run
 
 async function run(rest: string[]): Promise<void> {
   const scenario = loadScenario(rest[0]);
-  const flags = args(rest.slice(1));
+  await executeAndReport(scenario, args(rest.slice(1)));
+}
 
+/** Shared by a file-based run and an AI-planned one, so both behave identically. */
+async function executeAndReport(
+  scenario: Scenario,
+  flags: Record<string, string>,
+): Promise<void> {
   const resumeId = flags["resume"];
   const runId =
     resumeId ??
@@ -433,6 +514,8 @@ function bankList(): void {
 function usage(): void {
   console.log("REHEARSAL");
   console.log("  rehearsal dry-run <scenario.json>        print the plan, no network calls");
+  console.log('  rehearsal plan "<description>"           AI-plan a scenario, shows it only');
+  console.log('  rehearsal plan "<description>" --yes     plan it and then run it');
   console.log("  rehearsal run <scenario.json>            run it against the sandbox");
   console.log("  rehearsal run <scenario.json> --resume <runId> [--retry <stepId>]");
   console.log("  rehearsal bank:add [--amount 88.00]      create an order and print its approval link");
@@ -446,6 +529,9 @@ const [, , command, ...rest] = process.argv;
 switch (command) {
   case "dry-run":
     dryRun(rest);
+    break;
+  case "plan":
+    await planCommand(rest);
     break;
   case "run":
     await run(rest);
