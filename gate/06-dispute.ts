@@ -23,6 +23,8 @@ import { clearState, errorSummary, loadState, pick, runGate, saveState, sleep } 
 const AMOUNT = "88.00";
 const DISPUTE_REASON = "MERCHANDISE_OR_SERVICE_NOT_RECEIVED";
 const DISPUTE_POLL_BUDGET_MS = 120_000;
+const TXN_SEARCH_ATTEMPTS = 3;
+const TXN_SEARCH_INTERVAL_MS = 15_000;
 
 type Gate6State = {
   orderId: string;
@@ -42,6 +44,73 @@ function approvalLink(body: unknown): string | null {
     }
   }
   return null;
+}
+
+type TxnLookup = { id: string | null; how: string; detail: string };
+
+/**
+ * The dispute body needs the BUYER-side transaction id, which is a different id
+ * from the seller's capture id for the same money movement. The buyer's own
+ * token is the only thing that can see it.
+ *
+ * Transaction Search is documented to lag by up to three hours, so this polls a
+ * little and then gives up honestly rather than looping.
+ */
+async function findBuyerTransactionId(
+  buyer: PaypalClient,
+  ctx: { log: (line: string) => void },
+  amount: string,
+): Promise<TxnLookup> {
+  const override = optionalEnv("REHEARSAL_BUYER_TRANSACTION_ID");
+  if (override !== null) {
+    return { id: override, how: "supplied via REHEARSAL_BUYER_TRANSACTION_ID", detail: "" };
+  }
+
+  const fmt = (d: Date) => `${d.toISOString().slice(0, 19)}-0000`;
+  let lastDetail = "transaction search never ran";
+
+  for (let attempt = 1; attempt <= TXN_SEARCH_ATTEMPTS; attempt += 1) {
+    const end = new Date();
+    const start = new Date(end.getTime() - 48 * 60 * 60 * 1000);
+    const res = await buyer.call({
+      method: "GET",
+      path: `/v1/reporting/transactions?start_date=${encodeURIComponent(fmt(start))}&end_date=${encodeURIComponent(fmt(end))}&fields=transaction_info&page_size=100`,
+    });
+
+    if (res.status !== 200) {
+      lastDetail = `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.bodyPreview)}`;
+      ctx.log(lastDetail);
+      // Missing permission will not fix itself by waiting.
+      if (res.status === 401 || res.status === 403) {
+        return { id: null, how: "", detail: lastDetail };
+      }
+    } else {
+      const holder = res.body as { transaction_details?: unknown };
+      const details = Array.isArray(holder.transaction_details) ? holder.transaction_details : [];
+      const matches: Array<{ id: string; at: string }> = [];
+      for (const d of details) {
+        const info = (d as Record<string, unknown>)["transaction_info"];
+        const id = pick(info, ["transaction_id"]);
+        const value = pick(info, ["transaction_amount", "value"]);
+        // The buyer side records the amount as a debit, so compare magnitudes.
+        if (id !== null && value !== null && value.replace("-", "") === amount) {
+          matches.push({ id, at: pick(info, ["transaction_initiation_date"]) ?? "" });
+        }
+      }
+      lastDetail = `buyer transaction search saw ${details.length} transaction(s), ${matches.length} matching ${amount}`;
+      ctx.log(lastDetail);
+      if (matches.length > 0) {
+        matches.sort((a, b) => b.at.localeCompare(a.at));
+        return {
+          id: matches[0]!.id,
+          how: "found by buyer-side transaction search",
+          detail: lastDetail,
+        };
+      }
+    }
+    if (attempt < TXN_SEARCH_ATTEMPTS) await sleep(TXN_SEARCH_INTERVAL_MS);
+  }
+  return { id: null, how: "", detail: lastDetail };
 }
 
 await runGate({
@@ -122,6 +191,7 @@ await runGate({
 
     // Phase B: an order exists. Where is it?
     ctx.record("order_id (resumed)", saved.orderId);
+    if (saved.captureId !== undefined) ctx.record("capture_id (resumed)", saved.captureId);
     const look = await seller.call({ method: "GET", path: `/v2/checkout/orders/${saved.orderId}` });
     const orderStatus = pick(look.body, ["status"]);
     ctx.log(`order ${saved.orderId} reads ${orderStatus ?? "unreadable"}`);
@@ -184,19 +254,36 @@ await runGate({
     let disputeId = saved.disputeId ?? null;
 
     if (disputeId === null) {
-      const buyerEmail = optionalEnv("REHEARSAL_BUYER_EMAIL");
-      const body: Record<string, unknown> = {
-        disputed_transactions: [{ seller_transaction_id: captureId }],
-        reason: DISPUTE_REASON,
-        dispute_amount: { currency_code: CURRENCY, value: AMOUNT },
-      };
-      if (buyerEmail !== null) body["email"] = buyerEmail;
+      const found = await findBuyerTransactionId(buyer, ctx, AMOUNT);
+      if (found.id === null) {
+        const hasReporting =
+          buyer.tokenMeta?.scopes.some((s) => s.includes("reporting")) === true;
+        return {
+          ok: false,
+          reason: `could not read the buyer-side transaction id by API (${found.detail}). Buyer app ${hasReporting ? "has" : "does NOT have"} a reporting scope, and PayPal documents Transaction Search as lagging by up to three hours. Read the transaction id from the buyer account's activity page, set REHEARSAL_BUYER_TRANSACTION_ID, then run gate 6 again. Capture ${captureId} is already settled, so nothing needs redoing.`,
+          qualifier: "BLOCKED",
+        };
+      }
+      ctx.record("buyer_transaction_id", found.id);
+      ctx.log(`buyer transaction id ${found.how}`);
 
+      // Shape confirmed by another hackathon entrant in PayPal's Discord, and it
+      // is NOT in the public OpenAPI spec. Note buyer_transaction_id, not the
+      // seller's capture id, and no PayPal-Auth-Assertion header.
       const filed = await buyer.call({
         method: "POST",
         path: "/v1/customer/disputes",
-        idempotencySeed: seedOf(["gate6", "dispute", captureId]),
-        body,
+        idempotencySeed: seedOf(["gate6", "dispute", found.id]),
+        body: {
+          disputed_transactions: [{ buyer_transaction_id: found.id }],
+          reason: DISPUTE_REASON,
+          dispute_amount: { currency_code: CURRENCY, value: AMOUNT },
+          extensions: {
+            merchant_contacted: true,
+            merchant_contacted_outcome: "NO_RESPONSE",
+            merchandize_dispute_properties: { issue_type: "PRODUCT" },
+          },
+        },
       });
       disputeId = pick(filed.body, ["dispute_id"]) ?? pick(filed.body, ["id"]);
       if (disputeId !== null) ctx.record("dispute_id", disputeId);
@@ -206,7 +293,7 @@ await runGate({
         return {
           ok: false,
           reason: `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.bodyPreview)}. Sandbox dispute creation is absent from PayPal's public OpenAPI spec, so this is the finding, not a code bug.`,
-          qualifier: filed.status === 403 || filed.status === 404 ? "BLOCKED" : "FAIL",
+          ...(filed.status === 403 || filed.status === 404 ? { qualifier: "BLOCKED" } : {}),
         };
       }
       saveState("gate6", { ...saved, captureId, disputeId });
