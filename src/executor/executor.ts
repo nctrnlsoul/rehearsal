@@ -119,13 +119,16 @@ export async function executeScenario(
       if (rec.status === "succeeded") outputs.set(rec.id, rec.ids);
     }
 
+    // Run id plus step id: a retry of the same step reuses the key, and two
+    // different steps can never collide.
+    const seedParts = ["run", runId, "step", stepId];
+
     const ctx: StepContext = {
       runId,
       scenario,
       step,
-      // Run id plus step id: a retry of the same step reuses the key, and two
-      // different steps can never collide.
-      seed: seedOf(["run", runId, "step", stepId]),
+      seed: seedOf(seedParts),
+      seedFor: (...suffix: string[]) => seedOf([...seedParts, ...suffix]),
       seller: deps.seller,
       buyer: deps.buyer,
       outputs,

@@ -91,6 +91,23 @@ describe("executeScenario orchestration", () => {
     expect(seen[0]).not.toBe(seen[1]);
   });
 
+  // Regression: a step with two writes composed seedOf([ctx.seed, "create"]),
+  // but ctx.seed is already separator-joined, so the collision guard threw
+  // mid-run and halted a scenario that had nothing wrong with it.
+  it("composes a multi-write seed from parts without tripping the collision guard", async () => {
+    const seen: string[] = [];
+    const multi: StepHandler = async (ctx) => {
+      seen.push(ctx.seedFor("invoice-number"), ctx.seedFor("create"), ctx.seed);
+      return { kind: "success", detail: "ok" };
+    };
+    const h = harness({ handlers: registry({ card_order: multi, refund: multi }) });
+    const state = await executeScenario({ scenario: twoStep(), runId: "run-m" }, h.deps);
+    expect(state.halted).toBe(false);
+    expect(seen[0]).toBe(seedOf(["run", "run-m", "step", "o1", "invoice-number"]));
+    expect(seen[1]).toBe(seedOf(["run", "run-m", "step", "o1", "create"]));
+    expect(new Set(seen.slice(0, 3)).size).toBe(3);
+  });
+
   it("shows a later step the ids an earlier step recorded", async () => {
     let seenCapture: string | undefined;
     const reader: StepHandler = async (ctx) => {

@@ -14,8 +14,14 @@ export type StepContext = {
   readonly runId: string;
   readonly scenario: Scenario;
   readonly step: Step;
-  /** Idempotency seed for this step: run id plus step id, as the milestone requires. */
+  /** Idempotency seed for this step: run id plus step id. */
   readonly seed: string;
+  /**
+   * Seed for a step that makes more than one write. Composes from the step's
+   * PARTS, because `seed` is already separator-joined and feeding it back into
+   * seedOf is rejected, correctly, as a collision risk.
+   */
+  seedFor(...suffix: string[]): string;
   readonly seller: PaypalClient;
   readonly buyer: PaypalClient;
   /** Ids from steps that already succeeded, keyed by step id. */

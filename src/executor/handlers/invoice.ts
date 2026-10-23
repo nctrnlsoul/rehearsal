@@ -1,4 +1,3 @@
-import { seedOf } from "../../core/idempotency";
 import { errorSummary, pick } from "../../core/json";
 import { classify } from "../../core/outcome";
 import {
@@ -26,7 +25,7 @@ export const invoiceCreateHandler: StepHandler = async (ctx) => {
   const numbered = await ctx.seller.call({
     method: "POST",
     path: "/v2/invoicing/generate-next-invoice-number",
-    idempotencySeed: seedOf([ctx.seed, "invoice-number"]),
+    idempotencySeed: ctx.seedFor("invoice-number"),
   });
   if (numbered.status === 401 || numbered.status === 403) {
     return failed(
@@ -56,7 +55,7 @@ export const invoiceCreateHandler: StepHandler = async (ctx) => {
   const created = await ctx.seller.call({
     method: "POST",
     path: "/v2/invoicing/invoices",
-    idempotencySeed: seedOf([ctx.seed, "create"]),
+    idempotencySeed: ctx.seedFor("create"),
     extraHeaders: { Prefer: "return=representation" },
     body: {
       detail,

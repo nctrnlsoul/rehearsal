@@ -1,4 +1,5 @@
 import { PaypalClient } from "../../src/adapters/paypal";
+import { seedOf } from "../../src/core/idempotency";
 import type { Purchase } from "../../src/core/purchaseBank";
 import { type Scenario, validateScenario } from "../../src/core/scenario";
 import type { ClaimResult, StepContext } from "../../src/executor/types";
@@ -119,7 +120,8 @@ export function makeContext(opts: {
     runId: "run-test",
     scenario: opts.scenario,
     step,
-    seed: `run-test:${opts.stepId}`,
+    seed: seedOf(["run", "run-test", "step", opts.stepId]),
+    seedFor: (...suffix: string[]) => seedOf(["run", "run-test", "step", opts.stepId, ...suffix]),
     seller: opts.seller,
     buyer: opts.buyer ?? opts.seller,
     outputs,
