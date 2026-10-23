@@ -14,7 +14,9 @@ export type PurchaseStatus =
   | "awaiting_transaction_id"
   /** Complete and unused: a dispute may draw this one. */
   | "available"
-  | "used";
+  | "used"
+  /** The approval link lapsed before anyone clicked it. Never drawable. */
+  | "expired";
 
 export type Purchase = {
   readonly id: string;
@@ -28,6 +30,8 @@ export type Purchase = {
   readonly approvalUrl: string | null;
   readonly usedByRunId: string | null;
   readonly usedAt: string | null;
+  /** Why it expired, kept so the label is backed by evidence rather than a guess. */
+  readonly expiredReason?: string;
 };
 
 export type Bank = {
@@ -123,6 +127,25 @@ export function attachTransactionId(
   return { ok: true, value: replace(bank, orderId, { buyerTransactionId, status: "available" }) };
 }
 
+/**
+ * Marks an unapproved order dead so nothing waits on it again.
+ *
+ * Only an order still awaiting approval can expire. Once captured, money has
+ * moved and the purchase is real whatever the approval link does.
+ */
+export function markExpired(bank: Bank, orderId: string, reason: string): BankResult<Bank> {
+  const found = bank.purchases.find((p) => p.orderId === orderId);
+  if (found === undefined) return { ok: false, error: `order ${orderId} is not in the bank` };
+  if (found.status !== "awaiting_approval") {
+    return {
+      ok: false,
+      error: `order ${orderId} is ${found.status}, so it cannot expire`,
+    };
+  }
+  if (reason.trim() === "") return { ok: false, error: "an expiry needs a reason" };
+  return { ok: true, value: replace(bank, orderId, { status: "expired", expiredReason: reason }) };
+}
+
 /** Takes the oldest drawable purchase and marks it used. Never reuses one. */
 export function claimPurchase(
   bank: Bank,
@@ -134,11 +157,15 @@ export function claimPurchase(
     const waiting = bank.purchases.filter(
       (p) => p.status === "awaiting_approval" || p.status === "awaiting_transaction_id",
     ).length;
+    const expired = bank.purchases.filter((p) => p.status === "expired").length;
+    const parts: string[] = [];
+    if (waiting > 0) parts.push(`${waiting} still awaiting approval or a transaction id`);
+    if (expired > 0) parts.push(`${expired} expired unapproved`);
     return {
       ok: false,
       error:
-        waiting > 0
-          ? `no purchase is ready to dispute: ${waiting} still awaiting approval or a transaction id. Run the bank commands to finish them.`
+        parts.length > 0
+          ? `no purchase is ready to dispute: ${parts.join(", ")}. Run bank:add for a fresh one and approve it promptly.`
           : "the purchase bank is empty, so no dispute can be opened. Add a purchase first.",
     };
   }

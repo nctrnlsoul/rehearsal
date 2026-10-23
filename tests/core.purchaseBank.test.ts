@@ -7,6 +7,7 @@ import {
   claimPurchase,
   confirmCapture,
   emptyBank,
+  markExpired,
 } from "../src/core/purchaseBank";
 
 const T = "2026-10-23T00:00:00.000Z";
@@ -84,6 +85,48 @@ describe("the bank lifecycle", () => {
   });
 });
 
+describe("markExpired", () => {
+  // The real case: an approval link left overnight, then GET order returns 404.
+  it("marks an unapproved order expired with its evidence", () => {
+    const a = addPurchase(emptyBank(), seed("O1"));
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    const e = markExpired(a.value, "O1", "PayPal returned 404 on the order");
+    expect(e.ok).toBe(true);
+    if (!e.ok) return;
+    expect(e.value.purchases[0]!.status).toBe("expired");
+    expect(e.value.purchases[0]!.expiredReason).toContain("404");
+    expect(availablePurchases(e.value)).toHaveLength(0);
+  });
+
+  it("refuses to expire a purchase whose money already moved", () => {
+    const captured = ready(emptyBank(), "O1");
+    const e = markExpired(captured, "O1", "404");
+    expect(e.ok).toBe(false);
+    if (!e.ok) expect(e.error).toMatch(/cannot expire/i);
+  });
+
+  it("refuses an unknown order and a blank reason", () => {
+    expect(markExpired(emptyBank(), "nope", "404").ok).toBe(false);
+    const a = addPurchase(emptyBank(), seed("O1"));
+    if (!a.ok) return;
+    expect(markExpired(a.value, "O1", "   ").ok).toBe(false);
+  });
+
+  it("is never drawable, so a dispute step cannot pick it up", () => {
+    const a = addPurchase(emptyBank(), seed("O1"));
+    if (!a.ok) return;
+    const e = markExpired(a.value, "O1", "404");
+    if (!e.ok) return;
+    const claim = claimPurchase(e.value, "run-1", T);
+    expect(claim.ok).toBe(false);
+    if (!claim.ok) {
+      expect(claim.error).toMatch(/1 expired unapproved/);
+      expect(claim.error).toMatch(/bank:add/);
+    }
+  });
+});
+
 describe("claimPurchase", () => {
   it("takes the oldest drawable purchase and marks it used", () => {
     let bank = ready(emptyBank(), "NEW", "2026-10-23T05:00:00.000Z");
@@ -119,6 +162,7 @@ describe("claimPurchase", () => {
     const pending = claimPurchase(a.value, "run-1", T);
     expect(pending.ok).toBe(false);
     if (!pending.ok) expect(pending.error).toMatch(/awaiting approval/i);
+    if (!pending.ok) expect(pending.error).not.toMatch(/expired/i);
   });
 
   it("refuses a purchase whose status lies about carrying both ids", () => {
