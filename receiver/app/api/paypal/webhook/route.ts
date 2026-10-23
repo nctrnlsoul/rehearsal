@@ -1,17 +1,20 @@
-import { append } from "../../../../lib/ledger";
+import { createLedger, readConfig } from "../../../../lib/ledger";
 
 /**
  * The webhook endpoint PayPal delivers to.
  *
- * It records the arrival and, when credentials are present, verifies the
+ * It records the arrival durably and, when credentials are present, verifies the
  * signature against PayPal. Verification is the point REHEARSAL makes: events
- * from PayPal's own Webhook Simulator cannot be verified, resent or looked up,
+ * from PayPal's own Webhook Simulator cannot be verified, resent, or looked up,
  * so an app that correctly verifies signatures rejects them. Real events pass.
+ *
+ * If the ledger cannot be written, this returns a non-2xx on purpose. PayPal
+ * retries, so a storage outage delays arrivals instead of losing them. Answering
+ * 200 while dropping the row would be the worst of both.
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// Pinned so the five gate events are far more likely to land on one instance.
 export const preferredRegion = ["iad1"];
 export const maxDuration = 15;
 
@@ -92,6 +95,20 @@ async function verify(
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // Checked before any work: if there is nowhere to record the arrival, say so
+  // rather than accepting a delivery we are going to drop.
+  let config;
+  try {
+    config = readConfig(process.env);
+  } catch (e) {
+    console.error(`ledger misconfigured: ${(e as Error).message}`);
+    return Response.json({ ok: false }, { status: 503 });
+  }
+  if (config === null) {
+    console.error("ledger is not configured: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are unset");
+    return Response.json({ ok: false }, { status: 503 });
+  }
+
   const raw = await req.text();
   if (raw.length > MAX_BODY_BYTES) {
     return Response.json({ ok: false }, { status: 413 });
@@ -107,15 +124,21 @@ export async function POST(req: Request): Promise<Response> {
   const e = (typeof event === "object" && event !== null ? event : {}) as Record<string, unknown>;
   const { verified, detail } = await verify(req.headers, event);
 
-  append({
-    eventId: str(e["id"]),
-    eventType: str(e["event_type"]),
-    receivedAtMs: Date.now(),
-    verified,
-    verifyDetail: detail,
-    resourceId: str((e["resource"] as Record<string, unknown> | undefined)?.["id"]),
-    transmissionId: req.headers.get("paypal-transmission-id"),
-  });
+  try {
+    await createLedger(config).append({
+      eventId: str(e["id"]),
+      eventType: str(e["event_type"]),
+      receivedAtMs: Date.now(),
+      verified,
+      verifyDetail: detail,
+      resourceId: str((e["resource"] as Record<string, unknown> | undefined)?.["id"]),
+      transmissionId: req.headers.get("paypal-transmission-id"),
+    });
+  } catch (err) {
+    console.error(`ledger insert failed: ${(err as Error).message}`);
+    // Non-2xx so PayPal retries. Delayed beats lost.
+    return Response.json({ ok: false }, { status: 500 });
+  }
 
   // PayPal only needs a 2xx. Nothing about our state goes back over the wire.
   return Response.json({ ok: true }, { status: 200 });

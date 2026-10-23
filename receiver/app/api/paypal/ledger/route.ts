@@ -1,9 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { BOOTED_AT_MS, INSTANCE_ID, snapshot } from "../../../../lib/ledger";
+import { BOOTED_AT_MS, INSTANCE_ID, createLedger, readConfig } from "../../../../lib/ledger";
 
 /**
  * Read side of the arrival ledger. Requires a shared secret, because the rows
  * describe real payment events and this endpoint is public on the internet.
+ *
+ * The auth gate is unchanged by the move to Supabase: callers still present
+ * REHEARSAL_RECEIVER_TOKEN, and the Supabase key stays server-side.
  */
 
 export const runtime = "nodejs";
@@ -17,7 +20,7 @@ function secretsMatch(presented: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-export function GET(req: Request): Response {
+export async function GET(req: Request): Promise<Response> {
   const expected = process.env["REHEARSAL_RECEIVER_TOKEN"];
   // Fail closed: an unset token locks the endpoint rather than opening it.
   if (expected === undefined || expected.trim() === "") {
@@ -30,12 +33,31 @@ export function GET(req: Request): Response {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  let config;
+  try {
+    config = readConfig(process.env);
+  } catch (e) {
+    console.error(`ledger misconfigured: ${(e as Error).message}`);
+    return Response.json({ error: "ledger not available" }, { status: 503 });
+  }
+  if (config === null) {
+    return Response.json({ error: "ledger not configured" }, { status: 503 });
+  }
+
+  let rows;
+  try {
+    rows = await createLedger(config).snapshot();
+  } catch (e) {
+    console.error(`ledger read failed: ${(e as Error).message}`);
+    return Response.json({ error: "ledger not available" }, { status: 503 });
+  }
+
   return Response.json(
     {
       instanceId: INSTANCE_ID,
       bootedAtMs: BOOTED_AT_MS,
       nowMs: Date.now(),
-      rows: snapshot(),
+      rows,
     },
     { status: 200, headers: { "cache-control": "no-store" } },
   );
