@@ -1,5 +1,6 @@
 import type { RunState, StepRecord } from "../core/runState";
 import type { Step } from "../core/scenario";
+import { cleanModelText } from "./planner";
 
 /**
  * The failure classes the edge-case finder aims at, each with a PURE check so
@@ -25,12 +26,16 @@ export type StoreDelivery = {
   readonly fulfilled: number;
   readonly duplicatesIgnored: number;
   readonly other: number;
+  /** Why deliveries of this event were refused, when any were. */
+  readonly refusalReasons?: readonly string[];
 };
 
 export type StoreSnapshot = {
   readonly orders: readonly StoreOrder[];
   /** Absent on a store deployment that predates per-event reporting. */
   readonly deliveries?: readonly StoreDelivery[];
+  /** Refusals with no event id to file them under, such as a body that was not JSON. */
+  readonly unattributedRefusals?: { readonly count: number; readonly reasons: readonly string[] };
   readonly eventCount: number;
   readonly unverifiedCount: number;
   readonly dedupeEnabled?: boolean;
@@ -107,6 +112,7 @@ type DeliveryEvidence =
       readonly fulfilled: number;
       readonly duplicatesIgnored: number;
       readonly other: number;
+      readonly reasons: readonly string[];
     };
 
 const isCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
@@ -127,14 +133,48 @@ function resentDelivery(store: StoreSnapshot, run: RunState): DeliveryEvidence {
     (d) => typeof d === "object" && d !== null && d.eventId === eventId,
   );
   if (entries.length === 0) {
-    return { kind: "counts", eventId, fulfilled: 0, duplicatesIgnored: 0, other: 0 };
+    return { kind: "counts", eventId, fulfilled: 0, duplicatesIgnored: 0, other: 0, reasons: [] };
   }
   const d = entries[0]!;
   // The store groups by event id, so two entries for one id is a broken reply.
   if (entries.length > 1 || !isCount(d.fulfilled) || !isCount(d.duplicatesIgnored) || !isCount(d.other)) {
     return { kind: "malformed", eventId };
   }
-  return { kind: "counts", eventId, fulfilled: d.fulfilled, duplicatesIgnored: d.duplicatesIgnored, other: d.other };
+  return {
+    kind: "counts",
+    eventId,
+    fulfilled: d.fulfilled,
+    duplicatesIgnored: d.duplicatesIgnored,
+    other: d.other,
+    reasons: storeStrings(d.refusalReasons),
+  };
+}
+
+/** Store-written text, which ends up in a terminal: strings only, few, short, printable. */
+function storeStrings(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is string => typeof r === "string")
+    .slice(0, 5)
+    .map((r) => cleanModelText(r, 200))
+    .filter((r) => r !== "");
+}
+
+/**
+ * What the store refused, quoted into an inconclusive finding. A refused resend
+ * is the likeliest reason a second delivery is missing, so it must be visible.
+ */
+function refusalNote(store: StoreSnapshot, reasons: readonly string[]): string {
+  const parts: string[] = [];
+  if (reasons.length > 0) parts.push(`refused for this event: ${reasons.join("; ")}`);
+  const loose = store.unattributedRefusals;
+  if (typeof loose === "object" && loose !== null && isCount(loose.count) && loose.count > 0) {
+    const why = storeStrings(loose.reasons);
+    parts.push(
+      `${loose.count} refused request(s) with no event id in the same window${why.length > 0 ? `: ${why.join("; ")}` : ""}`,
+    );
+  }
+  return parts.length === 0 ? "" : ` (${parts.join(". ")})`;
 }
 
 const decisive = (e: DeliveryEvidence) =>
@@ -244,17 +284,20 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
       }
 
       const rows = e.fulfilled + e.duplicatesIgnored + e.other;
+      const note = refusalNote(store, e.reasons);
       if (rows <= 1) {
         return none(
-          rows === 0
+          (rows === 0
             ? `the store recorded no delivery of ${e.eventId}`
-            : `only one delivery of ${e.eventId} reached the store before the wait ended; a duplicate that never arrived proves nothing`,
-          "re-run; if it repeats, check PayPal's delivery status for the webhook",
+            : `only one delivery of ${e.eventId} reached the store before the wait ended; a duplicate that never arrived proves nothing`) + note,
+          note === ""
+            ? "re-run; if it repeats, check PayPal's delivery status for the webhook"
+            : "read the refusal reasons: the store refused a request in this window",
         );
       }
       return none(
-        `event ${e.eventId} reached the store ${rows} times but was fulfilled ${e.fulfilled} times, with ${e.other} delivery(s) neither fulfilled nor recognised as duplicates`,
-        "check the store is verifying signatures: it ignores anything it cannot verify",
+        `event ${e.eventId} reached the store ${rows} times but was fulfilled ${e.fulfilled} times, with ${e.other} delivery(s) neither fulfilled nor recognised as duplicates${note}`,
+        "check the store is verifying signatures: it refuses anything it cannot verify",
       );
     },
     settled(store: StoreSnapshot, run: RunState) {

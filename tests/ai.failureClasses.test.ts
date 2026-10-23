@@ -133,6 +133,55 @@ describe("duplicate-webhook", () => {
     expect(f.likelyFix).toMatch(/verifying signatures/i);
   });
 
+  // A refused resend must be visible, not mistaken for one that never came.
+  it("names why a redelivery was refused", () => {
+    const s = store({
+      deliveries: [
+        {
+          eventId: EV,
+          fulfilled: 1,
+          duplicatesIgnored: 0,
+          other: 1,
+          refusalReasons: ["paypal-cert-url host certs.evil.test is not paypal.com"],
+        },
+      ],
+    });
+    const f = check("duplicate-webhook", s, runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toContain("refused for this event: paypal-cert-url host certs.evil.test is not paypal.com");
+  });
+
+  it("mentions refusals with no event id from the same window", () => {
+    const s = store({
+      deliveries: [{ eventId: EV, fulfilled: 1, duplicatesIgnored: 0, other: 0 }],
+      unattributedRefusals: { count: 2, reasons: ["body is not JSON"] },
+    });
+    const f = check("duplicate-webhook", s, runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toContain("2 refused request(s) with no event id in the same window: body is not JSON");
+    expect(f.likelyFix).toMatch(/refusal reasons/);
+  });
+
+  it("never lets refusal text decide a verdict, or reach the terminal raw", () => {
+    const s = store({
+      deliveries: [
+        {
+          eventId: EV,
+          fulfilled: 1,
+          duplicatesIgnored: 0,
+          other: 0,
+          refusalReasons: ["\u001b[2Jok", 42 as never],
+        },
+      ],
+      unattributedRefusals: { count: "lots" as never, reasons: [] },
+    });
+    const f = check("duplicate-webhook", s, runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).not.toMatch(/\u001b/);
+    expect(f.actual).toContain("refused for this event: [2Jok)");
+    expect(f.actual).not.toContain("no event id");
+  });
+
   it("treats a malformed store record as no evidence", () => {
     const bad = [
       store({ deliveries: [{ eventId: EV, fulfilled: "2", duplicatesIgnored: 0, other: 0 } as never] }),
