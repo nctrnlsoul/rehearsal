@@ -84,6 +84,8 @@ export async function planScenario(
     description: string;
     allowedEventOrigins: readonly string[];
     caps?: Caps;
+    /** Our own steering, kept outside the untrusted fence. */
+    extraInstruction?: string;
   },
   deps: { generate: GenerateFn; budget?: AiBudgetTracker },
 ): Promise<PlanOutcome> {
@@ -97,6 +99,7 @@ export async function planScenario(
     description: args.description,
     allowedEventOrigins: args.allowedEventOrigins,
     caps,
+    ...(args.extraInstruction === undefined ? {} : { extraInstruction: args.extraInstruction }),
   });
 
   budget.beginCall();

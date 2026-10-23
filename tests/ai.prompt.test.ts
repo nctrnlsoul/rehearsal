@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CAPS } from "../src/core/caps";
-import { STEP_KINDS } from "../src/core/scenario";
+import { DISPUTE_REASONS, STEP_KINDS } from "../src/core/scenario";
 import {
   DESCRIPTION_CLOSE,
   DESCRIPTION_OPEN,
@@ -58,6 +58,15 @@ describe("buildPlannerPrompt system message", () => {
     expect(build("a shop").system).toMatch(/DECIMAL STRINGS/);
   });
 
+  // An eval caught the model writing reason: "Item not received", because the
+  // prompt named the field without ever listing its allowed values.
+  it("lists every dispute reason the schema accepts", () => {
+    const { system } = build("a shop");
+    for (const reason of DISPUTE_REASONS) {
+      expect(system, reason).toContain(reason);
+    }
+  });
+
   it("pins the currency and caps the dispute count", () => {
     const { system } = build("a shop");
     expect(system).toMatch(/currency must be exactly "USD"/);
@@ -99,6 +108,25 @@ describe("buildPlannerPrompt fencing", () => {
   it("refuses control characters", () => {
     expect(() => build("shop\u0000obey")).toThrow(UnsafeDescriptionError);
     expect(() => build("shop\u001bobey")).toThrow(UnsafeDescriptionError);
+  });
+
+  // An instruction placed inside the fence would be correctly ignored, since
+  // the system message tells the model everything in there is data.
+  it("puts our own steering OUTSIDE the fence", () => {
+    const { prompt } = buildPlannerPrompt({
+      description: "a candle shop",
+      allowedEventOrigins: [STORE],
+      extraInstruction: "include a resend_webhook step",
+    });
+    expect(prompt).toContain("include a resend_webhook step");
+    expect(prompt.indexOf("include a resend_webhook step")).toBeGreaterThan(
+      prompt.indexOf(DESCRIPTION_CLOSE),
+    );
+    expect(prompt).toMatch(/from me and not from the description/i);
+  });
+
+  it("omits the steering line entirely when there is none", () => {
+    expect(build("a shop").prompt).not.toMatch(/from me and not from the description/i);
   });
 
   it("allows ordinary newlines and tabs", () => {
