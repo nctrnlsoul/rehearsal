@@ -27,14 +27,15 @@ instance wrote it.
 Create a **new** Supabase project. In its SQL editor run, in this order:
 
 1. `migrations/0001_webhook_arrivals.sql` — creates `public.webhook_arrivals`,
-   enables RLS with **no policies**, and revokes all grants from `anon` and
-   `authenticated`.
-2. `migrations/0002_verify.sql` — prints three results. Read them:
+   enables RLS with **no policies**, revokes all grants from `anon` and
+   `authenticated`, and grants `select, insert` to `service_role`.
+2. `migrations/0002_verify.sql` — prints four results. Read them:
    - `rls_enabled` must be `true`
    - `policy_count` must be `0` (RLS on with no policies is the goal, not a warning)
    - the grants query must return **zero rows**
+   - `service_select` and `service_insert` must both be `true`
 
-Do not take the migration's success message as evidence. Read the three results.
+Do not take the migration's success message as evidence. Read the four results.
 
 ### 2. Set the Vercel environment variables
 

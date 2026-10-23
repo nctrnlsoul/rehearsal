@@ -52,3 +52,9 @@ alter table public.webhook_arrivals enable row level security;
 -- removes it from the API surface entirely.
 -- RLS is the lock; the revoke takes the door off the map.
 revoke all on public.webhook_arrivals from anon, authenticated;
+
+-- The project has "Automatically expose new tables" OFF, so a new table gives
+-- service_role nothing. Without this grant every read and write from the receiver
+-- is refused, and it answers 503/500. Select and insert only: the ledger is
+-- append-only, so update and delete stay ungranted.
+grant select, insert on public.webhook_arrivals to service_role;
