@@ -113,10 +113,10 @@ export function createLedger(
 ): Ledger {
   const doFetch = deps.fetchImpl ?? fetch;
   const endpoint = new URL(`/rest/v1/${TABLE}`, config.url);
-  const auth = {
-    apikey: config.key,
-    Authorization: `Bearer ${config.key}`,
-  };
+  // apikey ONLY. The new sb_secret_ key format is not a JWT, and
+  // Authorization: Bearer is the JWT transport, which may reject these keys.
+  // Sending the key on one header instead of two also narrows its exposure.
+  const auth = { apikey: config.key };
 
   return {
     async append(row) {

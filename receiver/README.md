@@ -43,7 +43,7 @@ In the receiver's Vercel project, Settings, Environment Variables:
 | Variable | Value | Notes |
 |---|---|---|
 | `SUPABASE_URL` | `https://<ref>.supabase.co` | Project URL. Any other host is refused. |
-| `SUPABASE_SERVICE_ROLE_KEY` | the project's secret / `service_role` key | Server-side only. Never `NEXT_PUBLIC_`. |
+| `SUPABASE_SERVICE_ROLE_KEY` | the project's secret key (`sb_secret_...`) | Server-side only. Never `NEXT_PUBLIC_`. Sent on `apikey` only. |
 | `REHEARSAL_RECEIVER_TOKEN` | a long random string you invent | Must match the same variable on Brian's machine. |
 | `PAYPAL_SELLER_CLIENT_ID` | sandbox seller client id | Optional, enables signature verification. |
 | `PAYPAL_SELLER_CLIENT_SECRET` | sandbox seller secret | Optional, same. |

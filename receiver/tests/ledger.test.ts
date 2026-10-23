@@ -101,15 +101,28 @@ describe("ledger append", () => {
     transmissionId: "TX-1",
   };
 
-  it("inserts into the right table with both auth headers", async () => {
+  // The key travels on apikey ONLY. sb_secret_ keys are not JWTs, so the
+  // Authorization: Bearer transport may reject them, and one header carrying
+  // the key is less exposure than two.
+  it("inserts into the right table with the key on apikey only", async () => {
     const f = fakeFetch([{ status: 201 }]);
     await createLedger(CONFIG, { fetchImpl: f.impl }).append(row);
     const call = f.calls[0]!;
     expect(call.method).toBe("POST");
     expect(call.url).toBe(`${PROJECT}/rest/v1/webhook_arrivals`);
     expect(call.headers["apikey"]).toBe(KEY);
-    expect(call.headers["Authorization"]).toBe(`Bearer ${KEY}`);
+    expect(call.headers["Authorization"]).toBeUndefined();
     expect(call.headers["Prefer"]).toBe("return=minimal");
+  });
+
+  it("sends the key on no header other than apikey", async () => {
+    const f = fakeFetch([{ status: 201 }]);
+    await createLedger(CONFIG, { fetchImpl: f.impl }).append(row);
+    const headers = f.calls[0]!.headers;
+    const carrying = Object.entries(headers)
+      .filter(([, v]) => typeof v === "string" && v.includes(KEY))
+      .map(([k]) => k);
+    expect(carrying).toEqual(["apikey"]);
   });
 
   it("maps every column and stamps the writing instance", async () => {
@@ -189,6 +202,14 @@ describe("ledger snapshot", () => {
     expect(decodeURIComponent(f.calls[0]!.url)).toContain("received_at=gte.2026-10-23T11:59:00.000Z");
     await ledger.snapshot();
     expect(f.calls[1]!.url).not.toContain("received_at=gte");
+  });
+
+  it("reads with the key on apikey only", async () => {
+    const f = fakeFetch([{ status: 200, body: [] }]);
+    await createLedger(CONFIG, { fetchImpl: f.impl }).snapshot();
+    const headers = f.calls[0]!.headers;
+    expect(headers["apikey"]).toBe(KEY);
+    expect(headers["Authorization"]).toBeUndefined();
   });
 
   it("maps to the wire shape the gate expects", async () => {
