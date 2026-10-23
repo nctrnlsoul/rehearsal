@@ -75,6 +75,20 @@ export async function handleEvent(
   const parsed = readEvent(body);
   const dedupe = opts.dedupe ?? DEDUPE_BY_EVENT_ID;
 
+  /**
+   * An event whose signature did not verify never acts. The webhook endpoint is
+   * public, so without this anyone could post a forged
+   * PAYMENT.CAPTURE.COMPLETED and have an order fulfilled for free.
+   *
+   * verified === null means the store could not check at all, which is also not
+   * grounds to act. This is NOT the planted bug: the planted bug is the missing
+   * dedupe below, and a second real hole would muddy what the finder catches.
+   */
+  if (opts.verified !== true) {
+    await db.insert({ ...parsed, action: "ignored", verified: opts.verified });
+    return "ignored";
+  }
+
   if (dedupe && parsed.eventId !== null && (await db.hasEvent(parsed.eventId))) {
     // Recorded rather than dropped, so a duplicate is visible as handled.
     await db.insert({ ...parsed, action: "duplicate_ignored", verified: opts.verified });

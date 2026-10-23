@@ -129,6 +129,38 @@ describe("the planted bug", () => {
   });
 });
 
+describe("signature enforcement", () => {
+  // The webhook endpoint is public, so without this anyone could post a forged
+  // capture event and have an order fulfilled for free. This is NOT the planted
+  // bug; the planted bug is the missing dedupe.
+  it("never fulfils an event whose signature failed", async () => {
+    const { db, inserted } = fakeDb();
+    const action = await handleEvent(db, captureEvent("WH-FORGED"), { verified: false });
+    expect(action).toBe("ignored");
+    expect(inserted[0]!.action).toBe("ignored");
+    expect(summarise(inserted.map((r) => ({ ...r, receivedAtMs: 0 }))).orders[0]!.fulfilmentCount).toBe(0);
+  });
+
+  it("never fulfils when it could not check at all", async () => {
+    const { db, inserted } = fakeDb();
+    expect(await handleEvent(db, captureEvent("WH-UNCHECKED"), { verified: null })).toBe("ignored");
+    expect(inserted[0]!.action).toBe("ignored");
+  });
+
+  it("records the attempt so an ignored event is still visible", async () => {
+    const { db, inserted } = fakeDb();
+    await handleEvent(db, captureEvent("WH-FORGED"), { verified: false });
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]!.verified).toBe(false);
+    expect(inserted[0]!.eventId).toBe("WH-FORGED");
+  });
+
+  it("acts only on a verified event", async () => {
+    const { db } = fakeDb();
+    expect(await handleEvent(db, captureEvent("WH-REAL"), { verified: true })).toBe("fulfilled");
+  });
+});
+
 describe("summarise", () => {
   const row = (over: Partial<StoreRow>): StoreRow => ({
     eventId: "WH-1",

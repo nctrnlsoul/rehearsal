@@ -44,13 +44,33 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false }, { status: 400 });
   }
 
-  const { verified } = await verifySignature(req.headers, event, process.env);
+  // This endpoint is public, so the signature is the only thing distinguishing
+  // PayPal from anyone else. An event that does not verify is recorded and
+  // ignored, never acted on.
+  const selfOrigin = new URL(req.url).origin;
+  const { verified, detail } = await verifySignature(
+    req.headers,
+    event,
+    process.env,
+    selfOrigin,
+  );
 
   try {
     await handleEvent(createDb(config), event, { verified });
   } catch (e) {
     console.error(`store handling failed: ${(e as Error).message}`);
     return Response.json({ ok: false }, { status: 500 });
+  }
+
+  if (verified === false) {
+    console.error(`store rejected an unverified event: ${detail}`);
+    return Response.json({ ok: false }, { status: 401 });
+  }
+  if (verified === null) {
+    // Cannot check, so cannot act. A non-2xx makes PayPal retry, which is what
+    // should happen once the store is configured properly.
+    console.error(`store could not verify an event: ${detail}`);
+    return Response.json({ ok: false }, { status: 503 });
   }
 
   // Generic on purpose. What the store did with an event is visible through the
