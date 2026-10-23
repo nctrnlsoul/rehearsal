@@ -69,6 +69,41 @@ describe("checkCaps", () => {
     expect(checkCaps(s)).toEqual([]);
   });
 
+  // Minor units are not comparable across currencies: 50000 JPY is not 50000
+  // USD cents. Measuring one against the other is meaningless, not merely wrong.
+  it("refuses a scenario in a currency the caps are not set in", () => {
+    const s = scenarioWith([{ id: "o1", kind: "card_order", amount: "1000" }], "JPY");
+    const v = checkCaps(s);
+    expect(v.map((x) => x.code)).toContain("currency-mismatch");
+    expect(v[0]!.message).toContain("JPY");
+    expect(v[0]!.message).toContain("USD");
+  });
+
+  it("does not report amount violations it could not meaningfully check", () => {
+    const s = scenarioWith([{ id: "o1", kind: "card_order", amount: "9999999" }], "JPY");
+    const codes = checkCaps(s).map((x) => x.code);
+    expect(codes).toContain("currency-mismatch");
+    expect(codes).not.toContain("step-amount-too-large");
+    expect(codes).not.toContain("run-total-too-large");
+  });
+
+  // Disputes move no money but each consumes a banked purchase that cost a
+  // human approval click, so they are a capped resource.
+  it("caps the number of disputes", () => {
+    const ok = scenarioWith([
+      { id: "d1", kind: "open_dispute" },
+      { id: "d2", kind: "open_dispute" },
+    ]);
+    expect(checkCaps(ok)).toEqual([]);
+
+    const tooMany = scenarioWith(
+      Array.from({ length: 3 }, (_, i) => ({ id: `d${i}`, kind: "open_dispute" })),
+    );
+    const v = checkCaps(tooMany);
+    expect(v.map((x) => x.code)).toContain("too-many-disputes");
+    expect(v[0]!.message).toMatch(/human approval/i);
+  });
+
   it("reports every violation at once", () => {
     const s = scenarioWith([
       { id: "o1", kind: "card_order", amount: "900.00" },
@@ -90,10 +125,17 @@ describe("capsFromEnv", () => {
       REHEARSAL_MAX_STEP_AMOUNT: "10.00",
       REHEARSAL_MAX_RUN_TOTAL: "25.00",
       REHEARSAL_MAX_STEPS: "3",
+      REHEARSAL_MAX_DISPUTES: "1",
     });
     expect(caps.maxStepAmountMinor).toBe(1000n);
     expect(caps.maxTotalMinor).toBe(2500n);
     expect(caps.maxSteps).toBe(3);
+    expect(caps.maxDisputes).toBe(1);
+  });
+
+  it("records the currency the caps are denominated in", () => {
+    expect(capsFromEnv({}).currency).toBe("USD");
+    expect(capsFromEnv({}, "JPY").currency).toBe("JPY");
   });
 
   // A malformed cap must never silently widen the limit.

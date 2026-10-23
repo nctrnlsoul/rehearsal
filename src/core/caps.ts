@@ -11,24 +11,39 @@ import type { Scenario } from "./scenario";
  */
 
 export type Caps = {
+  /**
+   * The currency these caps are expressed in. Minor units are not comparable
+   * across currencies, so a scenario in another currency is refused rather than
+   * measured against the wrong yardstick.
+   */
+  readonly currency: string;
   /** Largest single amount any one step may move. */
   readonly maxStepAmountMinor: bigint;
   /** Largest total the whole run may move. */
   readonly maxTotalMinor: bigint;
   /** Tighter than the schema's structural limit. */
   readonly maxSteps: number;
+  /**
+   * Disputes move no new money, but each one consumes a banked purchase that
+   * cost a human approval click, so they are capped as a scarce resource.
+   */
+  readonly maxDisputes: number;
 };
 
 export const DEFAULT_CAPS: Caps = {
+  currency: "USD",
   maxStepAmountMinor: 50_000n, // USD 500.00
   maxTotalMinor: 200_000n, // USD 2000.00
   maxSteps: 30,
+  maxDisputes: 2,
 };
 
 export type CapViolationCode =
   | "step-amount-too-large"
   | "run-total-too-large"
-  | "too-many-steps";
+  | "too-many-steps"
+  | "too-many-disputes"
+  | "currency-mismatch";
 
 export type CapViolation = {
   readonly code: CapViolationCode;
@@ -82,6 +97,27 @@ export function checkCaps(scenario: Scenario, caps: Caps = DEFAULT_CAPS): CapVio
     });
   }
 
+  const disputes = scenario.steps.filter((s) => s.kind === "open_dispute").length;
+  if (disputes > caps.maxDisputes) {
+    violations.push({
+      code: "too-many-disputes",
+      message: `scenario opens ${disputes} disputes, the cap is ${caps.maxDisputes}; each one consumes a banked purchase that needed a human approval`,
+      stepId: null,
+    });
+  }
+
+  // Minor units mean different things in different currencies, so comparing a
+  // JPY amount against a USD cap is not a smaller or larger number, it is a
+  // meaningless one. Refuse instead of measuring.
+  if (scenario.currency !== caps.currency) {
+    violations.push({
+      code: "currency-mismatch",
+      message: `scenario is in ${scenario.currency} but the caps are set in ${caps.currency}, so no amount in it can be checked`,
+      stepId: null,
+    });
+    return violations;
+  }
+
   const amounts = amountsOf(scenario);
 
   for (const a of amounts) {
@@ -127,9 +163,20 @@ export function capsFromEnv(env: Record<string, string | undefined>, currency = 
       throw new Error(`REHEARSAL_MAX_STEPS must be at least 1, got ${steps}`);
     }
   }
+  const disputes = env["REHEARSAL_MAX_DISPUTES"];
+  let maxDisputes = DEFAULT_CAPS.maxDisputes;
+  if (disputes !== undefined && disputes.trim() !== "") {
+    if (!/^\d+$/.test(disputes.trim())) {
+      throw new Error(`REHEARSAL_MAX_DISPUTES must be a plain integer, got ${disputes}`);
+    }
+    maxDisputes = Number(disputes.trim());
+  }
+
   return {
+    currency,
     maxStepAmountMinor: read("REHEARSAL_MAX_STEP_AMOUNT", DEFAULT_CAPS.maxStepAmountMinor),
     maxTotalMinor: read("REHEARSAL_MAX_RUN_TOTAL", DEFAULT_CAPS.maxTotalMinor),
     maxSteps,
+    maxDisputes,
   };
 }
