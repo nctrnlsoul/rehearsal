@@ -6,5 +6,8 @@ node_modules/
 *.log
 /*.txt
 gate/runs/
+# Operational state: run history and approved purchases are local, not shared.
+/runs/
+/bank/
 receiver/node_modules/
 receiver/.next/
