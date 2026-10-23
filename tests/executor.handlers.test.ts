@@ -10,6 +10,7 @@ import {
 } from "../src/executor/handlers/invoice";
 import { payoutBatchHandler } from "../src/executor/handlers/payout";
 import { refundHandler } from "../src/executor/handlers/refund";
+import { resendWebhookHandler } from "../src/executor/handlers/resendWebhook";
 import { fakePaypal, makeContext, makePurchase, scenarioWith } from "./helpers/fakePaypal";
 
 const orderOk = (amount: string, orderId = "ORD-1", captureId = "CAP-1") => ({
@@ -276,6 +277,126 @@ describe("invoice handlers", () => {
     const bad = fakePaypal([{ status: 204 }, { status: 200, body: { status: "SENT" } }]);
     const b = makeContext({ scenario, stepId: "c1", seller: bad.client, outputs });
     expect((await invoiceCancelHandler(b.ctx)).kind).toBe("unknown");
+  });
+});
+
+describe("resendWebhookHandler", () => {
+  const scenario = scenarioWith([
+    { id: "o1", kind: "card_order", amount: "40.00" },
+    {
+      id: "dup",
+      kind: "resend_webhook",
+      from: "o1",
+      eventType: "PAYMENT.CAPTURE.COMPLETED",
+      needs: ["o1"],
+    },
+  ]);
+  const outputs = { o1: { order_id: "ORD-1", capture_id: "CAP-1" } };
+  const listed = (events: unknown[]) => ({ status: 200, body: { events } });
+  const theEvent = {
+    id: "WH-1",
+    event_type: "PAYMENT.CAPTURE.COMPLETED",
+    create_time: "2026-10-23T12:00:00Z",
+  };
+
+  it("finds the event by transaction id and resends it to the run's webhook", async () => {
+    const seller = fakePaypal([listed([theEvent]), { status: 202 }]);
+    const { ctx } = makeContext({
+      scenario,
+      stepId: "dup",
+      seller: seller.client,
+      outputs,
+      meta: { webhook_id: "WH-REG-1" },
+    });
+    const out = await resendWebhookHandler(ctx);
+    expect(out.kind).toBe("success");
+    expect((out.ids ?? {})["resent_event_id"]).toBe("WH-1");
+    expect(decodeURIComponent(seller.calls[0]!.path)).toContain("transaction_id=CAP-1");
+    expect(seller.calls[1]!.path).toBe("/v1/notifications/webhooks-events/WH-1/resend");
+    expect(seller.calls[1]!.body).toEqual({ webhook_ids: ["WH-REG-1"] });
+  });
+
+  it("ignores events of other types for the same transaction", async () => {
+    const seller = fakePaypal([
+      listed([{ ...theEvent, id: "WH-OTHER", event_type: "PAYMENT.CAPTURE.REFUNDED" }, theEvent]),
+      { status: 202 },
+    ]);
+    const { ctx } = makeContext({
+      scenario,
+      stepId: "dup",
+      seller: seller.client,
+      outputs,
+      meta: { webhook_id: "WH-REG-1" },
+    });
+    await resendWebhookHandler(ctx);
+    expect(seller.calls[1]!.path).toContain("WH-1");
+  });
+
+  // A resend with nowhere to go would look like a success and deliver nothing.
+  it("fails without a registered webhook, before any call", async () => {
+    const seller = fakePaypal([]);
+    const { ctx } = makeContext({ scenario, stepId: "dup", seller: seller.client, outputs });
+    const out = await resendWebhookHandler(ctx);
+    expect(out.kind).toBe("failed");
+    expect(out.detail).toMatch(/nowhere to go/i);
+    expect(seller.calls).toHaveLength(0);
+  });
+
+  it("stops without a call when the referenced step recorded no transaction id", async () => {
+    const seller = fakePaypal([]);
+    const { ctx } = makeContext({
+      scenario,
+      stepId: "dup",
+      seller: seller.client,
+      outputs: {},
+      meta: { webhook_id: "WH-REG-1" },
+    });
+    expect((await resendWebhookHandler(ctx)).kind).toBe("unknown");
+    expect(seller.calls).toHaveLength(0);
+  });
+
+  it("reports unknown when no matching event ever appears", async () => {
+    const seller = fakePaypal(Array.from({ length: 20 }, () => listed([])));
+    const { ctx } = makeContext({
+      scenario,
+      stepId: "dup",
+      seller: seller.client,
+      outputs,
+      meta: { webhook_id: "WH-REG-1" },
+    });
+    const out = await resendWebhookHandler(ctx);
+    expect(out.kind).toBe("unknown");
+    expect(out.detail).toMatch(/never became visible|0 PAYMENT/i);
+  });
+
+  // A failed read must never read as "no such event".
+  it("does not treat a failed event list as an empty one", async () => {
+    const seller = fakePaypal([
+      { status: 400, body: { name: "VALIDATION_ERROR" } },
+      listed([theEvent]),
+      { status: 202 },
+    ]);
+    const { ctx } = makeContext({
+      scenario,
+      stepId: "dup",
+      seller: seller.client,
+      outputs,
+      meta: { webhook_id: "WH-REG-1" },
+    });
+    const out = await resendWebhookHandler(ctx);
+    expect(out.kind).toBe("success");
+  });
+
+  it("fails when PayPal refuses the resend", async () => {
+    const seller = fakePaypal([listed([theEvent]), { status: 422, body: { name: "NOPE" } }]);
+    const { ctx } = makeContext({
+      scenario,
+      stepId: "dup",
+      seller: seller.client,
+      outputs,
+      meta: { webhook_id: "WH-REG-1" },
+    });
+    expect((await resendWebhookHandler(ctx)).kind).toBe("failed");
   });
 });
 

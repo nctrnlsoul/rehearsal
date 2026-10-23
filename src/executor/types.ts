@@ -26,6 +26,8 @@ export type StepContext = {
   readonly buyer: PaypalClient;
   /** Ids from steps that already succeeded, keyed by step id. */
   readonly outputs: ReadonlyMap<string, StepOutputs>;
+  /** Run-level ids, such as the registered webhook a resend needs. */
+  readonly meta: Readonly<Record<string, string>>;
   /** Draws one banked purchase and marks it used. */
   claimPurchase(): ClaimResult;
   readonly env: Readonly<Record<string, string | undefined>>;

@@ -37,6 +37,8 @@ const FIELD_DOCS: Record<(typeof STEP_KINDS)[number], string> = {
   invoice_cancel: "invoice_cancel{ from }                           cancels it",
   open_dispute:
     "open_dispute  { reason? }                        draws a pre-approved purchase from the bank",
+  resend_webhook:
+    'resend_webhook{ from, eventType }                asks PayPal to redeliver an event it already sent, e.g. eventType "PAYMENT.CAPTURE.COMPLETED" with from pointing at the card_order; needs a webhook block',
 };
 
 export function buildPlannerPrompt(args: {
