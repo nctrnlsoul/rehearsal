@@ -175,9 +175,6 @@ await runGate({
     }
     ctx.record("webhook_id", webhookId);
     saveState("gate5", { webhookId, webhookTarget });
-    ctx.note(
-      `set REHEARSAL_WEBHOOK_ID=${webhookId} in the Vercel project and redeploy so the receiver verifies signatures instead of recording verified=null`,
-    );
 
     // 2. Cause real events. Three actions, which between them produce order,
     //    capture, refund and payout events.
@@ -335,6 +332,15 @@ await runGate({
     }
     for (const m of report.missing) ctx.log(`  MISSING ${m.eventType} ${m.eventId}`);
     for (const n of report.notes) ctx.note(n);
+
+    // Only advise this when the arrivals actually show verification was skipped.
+    // Printing it unconditionally meant the gate told Brian to enable something
+    // in the same breath as reporting verified=true.
+    if (report.matched.some((m) => m.verified === null)) {
+      ctx.note(
+        `set REHEARSAL_WEBHOOK_ID=${webhookId} and the seller credentials in the Vercel project so the receiver verifies signatures instead of recording verified=null`,
+      );
+    }
 
     // 5. Resend one event and confirm it arrives a second time.
     const resendTarget = report.matched[0] ?? null;
