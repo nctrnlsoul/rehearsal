@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { assertAllowedEventTarget } from "./eventTarget";
+import { assertWebhookHandlerTarget } from "./eventTarget";
 import { currencyExponent, toMinor } from "./money";
 import { ancestors, topologicalOrder } from "./plan";
 
@@ -260,7 +260,7 @@ export function scenarioSchema(options: ScenarioOptions) {
 
     if (scenario.webhook !== undefined) {
       try {
-        assertAllowedEventTarget(scenario.webhook.target, options.allowedEventOrigins);
+        assertWebhookHandlerTarget(scenario.webhook.target, options.allowedEventOrigins);
       } catch (e) {
         issue(["webhook", "target"], (e as Error).message);
       }

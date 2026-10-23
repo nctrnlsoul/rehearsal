@@ -254,7 +254,7 @@ describe("validateScenario checks from references", () => {
     const r = validateScenario(
       {
         ...base(),
-        webhook: { target: `${STORE}/hook` },
+        webhook: { target: `${STORE}/api/paypal/webhook` },
         steps: [
           { id: "o", kind: "card_order", amount: "40.00" },
           { id: "rf", kind: "refund", from: "o", mode: "full", needs: ["o"] },
@@ -360,5 +360,32 @@ describe("validateScenario enforces the event target allowlist", () => {
       s["webhook"] = { target: "http://receiver-lyart.vercel.app/api/paypal/webhook" };
     });
     expect(errs.length).toBeGreaterThan(0);
+  });
+
+  // The planner once produced exactly this. PayPal registered it, and the
+  // resend went to a page that is not the handler.
+  it("rejects the bare origin as a webhook target", () => {
+    const errs = errorsFor((s) => {
+      s["webhook"] = { target: STORE };
+    });
+    expect(errs.join(" ")).toContain(`webhook target must be exactly ${STORE}/api/paypal/webhook`);
+  });
+
+  it("rejects anything that is not the exact handler URL", () => {
+    for (const target of [
+      `${STORE}/`,
+      `${STORE}/hook`,
+      `${STORE}/api/paypal/webhook/`,
+      `${STORE}/api/paypal/webhook?x=1`,
+      `${STORE}/api/paypal/webhook#x`,
+      `${STORE}/api/paypal/webhook-v2`,
+      `${STORE}:443/api/paypal/webhook`,
+      "https://Receiver-Lyart.vercel.app/api/paypal/webhook",
+    ]) {
+      const errs = errorsFor((s) => {
+        s["webhook"] = { target };
+      });
+      expect(errs.join(" "), target).toMatch(/webhook target must be exactly/);
+    }
   });
 });

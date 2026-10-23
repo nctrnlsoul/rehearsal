@@ -60,3 +60,25 @@ export function assertAllowedEventTarget(raw: string, allowlist: readonly string
   }
   return new URL(raw);
 }
+
+/** The route every app REHEARSAL fires at serves PayPal deliveries on. */
+export const WEBHOOK_HANDLER_PATH = "/api/paypal/webhook";
+
+export function webhookHandlerUrl(origin: string): string {
+  return `${normalizeOrigin(origin)}${WEBHOOK_HANDLER_PATH}`;
+}
+
+/**
+ * A webhook target must be an allowlisted origin's handler URL, character for
+ * character. The origin check alone let a bare origin through: PayPal accepted
+ * the registration, deliveries and resends went to a page that is not the
+ * handler, and a duplicate the app never received reads as the app coping.
+ */
+export function assertWebhookHandlerTarget(raw: string, allowlist: readonly string[]): URL {
+  const url = assertAllowedEventTarget(raw, allowlist);
+  const expected = webhookHandlerUrl(raw);
+  if (raw !== expected) {
+    throw new TargetRefusedError(`webhook target must be exactly ${expected}`, redact(raw));
+  }
+  return url;
+}

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { TargetRefusedError, assertAllowedEventTarget, normalizeOrigin } from "../src/core/eventTarget";
+import {
+  TargetRefusedError,
+  assertAllowedEventTarget,
+  assertWebhookHandlerTarget,
+  normalizeOrigin,
+  webhookHandlerUrl,
+} from "../src/core/eventTarget";
 
 const STORE = "https://rehearsal-store.vercel.app";
 
@@ -52,5 +58,27 @@ describe("assertAllowedEventTarget", () => {
     expect(() => assertAllowedEventTarget("http://rehearsal-store.vercel.app/hook", [STORE])).toThrow(
       TargetRefusedError,
     );
+  });
+});
+
+describe("assertWebhookHandlerTarget", () => {
+  const HANDLER = `${STORE}/api/paypal/webhook`;
+
+  it("accepts the exact handler URL of an allowlisted origin", () => {
+    expect(assertWebhookHandlerTarget(HANDLER, [STORE]).toString()).toBe(HANDLER);
+  });
+
+  it("refuses the bare origin", () => {
+    expect(() => assertWebhookHandlerTarget(STORE, [STORE])).toThrow(/must be exactly/);
+  });
+
+  it("still refuses an off-allowlist handler URL", () => {
+    expect(() =>
+      assertWebhookHandlerTarget("https://evil.test/api/paypal/webhook", [STORE]),
+    ).toThrow(/not on the allowlist/);
+  });
+
+  it("builds the handler URL from a normalized origin", () => {
+    expect(webhookHandlerUrl("https://Rehearsal-Store.vercel.app:443/")).toBe(HANDLER);
   });
 });

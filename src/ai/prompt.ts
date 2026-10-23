@@ -1,4 +1,5 @@
 import { type Caps, DEFAULT_CAPS } from "../core/caps";
+import { webhookHandlerUrl } from "../core/eventTarget";
 import { fromMinor } from "../core/money";
 import { DISPUTE_REASONS, MAX_STEPS, STEP_KINDS } from "../core/scenario";
 
@@ -72,10 +73,12 @@ export function buildPlannerPrompt(args: {
 
   const kinds = STEP_KINDS.map((k) => `  ${FIELD_DOCS[k]}`).join("\n");
 
-  const origins =
+  // Full handler URLs, not origins: told "one of these origins", the model
+  // wrote the bare origin, which the schema now refuses.
+  const targets =
     args.allowedEventOrigins.length === 0
       ? "  (none configured, so you must NOT include a webhook block at all)"
-      : args.allowedEventOrigins.map((o) => `  ${o}`).join("\n");
+      : args.allowedEventOrigins.map((o) => `  ${webhookHandlerUrl(o)}`).join("\n");
 
   const system = [
     "You plan test scenarios for the PayPal SANDBOX. You never touch live PayPal:",
@@ -105,8 +108,8 @@ export function buildPlannerPrompt(args: {
     "    purchase that needed a human to click an approval link.",
     `  - No single amount over ${currency} ${fromMinor(caps.maxStepAmountMinor, currency)}.`,
     `  - The whole run may move at most ${currency} ${fromMinor(caps.maxTotalMinor, currency)}.`,
-    "  - A webhook target must be exactly one of these origins:",
-    origins,
+    "  - A webhook target must be exactly one of these URLs, character for character:",
+    targets,
     "",
     "If the request cannot be met safely inside these rules, return exactly",
     '  { "refusal": "<one short sentence saying why>" }',
