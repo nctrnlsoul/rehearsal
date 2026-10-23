@@ -68,6 +68,8 @@ describe("db operations", () => {
       currency: "USD",
       action: "fulfilled",
       verified: true,
+      reason: null,
+      certHost: null,
     });
     const headers = f.calls[0]!.headers;
     expect(headers["apikey"]).toBe(KEY);
@@ -114,6 +116,58 @@ describe("db operations", () => {
     expect(rows.map((r) => r.eventId)).toEqual(["WH-OLD", "WH-NEW"]);
   });
 
+  it("selects, inserts and reads back the refusal reason and cert host", async () => {
+    const f = fakeFetch([
+      { status: 201 },
+      {
+        status: 200,
+        body: [
+          {
+            event_id: "WH-1",
+            event_type: "X",
+            action: "refused",
+            verified: false,
+            reason: "bad sig",
+            cert_host: "certs.evil.test",
+            received_at: "2026-10-23T12:00:00Z",
+          },
+          {
+            event_id: "WH-2",
+            event_type: "X",
+            action: "fulfilled",
+            verified: true,
+            reason: null,
+            cert_host: "api.sandbox.paypal.com",
+            received_at: "2026-10-23T12:00:01Z",
+          },
+        ],
+      },
+    ]);
+    const db = createDb(CONFIG, { fetchImpl: f.impl });
+    await db.insert({
+      eventId: "WH-1",
+      eventType: "X",
+      captureId: null,
+      amount: null,
+      currency: null,
+      action: "refused",
+      verified: false,
+      reason: "bad sig",
+      certHost: "certs.evil.test",
+    });
+    const sent = (f.calls[0]!.body as Array<Record<string, unknown>>)[0]!;
+    expect(sent["reason"]).toBe("bad sig");
+    expect(sent["cert_host"]).toBe("certs.evil.test");
+    const rows = await db.rows();
+    const select = decodeURIComponent(f.calls[1]!.url);
+    expect(select).toContain("reason");
+    expect(select).toContain("cert_host");
+    expect(rows.map((r) => [r.action, r.reason, r.certHost])).toEqual([
+      ["fulfilled", null, "api.sandbox.paypal.com"],
+      ["refused", "bad sig", "certs.evil.test"],
+    ]);
+  });
+
   it("clamps the row limit", async () => {
     const f = fakeFetch([{ status: 200, body: [] }, { status: 200, body: [] }]);
     const db = createDb(CONFIG, { fetchImpl: f.impl });
@@ -137,6 +191,8 @@ describe("db operations", () => {
           currency: "USD",
           action: "fulfilled",
           verified: true,
+          reason: null,
+          certHost: null,
         })],
       [403, "event lookup", (d: ReturnType<typeof createDb>) => d.hasEvent("WH-1")],
     ] as const) {

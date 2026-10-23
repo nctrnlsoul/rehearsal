@@ -3,6 +3,7 @@ import { seedOf } from "../src/core/idempotency";
 import { type RunState, initRunState, recordOutcome } from "../src/core/runState";
 import type { Scenario } from "../src/core/scenario";
 import { type ExecutorDeps, executeScenario } from "../src/executor/executor";
+import { resendWebhookHandler } from "../src/executor/handlers/resendWebhook";
 import type { HandlerRegistry, StepHandler } from "../src/executor/types";
 import { type FakeResponse, fakePaypal, scenarioWith } from "./helpers/fakePaypal";
 
@@ -344,5 +345,65 @@ describe("executeScenario in reuse-only webhook mode", () => {
     expect(state.halted).toBe(true);
     expect(state.haltReason).toMatch(/http 403/);
     expect(h.sellerCalls.some((c) => c.method === "POST")).toBe(false);
+  });
+});
+
+// The finder's whole chain: the reuse-only lookup picks the store's webhook,
+// and the real resend handler names exactly that webhook and no other, so
+// PayPal redelivers to the store and not to every webhook on the account.
+describe("a finder-mode resend names only the store's webhook", () => {
+  const STORE_HOOK = "https://store.test/api/paypal/webhook";
+  const STORE_ID = "4DE52141J0303334X";
+
+  it("sends webhook_ids [the reused store webhook] and nothing else", async () => {
+    const card: StepHandler = async () => ({
+      kind: "success",
+      detail: "captured",
+      ids: { capture_id: "CAP-1" },
+    });
+    const scenario: Scenario = {
+      ...scenarioWith([
+        { id: "order", kind: "card_order", amount: "25.00" },
+        {
+          id: "resend-capture",
+          kind: "resend_webhook",
+          from: "order",
+          eventType: "PAYMENT.CAPTURE.COMPLETED",
+          needs: ["order"],
+        },
+      ]),
+      webhook: { target: STORE_HOOK, eventTypes: ["*"] },
+    };
+    const h = harness(
+      { handlers: registry({ card_order: card, resend_webhook: resendWebhookHandler }) },
+      [
+        {
+          status: 200,
+          body: {
+            webhooks: [
+              { id: "9FU40962XL437872W", url: "https://receiver.test/api/paypal/webhook" },
+              { id: STORE_ID, url: STORE_HOOK },
+            ],
+          },
+        },
+        {
+          status: 200,
+          body: { events: [{ id: "WH-EV-1", event_type: "PAYMENT.CAPTURE.COMPLETED", create_time: "2026-10-23T12:00:00Z" }] },
+        },
+        { status: 202 },
+      ],
+    );
+
+    const state = await executeScenario(
+      { scenario, runId: "run-1", webhookMode: "reuse-only" },
+      h.deps,
+    );
+
+    expect(state.halted).toBe(false);
+    const resends = h.sellerCalls.filter((c) => c.path.endsWith("/resend"));
+    expect(resends).toHaveLength(1);
+    expect(resends[0]!.path).toBe("/v1/notifications/webhooks-events/WH-EV-1/resend");
+    expect(resends[0]!.body).toEqual({ webhook_ids: [STORE_ID] });
+    expect(h.sellerCalls.some((c) => c.method === "POST" && c.path === "/v1/notifications/webhooks")).toBe(false);
   });
 });
