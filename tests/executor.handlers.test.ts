@@ -10,8 +10,18 @@ import {
 } from "../src/executor/handlers/invoice";
 import { payoutBatchHandler } from "../src/executor/handlers/payout";
 import { refundHandler } from "../src/executor/handlers/refund";
-import { resendWebhookHandler } from "../src/executor/handlers/resendWebhook";
-import { fakePaypal, makeContext, makePurchase, scenarioWith } from "./helpers/fakePaypal";
+import {
+  RESEND_BUDGET_MS,
+  RESEND_RETRY_MS,
+  resendWebhookHandler,
+} from "../src/executor/handlers/resendWebhook";
+import {
+  type FakeResponse,
+  fakePaypal,
+  makeContext,
+  makePurchase,
+  scenarioWith,
+} from "./helpers/fakePaypal";
 
 const orderOk = (amount: string, orderId = "ORD-1", captureId = "CAP-1") => ({
   status: 201,
@@ -397,6 +407,68 @@ describe("resendWebhookHandler", () => {
       meta: { webhook_id: "WH-REG-1" },
     });
     expect((await resendWebhookHandler(ctx)).kind).toBe("failed");
+  });
+
+  describe("retrying a resend", () => {
+    const notYet = { status: 404, body: { name: "INVALID_RESOURCE_ID", message: "Resource id is invalid" } };
+    const run = (queue: FakeResponse[]) => {
+      const seller = fakePaypal([listed([theEvent]), ...queue]);
+      const made = makeContext({
+        scenario,
+        stepId: "dup",
+        seller: seller.client,
+        outputs,
+        meta: { webhook_id: "WH-REG-1" },
+      });
+      const resends = () => seller.calls.filter((c) => c.path.endsWith("/resend"));
+      return { seller, ...made, resends };
+    };
+
+    // Seen live on 2026-10-23: the event was listed, then the resend 404ed.
+    it("waits out INVALID_RESOURCE_ID every 15s and succeeds once PayPal accepts", async () => {
+      const r = run([notYet, notYet, { status: 202 }]);
+      const out = await resendWebhookHandler(r.ctx);
+      expect(out.kind).toBe("success");
+      expect(r.resends()).toHaveLength(3);
+      expect(r.sleeps).toEqual([RESEND_RETRY_MS, RESEND_RETRY_MS]);
+      // A fresh request id each time, so PayPal cannot replay its cached 404.
+      const ids = r.resends().map((c) => c.headers["PayPal-Request-Id"]);
+      expect(new Set(ids).size).toBe(3);
+    });
+
+    it("gives up after two minutes and fails, so the finder reports inconclusive", async () => {
+      const r = run(Array.from({ length: 20 }, () => notYet));
+      const out = await resendWebhookHandler(r.ctx);
+      expect(out.kind).toBe("failed");
+      expect(out.detail).toMatch(/still refused as INVALID_RESOURCE_ID after 9 attempt\(s\) over 120s/);
+      expect(r.resends()).toHaveLength(9);
+      expect(r.sleeps.reduce((a, b) => a + b, 0)).toBe(RESEND_BUDGET_MS);
+    });
+
+    it("does not retry any other 404", async () => {
+      const r = run([{ status: 404, body: { name: "RESOURCE_NOT_FOUND" } }, { status: 202 }]);
+      expect((await resendWebhookHandler(r.ctx)).kind).toBe("failed");
+      expect(r.resends()).toHaveLength(1);
+    });
+
+    // PayPal may have redelivered already; a retry could deliver a third time.
+    it("never retries a 5xx or 408, and reports the outcome as unknown", async () => {
+      for (const status of [500, 503, 408]) {
+        const r = run([{ status }, { status: 202 }]);
+        const out = await resendWebhookHandler(r.ctx);
+        expect(out.kind, String(status)).toBe("unknown");
+        expect(out.detail).toMatch(/could deliver it a third time/);
+        expect(r.resends(), String(status)).toHaveLength(1);
+      }
+    });
+
+    it("never retries a timeout", async () => {
+      // Nothing queued after the list read, so the resend's fetch throws.
+      const r = run([]);
+      const out = await resendWebhookHandler(r.ctx);
+      expect(out.kind).toBe("unknown");
+      expect(r.resends()).toHaveLength(1);
+    });
   });
 });
 
