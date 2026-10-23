@@ -47,6 +47,18 @@ export function saveState(key: string, value: unknown): void {
   writeFileSync(STATE_FILE, JSON.stringify(all, null, 2), "utf8");
 }
 
+/** Drops one gate's saved state so it starts from scratch. */
+export function clearState(key: string): void {
+  try {
+    const all = JSON.parse(readFileSync(STATE_FILE, "utf8")) as Record<string, unknown>;
+    if (!(key in all)) return;
+    delete all[key];
+    writeFileSync(STATE_FILE, JSON.stringify(all, null, 2), "utf8");
+  } catch {
+    // No state file means there is nothing to clear.
+  }
+}
+
 export function loadState<T>(key: string): T | null {
   try {
     const all = JSON.parse(readFileSync(STATE_FILE, "utf8")) as Record<string, unknown>;
