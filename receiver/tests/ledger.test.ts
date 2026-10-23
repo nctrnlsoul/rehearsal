@@ -161,10 +161,39 @@ describe("ledger snapshot", () => {
     instance_id: "inst-a",
   };
 
-  it("reads in arrival order and maps to the wire shape the gate expects", async () => {
+  // The cap has to bite the NEWEST end. Ascending plus a limit returns the
+  // oldest rows, so once the table passes the cap every new arrival is
+  // invisible, and the webhook endpoint is publicly writable by necessity.
+  it("reads newest-first so the row cap cannot hide recent arrivals", async () => {
+    const f = fakeFetch([{ status: 200, body: [] }]);
+    await createLedger(CONFIG, { fetchImpl: f.impl }).snapshot();
+    expect(f.calls[0]!.url).toContain("order=received_at.desc");
+    expect(f.calls[0]!.url).not.toContain("received_at.asc");
+  });
+
+  it("hands rows back oldest-first despite reading newest-first", async () => {
+    const newest = { ...dbRow, event_id: "WH-NEW", received_at: "2026-10-23T12:00:02.000Z" };
+    const middle = { ...dbRow, event_id: "WH-MID", received_at: "2026-10-23T12:00:01.000Z" };
+    const oldest = { ...dbRow, event_id: "WH-OLD", received_at: "2026-10-23T12:00:00.000Z" };
+    // PostgREST returns descending; callers still expect arrival order.
+    const f = fakeFetch([{ status: 200, body: [newest, middle, oldest] }]);
+    const rows = await createLedger(CONFIG, { fetchImpl: f.impl }).snapshot();
+    expect(rows.map((r) => r.eventId)).toEqual(["WH-OLD", "WH-MID", "WH-NEW"]);
+    expect(rows[0]!.receivedAtMs).toBeLessThan(rows[2]!.receivedAtMs);
+  });
+
+  it("scopes to a window when asked, so a backlog cannot crowd a run out", async () => {
+    const f = fakeFetch([{ status: 200, body: [] }, { status: 200, body: [] }]);
+    const ledger = createLedger(CONFIG, { fetchImpl: f.impl });
+    await ledger.snapshot({ sinceIso: "2026-10-23T11:59:00.000Z" });
+    expect(decodeURIComponent(f.calls[0]!.url)).toContain("received_at=gte.2026-10-23T11:59:00.000Z");
+    await ledger.snapshot();
+    expect(f.calls[1]!.url).not.toContain("received_at=gte");
+  });
+
+  it("maps to the wire shape the gate expects", async () => {
     const f = fakeFetch([{ status: 200, body: [dbRow] }]);
     const rows = await createLedger(CONFIG, { fetchImpl: f.impl }).snapshot();
-    expect(f.calls[0]!.url).toContain("order=received_at.asc");
     expect(rows).toEqual([
       {
         eventId: "WH-1",
@@ -196,9 +225,9 @@ describe("ledger snapshot", () => {
   it("clamps the limit", async () => {
     const f = fakeFetch([{ status: 200, body: [] }, { status: 200, body: [] }]);
     const ledger = createLedger(CONFIG, { fetchImpl: f.impl });
-    await ledger.snapshot(99_999);
+    await ledger.snapshot({ limit: 99_999 });
     expect(f.calls[0]!.url).toContain(`limit=${MAX_ROWS}`);
-    await ledger.snapshot(0);
+    await ledger.snapshot({ limit: 0 });
     expect(f.calls[1]!.url).toContain("limit=1");
   });
 

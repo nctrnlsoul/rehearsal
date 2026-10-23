@@ -44,9 +44,23 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ error: "ledger not configured" }, { status: 503 });
   }
 
+  // An unparseable `since` is rejected rather than ignored. Dropping a filter
+  // silently widens the read, which is the fail-open shape.
+  const sinceParam = new URL(req.url).searchParams.get("since");
+  let sinceIso: string | undefined;
+  if (sinceParam !== null) {
+    const parsed = Date.parse(sinceParam);
+    if (Number.isNaN(parsed)) {
+      return Response.json({ error: "since must be an ISO timestamp" }, { status: 400 });
+    }
+    sinceIso = new Date(parsed).toISOString();
+  }
+
   let rows;
   try {
-    rows = await createLedger(config).snapshot();
+    rows = await createLedger(config).snapshot(
+      sinceIso === undefined ? {} : { sinceIso },
+    );
   } catch (e) {
     console.error(`ledger read failed: ${(e as Error).message}`);
     return Response.json({ error: "ledger not available" }, { status: 503 });

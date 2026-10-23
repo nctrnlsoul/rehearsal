@@ -80,8 +80,16 @@ await runGate({
     const ledgerUrl = assertAllowedEventTarget(`${origin}${LEDGER_PATH}`, [origin]).toString();
     ctx.log(`target ${webhookTarget}`);
 
+    // Scope every read to this run's window. The ledger caps how many rows it
+    // returns, so relying on that cap alone would let an older backlog, or
+    // anyone posting junk to the public webhook endpoint, push this run's real
+    // arrivals out of view.
+    const ledgerSince = new Date(Date.now() - 60_000).toISOString();
+
     const readLedger = async (): Promise<LedgerSnapshot> => {
-      const res = await fetch(ledgerUrl, {
+      const url = new URL(ledgerUrl);
+      url.searchParams.set("since", ledgerSince);
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(15_000),
       });

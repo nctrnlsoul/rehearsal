@@ -81,9 +81,15 @@ export function readConfig(env: Record<string, string | undefined>): LedgerConfi
   return { url: assertSupabaseUrl(rawUrl!.trim()), key: key!.trim() };
 }
 
+export type SnapshotOptions = {
+  readonly limit?: number;
+  /** ISO timestamp. Scopes the read to a window instead of a global row cap. */
+  readonly sinceIso?: string;
+};
+
 export type Ledger = {
   append(row: Omit<Row, "instanceId">): Promise<void>;
-  snapshot(limit?: number): Promise<Row[]>;
+  snapshot(options?: SnapshotOptions): Promise<Row[]>;
 };
 
 function toRow(raw: Record<string, unknown>): Row {
@@ -137,11 +143,23 @@ export function createLedger(
       }
     },
 
-    async snapshot(limit = MAX_ROWS) {
+    async snapshot(options: SnapshotOptions = {}) {
       const url = new URL(endpoint);
       url.searchParams.set("select", SELECT_COLUMNS);
-      url.searchParams.set("order", "received_at.asc");
-      url.searchParams.set("limit", String(Math.min(Math.max(1, limit), MAX_ROWS)));
+      // DESCENDING, so the cap keeps the NEWEST rows. Ascending plus a limit
+      // returns the oldest rows, which means that once the table passes the cap
+      // every new arrival is invisible. The webhook endpoint is publicly
+      // writable by necessity, so anyone could otherwise pin the read window
+      // with junk and hide real events: the same "unreadable ledger looks like
+      // lost events" failure this table was created to end.
+      url.searchParams.set("order", "received_at.desc");
+      url.searchParams.set(
+        "limit",
+        String(Math.min(Math.max(1, options.limit ?? MAX_ROWS), MAX_ROWS)),
+      );
+      if (options.sinceIso !== undefined) {
+        url.searchParams.set("received_at", `gte.${options.sinceIso}`);
+      }
 
       const res = await doFetch(url, {
         method: "GET",
@@ -155,9 +173,12 @@ export function createLedger(
       if (!Array.isArray(body)) {
         throw new Error("ledger read returned something other than a row array");
       }
+      // Read newest-first above, handed back oldest-first, so callers still see
+      // arrival order and latency maths stays the same.
       return body
         .filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null)
-        .map(toRow);
+        .map(toRow)
+        .reverse();
     },
   };
 }
