@@ -383,6 +383,32 @@ async function bankConfirm(): Promise<void> {
   bankList();
 }
 
+/**
+ * Supplies a buyer-side transaction id by hand. Needed for two reasons that are
+ * both outside our control: the buyer app may lack a reporting scope, and
+ * PayPal documents Transaction Search as lagging up to three hours even when it
+ * is enabled.
+ */
+function bankSetTxn(rest: string[]): void {
+  const flags = args(rest);
+  const orderId = flags["order"];
+  const txn = flags["txn"];
+  if (orderId === undefined || txn === undefined) {
+    console.error("usage: rehearsal bank:set-txn --order <orderId> --txn <buyerTransactionId>");
+    console.error("Read the transaction id from the sandbox BUYER account's activity page.");
+    process.exit(1);
+  }
+  const store = bankStore();
+  const result = attachTransactionId(store.read(), orderId, txn);
+  if (!result.ok) {
+    console.error(result.error);
+    process.exit(1);
+  }
+  store.write(result.value);
+  console.log(`order ${orderId}: buyer transaction ${txn} recorded by hand, now available`);
+  bankList();
+}
+
 function bankList(): void {
   const bank = bankStore().read();
   console.log("");
@@ -411,6 +437,7 @@ function usage(): void {
   console.log("  rehearsal run <scenario.json> --resume <runId> [--retry <stepId>]");
   console.log("  rehearsal bank:add [--amount 88.00]      create an order and print its approval link");
   console.log("  rehearsal bank:confirm                   capture approved orders and find buyer txn ids");
+  console.log("  rehearsal bank:set-txn --order <id> --txn <id>   supply a buyer txn id by hand");
   console.log("  rehearsal bank:list                      show the purchase bank");
 }
 
@@ -428,6 +455,9 @@ switch (command) {
     break;
   case "bank:confirm":
     await bankConfirm();
+    break;
+  case "bank:set-txn":
+    bankSetTxn(rest);
     break;
   case "bank:list":
     bankList();

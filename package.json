@@ -23,6 +23,7 @@
     "dry-run": "tsx bin/rehearsal.ts dry-run",
     "bank:add": "tsx bin/rehearsal.ts bank:add",
     "bank:confirm": "tsx bin/rehearsal.ts bank:confirm",
+    "bank:set-txn": "tsx bin/rehearsal.ts bank:set-txn",
     "bank:list": "tsx bin/rehearsal.ts bank:list"
   },
   "dependencies": {

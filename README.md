@@ -54,9 +54,18 @@ npm run bank:confirm                  # captures it, then finds the buyer transa
 npm run bank:list
 ```
 
-`bank:confirm` is safe to re-run. PayPal documents Transaction Search as lagging
-up to three hours, so a purchase that is not visible yet stays pending and says
-so rather than being silently dropped.
+`bank:confirm` is safe to re-run. An order PayPal no longer holds (404 on the
+order) is marked `expired` rather than checked forever, so approve a link
+promptly after creating it.
+
+Finding the buyer-side transaction id needs a reporting scope on the buyer app,
+and PayPal documents Transaction Search as lagging up to three hours even then.
+When it is unavailable, read the id from the sandbox buyer account's activity
+page and supply it:
+
+```
+npm run bank:set-txn -- --order <orderId> --txn <buyerTransactionId>
+```
 
 ## Scenario files
 
