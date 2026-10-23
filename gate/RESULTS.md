@@ -1,7 +1,9 @@
-# Day-1 gate results, 2026-10-22
+# Day-1 gate results, 2026-10-22, gate 4 cleared 2026-10-23
 
 Run against `api-m.sandbox.paypal.com` only. Every id below is a real sandbox
-record created by `gate/` scripts. 104 unit tests pass, typecheck clean.
+record created by `gate/` scripts. 107 unit tests pass, typecheck clean.
+
+**Five of seven gates pass. Both remaining blockers need a human, not code.**
 
 | Gate | Verdict | What it proves |
 |---|---|---|
@@ -9,7 +11,7 @@ record created by `gate/` scripts. 104 unit tests pass, typecheck clean.
 | 1 card order | **PASS** | Card captured by API alone, no human step |
 | 2 partial refund | **PASS** | Partial refund, independently confirmed on the capture |
 | 3 unclaimed payout | **PASS** | Payout item reached UNCLAIMED |
-| 4 invoice | **FAIL (BLOCKED)** | 403 NOT_AUTHORIZED, app feature not enabled |
+| 4 invoice | **PASS** | Invoice created, sent, and recorded paid by API |
 | 5 webhooks | **FAIL (BLOCKED)** | Needs the deployed receiver URL |
 | 6 dispute | **FAIL (BLOCKED)** | Needs one browser approval click |
 
@@ -20,12 +22,11 @@ record created by `gate/` scripts. 104 unit tests pass, typecheck clean.
 - buyer app `APP-07T66442GY4861820`
 
 **Gate 1** (single-step Orders v2, intent CAPTURE + `payment_source.card`)
-- order `06G71161BF3473542`
-- capture `99519200PJ7027619`
-- debug id `f684158515ab6`
+- order `09941019E4718134E`
+- capture `8PU31875NP0169201`
 
 **Gate 2** (35% of USD 42.00)
-- refund `01Y72375VU570414U` on capture `99519200PJ7027619`
+- refund `0W085568EK465174L` on capture `8PU31875NP0169201`
 - capture re-read independently: `PARTIALLY_REFUNDED`
 
 **Gate 3** (USD 5.00 to a reserved `example.com` address)
@@ -34,16 +35,32 @@ record created by `gate/` scripts. 104 unit tests pass, typecheck clean.
 - payout item `23KVSFUKAS6DU`
 - batch `PROCESSING`, item `UNCLAIMED` after about 20s
 
+**Gate 4** (USD 25.00, both send-email flags off)
+- invoice number `0001`
+- invoice `INV2-HDS2-ZYMQ-URF6-NZNS`
+- external payment `EXTR-39445688NF757571V`
+- status path: `DRAFT`, then `UNPAID` after send, then `MARKED_AS_PAID`
+
 **Gate 6** (phase A only)
 - order `322573928N353731T`, status `PAYER_ACTION_REQUIRED`
 - approval URL: `https://www.sandbox.paypal.com/checkoutnow?token=322573928N353731T`
 
-## The three blockers, with remedies
+## Gate 4, cleared 2026-10-23
 
-**Gate 4, invoicing 403.** Gate 0 predicted this from the token scope list:
-neither app's token carries any invoicing scope. Remedy is a dashboard toggle,
-not code. Developer Dashboard, Apps & Credentials, `rehearsal-seller`, App
-feature options, enable **Invoicing**, save, then `npm run gate:4`.
+Two separate causes, found in order.
+
+1. **`403 NOT_AUTHORIZED`.** Gate 0 predicted it from the token scope list:
+   neither app carried an invoicing scope. Brian enabled **Invoicing** on the
+   `rehearsal-seller` app and the 403 went away. The inferred remedy held.
+2. **`415 UNSUPPORTED_MEDIA_TYPE`**, and this one was our bug. The client only
+   sent `Content-Type: application/json` when a request carried a body, and
+   `generate-next-invoice-number` is a bodyless POST. PayPal cannot type a
+   bodyless request without the header. The same bug was sitting in gate 6's
+   capture call, which is also bodyless, so it would have cost a second
+   debugging round there. Fixed in the adapter for every write, with a
+   regression test covering bodyless write, body write, and read.
+
+## The two remaining blockers, with remedies
 
 **Gate 5, receiver URL.** `receiver/` is written, builds clean, and its nine
 endpoint probes all behave as specified locally. It needs deploying to Vercel
