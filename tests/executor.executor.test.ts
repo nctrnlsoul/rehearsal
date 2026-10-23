@@ -269,3 +269,80 @@ describe("executeScenario webhook registration", () => {
     expect(h.sellerCalls).toHaveLength(0);
   });
 });
+
+describe("executeScenario in reuse-only webhook mode", () => {
+  const TARGET = "https://store.test/api/paypal/webhook";
+  const withWebhook = (): Scenario => {
+    const r = scenarioWith([{ id: "o1", kind: "card_order", amount: "40.00" }]);
+    return { ...r, webhook: { target: TARGET, eventTypes: ["*"] } };
+  };
+  const run = (h: ReturnType<typeof harness>) =>
+    executeScenario({ scenario: withWebhook(), runId: "run-1", webhookMode: "reuse-only" }, h.deps);
+
+  it("uses the one webhook at the exact target and never registers", async () => {
+    const h = harness({}, [
+      {
+        status: 200,
+        body: {
+          webhooks: [
+            { id: "WH-BARE", url: "https://store.test" },
+            { id: "WH-STORE", url: TARGET },
+          ],
+        },
+      },
+    ]);
+    const state = await run(h);
+    expect(state.meta["webhook_id"]).toBe("WH-STORE");
+    expect(state.halted).toBe(false);
+    expect(h.sellerCalls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("halts before any step, without registering, when no webhook is at the target", async () => {
+    ran.length = 0;
+    const h = harness({}, [
+      { status: 200, body: { webhooks: [{ id: "WH-BARE", url: "https://store.test" }] } },
+    ]);
+    const state = await run(h);
+    expect(state.halted).toBe(true);
+    expect(state.haltReason).toMatch(/never registers one/);
+    expect(ran).toHaveLength(0);
+    expect(h.sellerCalls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("halts when two webhooks share the exact target", async () => {
+    ran.length = 0;
+    const h = harness({}, [
+      {
+        status: 200,
+        body: { webhooks: [{ id: "WH-A", url: TARGET }, { id: "WH-B", url: TARGET }] },
+      },
+    ]);
+    const state = await run(h);
+    expect(state.halted).toBe(true);
+    expect(state.haltReason).toMatch(/2 webhooks/);
+    expect(ran).toHaveLength(0);
+  });
+
+  // The client turns transport errors into a status, but a refused token throws.
+  it("halts rather than throws when the lookup itself throws", async () => {
+    const throwing = {
+      call: async () => {
+        throw new Error("sandbox token request failed");
+      },
+    } as unknown as ExecutorDeps["seller"];
+    const h = harness({ seller: throwing });
+    const state = await run(h);
+    expect(state.halted).toBe(true);
+    expect(state.haltReason).toBe(
+      "could not read the webhook list: sandbox token request failed",
+    );
+  });
+
+  it("treats an unreadable list as a halt, not as an empty one", async () => {
+    const h = harness({}, [{ status: 403, body: {} }]);
+    const state = await run(h);
+    expect(state.halted).toBe(true);
+    expect(state.haltReason).toMatch(/http 403/);
+    expect(h.sellerCalls.some((c) => c.method === "POST")).toBe(false);
+  });
+});

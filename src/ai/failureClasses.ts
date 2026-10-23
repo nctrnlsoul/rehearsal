@@ -1,4 +1,5 @@
 import type { RunState, StepRecord } from "../core/runState";
+import type { Step } from "../core/scenario";
 
 /**
  * The failure classes the edge-case finder aims at, each with a PURE check so
@@ -38,11 +39,27 @@ export type Finding = {
   readonly likelyFix: string;
 };
 
+/**
+ * The fixed shape of a class's scenario. The planner fills values; it never
+ * chooses steps. Left to choose, it padded a two-step test with a payout that
+ * could not run, and the halt hid the class entirely.
+ */
+export type ScenarioTemplate = {
+  /** Exactly these steps, in this order. Values here are the defaults. */
+  readonly steps: readonly Step[];
+  /** Per step id, the only fields taken from the planner. Dotted paths reach into arrays. */
+  readonly fillable: Readonly<Record<string, readonly string[]>>;
+  /** True when the run must use the store's existing webhook, to resend to it. */
+  readonly needsWebhook: boolean;
+};
+
 export type FailureClass = {
   readonly id: string;
   readonly title: string;
   /** Appended to the description so the planner aims at this class. */
   readonly ask: string;
+  /** Null only for an unsupported class, which never runs. */
+  readonly template: ScenarioTemplate | null;
   readonly needsBankedPurchase: boolean;
   /** False when v0.2.0 cannot express the scenario; reported, never silently dropped. */
   readonly supported: boolean;
@@ -61,6 +78,26 @@ function finding(
   parts: { event: string; expected: string; actual: string; likelyFix: string },
 ): Finding {
   return { classId: base.id, title: base.title, verdict, ...parts };
+}
+
+/** Our instruction to the planner, derived from the template so the two cannot drift. */
+export function askFor(template: ScenarioTemplate): string {
+  const fields = template.steps
+    .map((s) => `${s.id}: ${(template.fillable[s.id] ?? []).join(", ") || "nothing"}`)
+    .join("; ");
+  return [
+    "Use exactly these steps, with these ids, kinds, needs, from and eventType, and no other steps:",
+    JSON.stringify(template.steps),
+    `You may change only these values (${fields}).`,
+    "Do not include a webhook block; the runner supplies it.",
+  ].join(" ");
+}
+
+function withTemplate(
+  cls: Omit<FailureClass, "ask" | "template">,
+  template: ScenarioTemplate,
+): FailureClass {
+  return { ...cls, template, ask: askFor(template) };
 }
 
 const DUPLICATE_WEBHOOK = {
@@ -83,12 +120,11 @@ const DISPUTE_ON_REFUNDED = {
 };
 
 export const FAILURE_CLASSES: readonly FailureClass[] = [
-  {
+  withTemplate({
     ...DUPLICATE_WEBHOOK,
-    ask: "Include one card order, and then a resend_webhook step for its PAYMENT.CAPTURE.COMPLETED event so the same event is delivered twice. Declare the webhook block.",
     needsBankedPurchase: false,
     supported: true,
-    check(store, run) {
+    check(store: StoreSnapshot, run: RunState) {
       const resends = stepsOfKind(run, "resend_webhook");
       if (resends.length === 0 || !resends.some((s) => s.status === "succeeded")) {
         return finding(DUPLICATE_WEBHOOK, "inconclusive", {
@@ -129,14 +165,26 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
         likelyFix: "none needed",
       });
     },
-  },
+  }, {
+    steps: [
+      { id: "order", kind: "card_order", needs: [], amount: "25.00" },
+      {
+        id: "resend-capture",
+        kind: "resend_webhook",
+        needs: ["order"],
+        from: "order",
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+      },
+    ],
+    fillable: { order: ["amount"] },
+    needsWebhook: true,
+  }),
 
-  {
+  withTemplate({
     ...REFUND_AFTER_PARTIAL,
-    ask: "Include one card order, then a partial refund of it, then a second refund of the same order. Do not declare a webhook unless you need one.",
     needsBankedPurchase: false,
     supported: true,
-    check(store, run) {
+    check(store: StoreSnapshot, run: RunState) {
       const refunds = stepsOfKind(run, "refund");
       if (refunds.length < 2) {
         return finding(REFUND_AFTER_PARTIAL, "inconclusive", {
@@ -176,14 +224,28 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
         likelyFix: "none needed",
       });
     },
-  },
+  }, {
+    steps: [
+      { id: "order", kind: "card_order", needs: [], amount: "40.00" },
+      {
+        id: "refund-partial",
+        kind: "refund",
+        needs: ["order"],
+        from: "order",
+        mode: "partial",
+        basisPoints: 5000,
+      },
+      { id: "refund-second", kind: "refund", needs: ["refund-partial"], from: "order", mode: "full" },
+    ],
+    fillable: { order: ["amount"], "refund-partial": ["basisPoints"] },
+    needsWebhook: false,
+  }),
 
-  {
+  withTemplate({
     ...UNCLAIMED_PAYOUT,
-    ask: "Include one payout batch with a single item marked unclaimed. Do not declare a webhook unless you need one.",
     needsBankedPurchase: false,
     supported: true,
-    check(_store, run) {
+    check(_store: StoreSnapshot, run: RunState) {
       const payouts = stepsOfKind(run, "payout_batch");
       if (payouts.length === 0) {
         return finding(UNCLAIMED_PAYOUT, "inconclusive", {
@@ -210,14 +272,19 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
         likelyFix: "none needed",
       });
     },
-  },
+  }, {
+    steps: [
+      { id: "payout", kind: "payout_batch", needs: [], items: [{ amount: "5.00", unclaimed: true }] },
+    ],
+    fillable: { payout: ["items.0.amount", "items.0.note"] },
+    needsWebhook: false,
+  }),
 
-  {
+  withTemplate({
     ...OVERDUE_INVOICE,
-    ask: "Include one invoice created with a dueInDays of about minus seven, then send it, so it reads as already overdue. Do not declare a webhook unless you need one.",
     needsBankedPurchase: false,
     supported: true,
-    check(_store, run) {
+    check(_store: StoreSnapshot, run: RunState) {
       const sends = stepsOfKind(run, "invoice_send");
       if (sends.length === 0) {
         return finding(OVERDUE_INVOICE, "inconclusive", {
@@ -244,11 +311,21 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
         likelyFix: "none needed",
       });
     },
-  },
+  }, {
+    steps: [
+      // dueInDays is fixed: a planner-chosen positive value would make the
+      // class read as a bug when it was simply never overdue.
+      { id: "invoice", kind: "invoice_create", needs: [], amount: "60.00", dueInDays: -7 },
+      { id: "send", kind: "invoice_send", needs: ["invoice"], from: "invoice" },
+    ],
+    fillable: { invoice: ["amount", "itemName"] },
+    needsWebhook: false,
+  }),
 
   {
     ...DISPUTE_ON_REFUNDED,
     ask: "",
+    template: null,
     needsBankedPurchase: true,
     supported: false,
     unsupportedReason:

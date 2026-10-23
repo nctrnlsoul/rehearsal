@@ -38,8 +38,21 @@ export type ExecutorDeps = {
   readonly handlers?: HandlerRegistry;
 };
 
+/**
+ * "register" creates the scenario's webhook, or reuses one at the same URL.
+ * "reuse-only" never creates one: it uses the single webhook already registered
+ * at the scenario's exact target, and halts if there is not exactly one. The
+ * finder runs this way, so a planned scenario can never add a webhook.
+ */
+export type WebhookMode = "register" | "reuse-only";
+
 export async function executeScenario(
-  args: { scenario: Scenario; runId: string; resume?: RunState | null },
+  args: {
+    scenario: Scenario;
+    runId: string;
+    resume?: RunState | null;
+    webhookMode?: WebhookMode;
+  },
   deps: ExecutorDeps,
 ): Promise<RunState> {
   const { scenario, runId } = args;
@@ -83,7 +96,10 @@ export async function executeScenario(
   }
 
   if (scenario.webhook !== undefined && state.meta["webhook_id"] === undefined && !state.halted) {
-    state = await registerWebhook(scenario, deps, state, iso);
+    state =
+      (args.webhookMode ?? "register") === "reuse-only"
+        ? await reuseWebhook(scenario, deps, state, iso)
+        : await registerWebhook(scenario, deps, state, iso);
     deps.persist(state);
   }
 
@@ -208,4 +224,55 @@ async function registerWebhook(
 
   deps.log(`webhook ${id} registered for ${webhook.target}`);
   return recordMeta(current, "webhook_id", id, iso());
+}
+
+async function reuseWebhook(
+  scenario: Scenario,
+  deps: ExecutorDeps,
+  current: RunState,
+  iso: () => string,
+): Promise<RunState> {
+  const target = scenario.webhook!.target;
+  let list: Awaited<ReturnType<PaypalClient["call"]>>;
+  try {
+    list = await deps.seller.call({ method: "GET", path: "/v1/notifications/webhooks" });
+  } catch (e) {
+    // A halt, not a throw: the finder runs several classes, and one failed
+    // lookup must not abort the rest or the report.
+    return haltRun(current, `could not read the webhook list: ${(e as Error).message}`, iso());
+  }
+  // A failed read is never an empty list.
+  if (list.status !== 200) {
+    return haltRun(
+      current,
+      `could not read the webhook list (http ${list.status}), so no webhook could be reused`,
+      iso(),
+    );
+  }
+  const holder = list.body as { webhooks?: unknown } | null;
+  if (!Array.isArray(holder?.webhooks)) {
+    return haltRun(
+      current,
+      "the webhook list was not an array, so no webhook could be reused",
+      iso(),
+    );
+  }
+
+  const ids = holder.webhooks
+    .filter((w): w is Record<string, unknown> => typeof w === "object" && w !== null)
+    .filter((w) => w["url"] === target && typeof w["id"] === "string")
+    .map((w) => w["id"] as string);
+
+  if (ids.length !== 1) {
+    return haltRun(
+      current,
+      ids.length === 0
+        ? `no webhook is registered at ${target}, and this mode never registers one; register it first`
+        : `${ids.length} webhooks are registered at ${target}, refusing to guess which one a resend should go to`,
+      iso(),
+    );
+  }
+
+  deps.log(`reusing webhook ${ids[0]!} registered for ${target}, not registering a new one`);
+  return recordMeta(current, "webhook_id", ids[0]!, iso());
 }
