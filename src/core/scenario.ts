@@ -93,12 +93,16 @@ const invoiceRecordPaymentStep = z.object({
 
 const invoiceCancelStep = z.object({ ...baseStep, kind: z.literal("invoice_cancel"), from: stepId });
 
+/** Exported so the planner prompt lists exactly what the schema accepts. */
+export const DISPUTE_REASONS = [
+  "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+  "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+] as const;
+
 const openDisputeStep = z.object({
   ...baseStep,
   kind: z.literal("open_dispute"),
-  reason: z
-    .enum(["MERCHANDISE_OR_SERVICE_NOT_RECEIVED", "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED"])
-    .default("MERCHANDISE_OR_SERVICE_NOT_RECEIVED"),
+  reason: z.enum(DISPUTE_REASONS).default("MERCHANDISE_OR_SERVICE_NOT_RECEIVED"),
 });
 
 /**
