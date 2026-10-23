@@ -3,7 +3,7 @@ import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf } from "../src/core/idempotency";
 import { classify } from "../src/core/outcome";
 import { CURRENCY } from "./_fixtures";
-import { errorSummary, loadState, pick, runGate, saveState, sleep } from "./_harness";
+import { clearState, errorSummary, loadState, pick, runGate, saveState, sleep } from "./_harness";
 
 /**
  * Gate 6: a real buyer-side dispute, moved and settled by our code.
@@ -58,6 +58,13 @@ await runGate({
       log: ctx.log,
       minIntervalMs: 300,
     });
+
+    // An order tied to the wrong buyer account can never be approved, so there
+    // has to be a way to abandon it rather than resume it forever.
+    if (process.argv.includes("--fresh")) {
+      clearState("gate6");
+      ctx.note("--fresh: discarded any previously saved gate 6 order");
+    }
 
     const saved = loadState<Gate6State>("gate6");
 
