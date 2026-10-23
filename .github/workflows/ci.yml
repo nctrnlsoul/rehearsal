@@ -40,3 +40,34 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+  receiver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: receiver/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: receiver
+
+      # The ledger takes fetch by injection, so these tests open no socket and
+      # need no Supabase project.
+      - name: Unit tests
+        run: npm test
+        working-directory: receiver
+
+      # next build also type checks, and it needs no environment variables: the
+      # routes read them at request time.
+      - name: Build
+        run: npm run build
+        working-directory: receiver
