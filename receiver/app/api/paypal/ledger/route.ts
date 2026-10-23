@@ -33,6 +33,23 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // Validated at the trust boundary, before storage state can mask it. An
+  // unparseable `since` is rejected rather than ignored, because dropping a
+  // filter silently widens the read, which is the fail-open shape.
+  //
+  // Side benefit worth keeping: this answers 400 whatever Supabase is doing, so
+  // `?since=x` is a one-request check that a deployment is running this code.
+  // The previous in-memory build ignores the parameter and answers 200.
+  const sinceParam = new URL(req.url).searchParams.get("since");
+  let sinceIso: string | undefined;
+  if (sinceParam !== null) {
+    const parsed = Date.parse(sinceParam);
+    if (Number.isNaN(parsed)) {
+      return Response.json({ error: "since must be an ISO timestamp" }, { status: 400 });
+    }
+    sinceIso = new Date(parsed).toISOString();
+  }
+
   let config;
   try {
     config = readConfig(process.env);
@@ -42,18 +59,6 @@ export async function GET(req: Request): Promise<Response> {
   }
   if (config === null) {
     return Response.json({ error: "ledger not configured" }, { status: 503 });
-  }
-
-  // An unparseable `since` is rejected rather than ignored. Dropping a filter
-  // silently widens the read, which is the fail-open shape.
-  const sinceParam = new URL(req.url).searchParams.get("since");
-  let sinceIso: string | undefined;
-  if (sinceParam !== null) {
-    const parsed = Date.parse(sinceParam);
-    if (Number.isNaN(parsed)) {
-      return Response.json({ error: "since must be an ISO timestamp" }, { status: 400 });
-    }
-    sinceIso = new Date(parsed).toISOString();
   }
 
   let rows;
