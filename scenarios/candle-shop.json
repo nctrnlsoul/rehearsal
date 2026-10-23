@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "name": "Candle shop, a week of ordinary trading",
+  "profile": {
+    "name": "Ember & Wick",
+    "description": "A small candle shop that takes card orders, invoices wholesale buyers, pays its makers, and occasionally gets a dispute.",
+    "country": "US"
+  },
+  "currency": "USD",
+  "webhook": {
+    "target": "https://receiver-lyart.vercel.app/api/paypal/webhook",
+    "eventTypes": ["*"]
+  },
+  "steps": [
+    {
+      "id": "retail-order",
+      "kind": "card_order",
+      "label": "Three jar candles, card checkout",
+      "amount": "54.00"
+    },
+    {
+      "id": "gift-order",
+      "kind": "card_order",
+      "label": "Gift set, card checkout",
+      "amount": "32.50"
+    },
+    {
+      "id": "returned-in-full",
+      "kind": "refund",
+      "label": "Customer returned the whole order",
+      "from": "retail-order",
+      "mode": "full",
+      "needs": ["retail-order"]
+    },
+    {
+      "id": "one-jar-broken",
+      "kind": "refund",
+      "label": "One jar arrived broken, refund 40 percent",
+      "from": "gift-order",
+      "mode": "partial",
+      "basisPoints": 4000,
+      "needs": ["gift-order"]
+    },
+    {
+      "id": "maker-payouts",
+      "kind": "payout_batch",
+      "label": "Pay two makers, neither has claimed their account",
+      "items": [
+        { "amount": "18.00", "unclaimed": true, "note": "Beeswax maker" },
+        { "amount": "12.50", "unclaimed": true, "note": "Wick supplier" }
+      ]
+    },
+    {
+      "id": "wholesale-invoice",
+      "kind": "invoice_create",
+      "label": "Wholesale order for a homeware shop",
+      "amount": "240.00",
+      "itemName": "Candle wholesale case, 24 units",
+      "dueInDays": 14
+    },
+    {
+      "id": "send-wholesale",
+      "kind": "invoice_send",
+      "from": "wholesale-invoice",
+      "needs": ["wholesale-invoice"]
+    },
+    {
+      "id": "wholesale-paid",
+      "kind": "invoice_record_payment",
+      "label": "Paid by bank transfer",
+      "from": "wholesale-invoice",
+      "needs": ["send-wholesale"]
+    },
+    {
+      "id": "late-invoice",
+      "kind": "invoice_create",
+      "label": "A market stall invoice that is already past due",
+      "amount": "75.00",
+      "itemName": "Market stall restock",
+      "dueInDays": -7
+    },
+    {
+      "id": "send-late",
+      "kind": "invoice_send",
+      "from": "late-invoice",
+      "needs": ["late-invoice"]
+    },
+    {
+      "id": "cancelled-invoice",
+      "kind": "invoice_create",
+      "label": "A cafe that changed its mind",
+      "amount": "120.00",
+      "itemName": "Cafe candle subscription, first month",
+      "dueInDays": 30
+    },
+    {
+      "id": "send-cancelled",
+      "kind": "invoice_send",
+      "from": "cancelled-invoice",
+      "needs": ["cancelled-invoice"]
+    },
+    {
+      "id": "cancel-cafe",
+      "kind": "invoice_cancel",
+      "from": "cancelled-invoice",
+      "needs": ["send-cancelled"]
+    },
+    {
+      "id": "never-arrived",
+      "kind": "open_dispute",
+      "label": "A buyer says their candles never arrived",
+      "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+      "needs": ["wholesale-paid", "cancel-cafe", "returned-in-full", "one-jar-broken", "maker-payouts", "send-late"]
+    }
+  ]
+}
