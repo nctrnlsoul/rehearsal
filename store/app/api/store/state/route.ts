@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { createDb, readConfig } from "../../../../lib/db";
+import { StoreDbError, createDb, explainDbStatus, readConfig } from "../../../../lib/db";
 import { DEDUPE_BY_EVENT_ID, summarise } from "../../../../lib/merchant";
 
 /**
@@ -65,6 +65,20 @@ export async function GET(req: Request): Promise<Response> {
     );
   } catch (e) {
     console.error(`store read failed: ${(e as Error).message}`);
+    // This endpoint is already behind a shared secret, so naming the upstream
+    // status here is safe and turns a storage misconfiguration from several
+    // rounds of guessing into one request. Never includes the key.
+    if (e instanceof StoreDbError) {
+      return Response.json(
+        {
+          error: "store not available",
+          operation: e.operation,
+          upstreamStatus: e.status,
+          likelyCause: explainDbStatus(e.status),
+        },
+        { status: 503 },
+      );
+    }
     return Response.json({ error: "store not available" }, { status: 503 });
   }
 }

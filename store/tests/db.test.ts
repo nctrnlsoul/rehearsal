@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ROWS, assertSupabaseUrl, createDb, readConfig } from "../lib/db";
+import {
+  MAX_ROWS,
+  assertSupabaseUrl,
+  createDb,
+  explainDbStatus,
+  readConfig,
+} from "../lib/db";
 
 const PROJECT = "https://abcdefghijklmnop.supabase.co";
 const KEY = "fake-secret-key-do-not-use";
@@ -115,6 +121,41 @@ describe("db operations", () => {
     expect(f.calls[0]!.url).toContain(`limit=${MAX_ROWS}`);
     await db.rows({ limit: 0 });
     expect(f.calls[1]!.url).toContain("limit=1");
+  });
+
+  // A bare "it failed" cost several rounds of guessing, so the status travels
+  // with the error and maps to the cause that actually produces it.
+  it("carries the upstream status and the operation on the error", async () => {
+    for (const [status, operation, run] of [
+      [404, "read", (d: ReturnType<typeof createDb>) => d.rows()],
+      [401, "insert", (d: ReturnType<typeof createDb>) =>
+        d.insert({
+          eventId: "WH-1",
+          eventType: "X",
+          captureId: "C",
+          amount: "1.00",
+          currency: "USD",
+          action: "fulfilled",
+          verified: true,
+        })],
+      [403, "event lookup", (d: ReturnType<typeof createDb>) => d.hasEvent("WH-1")],
+    ] as const) {
+      const f = fakeFetch([{ status }]);
+      const db = createDb(CONFIG, { fetchImpl: f.impl });
+      await expect(run(db)).rejects.toMatchObject({
+        name: "StoreDbError",
+        status,
+        operation,
+      });
+    }
+  });
+
+  it("explains the statuses that actually happen", () => {
+    expect(explainDbStatus(404)).toMatch(/different Supabase project/i);
+    expect(explainDbStatus(401)).toMatch(/SECRET key/i);
+    expect(explainDbStatus(403)).toMatch(/publishable key/i);
+    expect(explainDbStatus(400)).toMatch(/column may not match/i);
+    expect(explainDbStatus(418)).toMatch(/unexpected/i);
   });
 
   it("throws with the status only, never the key", async () => {
