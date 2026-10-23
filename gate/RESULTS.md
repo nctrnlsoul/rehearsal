@@ -3,7 +3,10 @@
 Run against `api-m.sandbox.paypal.com` only. Every id below is a real sandbox
 record created by `gate/` scripts. 119 unit tests pass, typecheck clean.
 
-**Five of seven gates pass. Both remaining blockers need a human, not code.**
+**Six of seven gates pass.** Gate 6 fails only on `require-evidence` and
+`adjudicate`, the two steps the locked v0.1.0 scope deliberately dropped. The
+dispute capability it was testing is proven and shipping: the candle shop run
+opened dispute `PP-R-RDJ-10194262` at status `OPEN`.
 
 | Gate | Verdict | What it proves |
 |---|---|---|
@@ -12,7 +15,7 @@ record created by `gate/` scripts. 119 unit tests pass, typecheck clean.
 | 2 partial refund | **PASS** | Partial refund, independently confirmed on the capture |
 | 3 unclaimed payout | **PASS** | Payout item reached UNCLAIMED |
 | 4 invoice | **PASS** | Invoice created, sent, and recorded paid by API |
-| 5 webhooks | **FAIL (BLOCKED)** | PayPal sent all 5 events; the receiver's in-memory ledger is write-invisible on Vercel |
+| 5 webhooks | **PASS** | 5 real events sent, all 5 arrived, all 5 signature-verified, resend arrived again |
 | 6 dispute | **FAIL** | Dispute created by API; both sandbox state endpoints refuse at INQUIRY stage |
 
 ## Ids created
@@ -138,10 +141,40 @@ self-test event and requires it readable before firing anything real. Gate 5 now
 fails in about ten seconds with the correct diagnosis instead of spending four
 minutes to produce a false negative.
 
-**Remedy, needs a decision.** Replace the in-memory ledger with one durable
-table. Supabase is already in the stack and the console will need a database
-regardless. That means a table, a service role key in the Vercel project, and a
-redeploy, so it is Brian's call rather than something to do unilaterally.
+## Gate 5, cleared 2026-10-23
+
+Durable Supabase table, RLS on with zero policies, grants revoked from `anon`
+and `authenticated`. The receiver sends the `sb_secret_` key on the `apikey`
+header only, server-side, and reads stay behind `REHEARSAL_RECEIVER_TOKEN`.
+
+```
+5 real events sent, all 5 arrived, all 5 verified=true
+arrival latency 5.8s to 11.0s
+resend accepted 202, the event then appeared twice
+```
+
+Four separate faults stood between the diagnosis and the pass, each found by
+measurement rather than inspection:
+
+1. **A fail-open read.** A 400 from PayPal's event list was taken as "zero
+   events sent", exactly the `?? []` shape the standing rules name.
+2. **`start_time` with milliseconds**, which PayPal rejects outright.
+3. **The cap on the wrong end.** PostgREST applies `limit` after `order`, so
+   `received_at.asc` returned the OLDEST rows: past the cap, every new arrival
+   was invisible, and the webhook endpoint is publicly writable. Caught by
+   review, not by me.
+4. **A stale deployment, twice.** Production served `main`, which never carried
+   the receiver work, while the correct code sat in branch previews. The
+   `?since=x` probe (400 = new build, 200 = stale) exists because of this.
+
+And the root cause of the final failure was not code at all: the table had never
+been created in the project the receiver points at. PostgREST answered 404, the
+receiver refused to pretend, and both paths failed loudly instead of silently.
+
+**The reusable lesson:** the gate's own self-test is what made this tractable. It
+posts an event and refuses to continue unless it can read it back, so every one
+of these failures surfaced in ten seconds as "the instrument is broken" instead
+of four minutes as "five events went missing".
 
 **Gate 6, the approval click is done.** Order `3RK936819N963521R` was approved as
 the sandbox buyer business account and captured as `1G18470618640833J`. A
