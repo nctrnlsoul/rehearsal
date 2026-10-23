@@ -27,6 +27,8 @@
     "bank:list": "tsx bin/rehearsal.ts bank:list"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.87",
+    "ai": "^7.0.151",
     "zod": "^3.23.8"
   },
   "devDependencies": {
