@@ -77,12 +77,35 @@ export function cleanReason(raw: string): string {
   return cut === "" ? "refused" : cut;
 }
 
+/** Longest a DNS name can be. Anything longer is not a host, so it is not recorded. */
+const MAX_HOST_CHARS = 253;
+
+/**
+ * The host a delivery's paypal-cert-url names, for the record only. URL parsing
+ * lower-cases it and leaves no control characters, so it is safe to store and
+ * print. Null when the header is absent, unparseable, or absurd.
+ */
+export function certHostOf(certUrl: string | null): string | null {
+  if (certUrl === null || certUrl.trim() === "") return null;
+  let host: string;
+  try {
+    host = new URL(certUrl).hostname;
+  } catch {
+    return null;
+  }
+  return host === "" || host.length > MAX_HOST_CHARS ? null : host;
+}
+
 /**
  * Records a request refused before it could even be read as an event, such as
  * a body that is not JSON. Without a row it would be invisible, and a refused
  * delivery would look exactly like one that never arrived.
  */
-export async function recordRefusal(db: Db, reason: string): Promise<void> {
+export async function recordRefusal(
+  db: Db,
+  reason: string,
+  certHost: string | null = null,
+): Promise<void> {
   await db.insert({
     eventId: null,
     eventType: "UNKNOWN",
@@ -92,15 +115,17 @@ export async function recordRefusal(db: Db, reason: string): Promise<void> {
     action: "refused",
     verified: null,
     reason: cleanReason(reason),
+    certHost,
   });
 }
 
 export async function handleEvent(
   db: Db,
   body: unknown,
-  opts: { verified: boolean | null; detail?: string; dedupe?: boolean },
+  opts: { verified: boolean | null; detail?: string; certHost?: string | null; dedupe?: boolean },
 ): Promise<StoreAction> {
   const parsed = readEvent(body);
+  const certHost = opts.certHost ?? null;
   const dedupe = opts.dedupe ?? DEDUPE_BY_EVENT_ID;
 
   /**
@@ -120,18 +145,25 @@ export async function handleEvent(
       action: "refused",
       verified: opts.verified,
       reason: cleanReason(why),
+      certHost,
     });
     return "refused";
   }
 
   if (dedupe && parsed.eventId !== null && (await db.hasEvent(parsed.eventId))) {
     // Recorded rather than dropped, so a duplicate is visible as handled.
-    await db.insert({ ...parsed, action: "duplicate_ignored", verified: opts.verified, reason: null });
+    await db.insert({
+      ...parsed,
+      action: "duplicate_ignored",
+      verified: opts.verified,
+      reason: null,
+      certHost,
+    });
     return "duplicate_ignored";
   }
 
   const action = actionFor(parsed.eventType);
-  await db.insert({ ...parsed, action, verified: opts.verified, reason: null });
+  await db.insert({ ...parsed, action, verified: opts.verified, reason: null, certHost });
   return action;
 }
 
@@ -161,6 +193,8 @@ export type DeliveryState = {
   /** Of `other`, how many were refused, and the distinct reasons why. */
   refused: number;
   refusalReasons: string[];
+  /** Distinct cert hosts the deliveries named, so an original and a resend can be compared. */
+  certHosts: string[];
 };
 
 /** Refusals that could not be tied to an event, such as a body that was not JSON. */
@@ -230,6 +264,7 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
         other: 0,
         refused: 0,
         refusalReasons: [],
+        certHosts: [],
       };
     if (row.action === "fulfilled") current.fulfilled += 1;
     else if (row.action === "duplicate_ignored") current.duplicatesIgnored += 1;
@@ -237,6 +272,13 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
     if (row.action === "refused") {
       current.refused += 1;
       addReason(current.refusalReasons, row.reason);
+    }
+    if (
+      row.certHost !== null &&
+      current.certHosts.length < MAX_REASONS &&
+      !current.certHosts.includes(row.certHost)
+    ) {
+      current.certHosts.push(row.certHost);
     }
     byEvent.set(row.eventId, current);
   }

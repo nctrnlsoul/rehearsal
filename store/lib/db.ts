@@ -9,7 +9,7 @@ const REQUEST_TIMEOUT_MS = 8000;
 export const MAX_ROWS = 1000;
 
 const SELECT_COLUMNS =
-  "event_id,event_type,capture_id,amount,currency,action,verified,reason,received_at";
+  "event_id,event_type,capture_id,amount,currency,action,verified,reason,cert_host,received_at";
 
 export type StoreAction =
   | "fulfilled"
@@ -31,6 +31,8 @@ export type StoreRow = {
   verified: boolean | null;
   /** Why a delivery was refused. Null for anything that was not. */
   reason: string | null;
+  /** Host of the paypal-cert-url header, as sent. Null when absent or unparseable. */
+  certHost: string | null;
   receivedAtMs: number;
 };
 
@@ -116,6 +118,7 @@ function toRow(raw: Record<string, unknown>): StoreRow {
     action: (str(raw["action"]) ?? "ignored") as StoreAction,
     verified: typeof raw["verified"] === "boolean" ? raw["verified"] : null,
     reason: str(raw["reason"]),
+    certHost: str(raw["cert_host"]),
     receivedAtMs: Number.isNaN(at) ? 0 : at,
   };
 }
@@ -156,6 +159,7 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
             action: row.action,
             verified: row.verified,
             reason: row.reason,
+            cert_host: row.certHost,
           },
         ]),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),

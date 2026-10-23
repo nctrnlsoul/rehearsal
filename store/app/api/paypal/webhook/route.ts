@@ -1,5 +1,5 @@
 import { createDb, readConfig } from "../../../../lib/db";
-import { handleEvent, recordRefusal } from "../../../../lib/merchant";
+import { certHostOf, handleEvent, recordRefusal } from "../../../../lib/merchant";
 import { verifySignature } from "../../../../lib/verify";
 
 /**
@@ -33,13 +33,14 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const db = createDb(config);
+  const certHost = certHostOf(req.headers.get("paypal-cert-url"));
 
   // Every refusal leaves a row, so a refused delivery can never be mistaken
   // for one that did not arrive. The status sent back is the same whether or
   // not the row could be written: recording is evidence, never a way in.
   const refuse = async (status: number, reason: string): Promise<Response> => {
     try {
-      await recordRefusal(db, reason);
+      await recordRefusal(db, reason, certHost);
     } catch (e) {
       console.error(`store could not record a refusal: ${(e as Error).message}`);
     }
@@ -70,7 +71,7 @@ export async function POST(req: Request): Promise<Response> {
   );
 
   try {
-    await handleEvent(db, event, { verified, detail });
+    await handleEvent(db, event, { verified, detail, certHost });
   } catch (e) {
     console.error(`store handling failed: ${(e as Error).message}`);
     return Response.json({ ok: false }, { status: 500 });

@@ -82,11 +82,18 @@ describe("every refusal leaves a row with its reason", () => {
     expect(res.status).toBe(401);
     expect(inserts[0]).toMatchObject({ action: "refused", verified: false });
     expect(inserts[0]!["reason"]).toBe("paypal-cert-url host certs.evil.test is not paypal.com");
+    // What the refused request claimed is kept, for comparison with real deliveries.
+    expect(inserts[0]!["cert_host"]).toBe("certs.evil.test");
     expect(paypalCalls).toEqual([]);
   });
 
-  it("a body that is not JSON: 400, refused with no event id", async () => {
-    const res = await post("{ not json");
+  it("records no cert host when the request sent none", async () => {
+    await post(JSON.stringify(capture));
+    expect(inserts[0]!["cert_host"]).toBeNull();
+  });
+
+  it("a body that is not JSON: 400, refused with no event id, cert host kept", async () => {
+    const res = await post("{ not json", signedLooking());
     expect(res.status).toBe(400);
     expect(inserts).toEqual([
       {
@@ -98,6 +105,7 @@ describe("every refusal leaves a row with its reason", () => {
         action: "refused",
         verified: null,
         reason: "body is not JSON",
+        cert_host: "api.sandbox.paypal.com",
       },
     ]);
   });
