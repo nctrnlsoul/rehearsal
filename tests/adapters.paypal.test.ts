@@ -205,6 +205,47 @@ describe("PaypalClient auth", () => {
   });
 });
 
+describe("PaypalClient with replayIfAmbiguous false", () => {
+  const write = (h: ReturnType<typeof harness>) =>
+    h.client.call({
+      method: "POST",
+      path: "/v1/a",
+      body: {},
+      idempotencySeed: "s",
+      replayIfAmbiguous: false,
+    });
+
+  // PayPal may have acted on any of these, so a replay could act twice.
+  it("returns the first 5xx, timeout or 408 instead of replaying it", async () => {
+    for (const answer of [
+      { kind: "json", status: 503 } as const,
+      { kind: "json", status: 500 } as const,
+      { kind: "json", status: 408 } as const,
+      { kind: "throw", name: "TimeoutError", message: "timed out" } as const,
+    ]) {
+      const h = harness([tokenOk(), answer, { kind: "json", status: 202 }]);
+      const r = await write(h);
+      expect(r.attempts, JSON.stringify(answer)).toBe(1);
+      expect(h.apiCalls(), JSON.stringify(answer)).toHaveLength(1);
+      expect(h.sleeps).toEqual([]);
+    }
+  });
+
+  it("still retries a 429, which is a refusal rather than an ambiguous outcome", async () => {
+    const h = harness([tokenOk(), { kind: "json", status: 429 }, { kind: "json", status: 202 }]);
+    const r = await write(h);
+    expect(r.status).toBe(202);
+    expect(h.apiCalls()).toHaveLength(2);
+  });
+
+  it("leaves the default unchanged: an unmarked write still retries a 503", async () => {
+    const h = harness([tokenOk(), { kind: "json", status: 503 }, { kind: "json", status: 202 }]);
+    const r = await h.client.call({ method: "POST", path: "/v1/a", body: {}, idempotencySeed: "s" });
+    expect(r.status).toBe(202);
+    expect(h.apiCalls()).toHaveLength(2);
+  });
+});
+
 describe("PaypalClient retry and throttle", () => {
   it("reports a transport failure as status 0 once the budget is spent", async () => {
     const h = harness([

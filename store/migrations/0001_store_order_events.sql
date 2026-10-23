@@ -51,3 +51,9 @@ alter table public.store_order_events enable row level security;
 -- introspect the table and its column names through PostgREST and pg_graphql.
 -- RLS is the lock; the revoke takes the door off the map.
 revoke all on public.store_order_events from anon, authenticated;
+
+-- The project has "Automatically expose new tables" OFF, so a new table gives
+-- service_role nothing. Without this grant every read and write from the store
+-- is refused, and it answers 503/500. Select and insert only: the ledger is
+-- append-only, so update and delete stay ungranted.
+grant select, insert on public.store_order_events to service_role;

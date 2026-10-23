@@ -8,7 +8,7 @@ const SANDBOX_HOST = "api-m.sandbox.paypal.com";
  * inability to check are both reported, and both stop the event acting.
  *
  * The webhook id is discovered by asking PayPal which webhook points at this
- * app's own URL, so there is no chicken-and-egg where the store cannot verify
+ * app's exact handler URL, so there is no chicken-and-egg where the store cannot verify
  * until someone pastes an id that only exists after the first run.
  */
 
@@ -18,7 +18,22 @@ export type VerifyResult = {
   detail: string;
 };
 
-let cachedWebhookId: string | null = null;
+/** The route this app serves PayPal deliveries on. A webhook anywhere else is not ours. */
+export const STORE_WEBHOOK_PATH = "/api/paypal/webhook";
+
+/** Keyed by the exact handler URL, so a deployment reached by two hosts never mixes them. */
+const cachedWebhookIds = new Map<string, string>();
+
+export type WebhookIdResult = { id: string } | { id: null; detail: string };
+
+/** Every PayPal delivery carries these. Lacking any one, it is not a delivery. */
+const REQUIRED_HEADERS = [
+  "paypal-transmission-id",
+  "paypal-transmission-time",
+  "paypal-transmission-sig",
+  "paypal-auth-algo",
+  "paypal-cert-url",
+] as const;
 
 async function token(
   clientId: string,
@@ -40,41 +55,70 @@ async function token(
   return typeof body.access_token === "string" ? body.access_token : null;
 }
 
-/** The webhook PayPal has registered for this app's own origin. */
+/**
+ * The one webhook PayPal has registered for this app's exact handler URL.
+ *
+ * Exact, never a prefix: a webhook at the bare origin, or on a host that merely
+ * starts with ours, is a different webhook, and verifying against its id makes
+ * every genuine delivery fail. Zero matches or several both refuse, because
+ * guessing between two ids is how the wrong one gets picked.
+ */
 export async function resolveWebhookId(
   env: Record<string, string | undefined>,
   selfOrigin: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<string | null> {
+): Promise<WebhookIdResult> {
   const override = env["REHEARSAL_STORE_WEBHOOK_ID"];
-  if (override !== undefined && override.trim() !== "") return override.trim();
-  if (cachedWebhookId !== null) return cachedWebhookId;
+  if (override !== undefined && override.trim() !== "") return { id: override.trim() };
+
+  const handlerUrl = `${selfOrigin}${STORE_WEBHOOK_PATH}`;
+  const cached = cachedWebhookIds.get(handlerUrl);
+  if (cached !== undefined) return { id: cached };
 
   const clientId = env["PAYPAL_SELLER_CLIENT_ID"];
   const clientSecret = env["PAYPAL_SELLER_CLIENT_SECRET"];
-  if (!clientId?.trim() || !clientSecret?.trim()) return null;
-
-  const accessToken = await token(clientId, clientSecret, fetchImpl);
-  if (accessToken === null) return null;
-
-  const res = await fetchImpl(`https://${SANDBOX_HOST}/v1/notifications/webhooks`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) return null;
-  const body = (await res.json()) as { webhooks?: unknown };
-  const list = Array.isArray(body.webhooks) ? body.webhooks : [];
-
-  for (const entry of list) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const rec = entry as Record<string, unknown>;
-    const url = rec["url"];
-    if (typeof url === "string" && url.startsWith(selfOrigin) && typeof rec["id"] === "string") {
-      cachedWebhookId = rec["id"];
-      return cachedWebhookId;
-    }
+  if (!clientId?.trim() || !clientSecret?.trim()) {
+    return { id: null, detail: "store holds no PayPal credentials, cannot look up its webhook" };
   }
-  return null;
+
+  let list: unknown[];
+  try {
+    const accessToken = await token(clientId, clientSecret, fetchImpl);
+    if (accessToken === null) return { id: null, detail: "could not get a PayPal token" };
+
+    const res = await fetchImpl(`https://${SANDBOX_HOST}/v1/notifications/webhooks`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return { id: null, detail: `webhook list http ${res.status}` };
+    const body = (await res.json()) as { webhooks?: unknown };
+    if (!Array.isArray(body.webhooks)) {
+      return { id: null, detail: "webhook list was not an array" };
+    }
+    list = body.webhooks;
+  } catch (e) {
+    return { id: null, detail: `webhook lookup threw: ${(e as Error).name}` };
+  }
+
+  const ids = list
+    .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
+    .filter((rec) => rec["url"] === handlerUrl && typeof rec["id"] === "string")
+    .map((rec) => rec["id"] as string);
+
+  if (ids.length === 0) {
+    return { id: null, detail: "no webhook is registered for this store's handler URL" };
+  }
+  if (ids.length > 1) {
+    return {
+      id: null,
+      detail: `${ids.length} webhooks are registered for this store's handler URL, refusing to pick one`,
+    };
+  }
+
+  // Only a clean single match is cached. A refusal is not, so a webhook
+  // registered later is picked up without a redeploy.
+  cachedWebhookIds.set(handlerUrl, ids[0]!);
+  return { id: ids[0]! };
 }
 
 export async function verifySignature(
@@ -90,9 +134,11 @@ export async function verifySignature(
     return { verified: null, detail: "store holds no PayPal credentials, cannot verify" };
   }
 
-  const webhookId = await resolveWebhookId(env, selfOrigin, fetchImpl);
-  if (webhookId === null) {
-    return { verified: null, detail: "no webhook is registered for this store's URL" };
+  // Local checks first. The endpoint is public, so a request that cannot be
+  // PayPal's must be refused before it costs a token call and a webhook lookup.
+  const missing = REQUIRED_HEADERS.filter((h) => (headers.get(h) ?? "").trim() === "");
+  if (missing.length > 0) {
+    return { verified: false, detail: `missing ${missing.join(", ")}` };
   }
 
   const certUrl = headers.get("paypal-cert-url") ?? "";
@@ -107,6 +153,10 @@ export async function verifySignature(
   if (certHost !== "api.paypal.com" && !certHost.endsWith(".paypal.com")) {
     return { verified: false, detail: `paypal-cert-url host ${certHost} is not paypal.com` };
   }
+
+  const resolved = await resolveWebhookId(env, selfOrigin, fetchImpl);
+  if (resolved.id === null) return { verified: null, detail: resolved.detail };
+  const webhookId = resolved.id;
 
   try {
     const accessToken = await token(clientId, clientSecret, fetchImpl);

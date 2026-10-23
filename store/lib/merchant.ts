@@ -110,8 +110,24 @@ export type OrderState = {
   currency: string | null;
 };
 
+/**
+ * What happened to each delivery of one PayPal event id. This is the evidence a
+ * duplicate check needs: per capture, two fulfilments could in principle be
+ * two different events, but two rows for one event id are one event delivered
+ * twice.
+ */
+export type DeliveryState = {
+  eventId: string;
+  eventType: string;
+  fulfilled: number;
+  duplicatesIgnored: number;
+  /** Every other action, including deliveries that did not verify. */
+  other: number;
+};
+
 export type StoreState = {
   orders: OrderState[];
+  deliveries: DeliveryState[];
   eventCount: number;
   unverifiedCount: number;
 };
@@ -144,8 +160,21 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
     byCapture.set(row.captureId, current);
   }
 
+  const byEvent = new Map<string, DeliveryState>();
+  for (const row of rows) {
+    if (row.eventId === null) continue;
+    const current =
+      byEvent.get(row.eventId) ??
+      { eventId: row.eventId, eventType: row.eventType, fulfilled: 0, duplicatesIgnored: 0, other: 0 };
+    if (row.action === "fulfilled") current.fulfilled += 1;
+    else if (row.action === "duplicate_ignored") current.duplicatesIgnored += 1;
+    else current.other += 1;
+    byEvent.set(row.eventId, current);
+  }
+
   return {
     orders: [...byCapture.values()],
+    deliveries: [...byEvent.values()],
     eventCount: rows.length,
     unverifiedCount: rows.filter((r) => r.verified === false).length,
   };

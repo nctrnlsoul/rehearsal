@@ -31,6 +31,34 @@ export type StoreRow = {
 
 export type DbConfig = { readonly url: URL; readonly key: string };
 
+/**
+ * Carries the upstream status, never the key. A bare "it failed" cost several
+ * rounds of guessing across two apps, and the status alone names the cause.
+ */
+export class StoreDbError extends Error {
+  readonly status: number;
+  readonly operation: string;
+
+  constructor(operation: string, status: number) {
+    super(`store ${operation} failed with http ${status}`);
+    this.name = "StoreDbError";
+    this.operation = operation;
+    this.status = status;
+  }
+}
+
+/** What an upstream status from PostgREST almost always means here. */
+export function explainDbStatus(status: number): string {
+  if (status === 404) {
+    return "the table is missing: SUPABASE_URL may point at a different Supabase project than the one the migration ran in";
+  }
+  if (status === 401 || status === 403) {
+    return "the key was refused: check it is the project's SECRET key (sb_secret_...) and not the publishable key, which anon cannot use against a table with RLS on and grants revoked";
+  }
+  if (status === 400) return "PostgREST rejected the request shape, so a column may not match the migration";
+  return "unexpected upstream status";
+}
+
 export function assertSupabaseUrl(raw: string): URL {
   let url: URL;
   try {
@@ -103,7 +131,7 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
         headers: auth,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      if (!res.ok) throw new Error(`store event lookup failed with http ${res.status}`);
+      if (!res.ok) throw new StoreDbError("event lookup", res.status);
       const body: unknown = await res.json();
       return Array.isArray(body) && body.length > 0;
     },
@@ -125,7 +153,7 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
         ]),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      if (!res.ok) throw new Error(`store insert failed with http ${res.status}`);
+      if (!res.ok) throw new StoreDbError("insert", res.status);
     },
 
     async rows(options: RowsOptions = {}) {
@@ -147,7 +175,7 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
         headers: auth,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      if (!res.ok) throw new Error(`store read failed with http ${res.status}`);
+      if (!res.ok) throw new StoreDbError("read", res.status);
       const body: unknown = await res.json();
       if (!Array.isArray(body)) throw new Error("store read returned something other than rows");
       return body

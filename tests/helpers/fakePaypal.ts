@@ -18,7 +18,12 @@ export type FakeResponse = {
   headers?: Record<string, string>;
 };
 
-export type RecordedCall = { method: string; path: string; body: unknown };
+export type RecordedCall = {
+  method: string;
+  path: string;
+  body: unknown;
+  headers: Record<string, string>;
+};
 
 export function fakePaypal(queue: FakeResponse[], label = "fake") {
   const calls: RecordedCall[] = [];
@@ -36,6 +41,7 @@ export function fakePaypal(queue: FakeResponse[], label = "fake") {
       method: String(init["method"] ?? "GET"),
       path: url.pathname + url.search,
       body: typeof raw === "string" ? JSON.parse(raw) : null,
+      headers: { ...((init["headers"] ?? {}) as Record<string, string>) },
     });
     const next = queue.shift();
     if (next === undefined) {

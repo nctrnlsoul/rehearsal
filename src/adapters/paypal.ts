@@ -163,6 +163,13 @@ export class PaypalClient {
     /** Required for POST, PUT and PATCH. Seeds the PayPal-Request-Id. */
     idempotencySeed?: string;
     extraHeaders?: Record<string, string>;
+    /**
+     * False for a write PayPal may not dedupe by PayPal-Request-Id, such as a
+     * webhook resend. A timeout, 408 or 5xx may mean PayPal already acted, so
+     * the first such answer is returned instead of replayed. A 429 is still
+     * retried: it is a refusal, not an ambiguous outcome.
+     */
+    replayIfAmbiguous?: boolean;
   }): Promise<PaypalResponse> {
     const method = args.method.toUpperCase();
     const seed = args.idempotencySeed ?? "";
@@ -248,7 +255,8 @@ export class PaypalClient {
         policy,
       });
 
-      if (!decision.retry) {
+      const ambiguous = status === TRANSPORT_FAILURE || status === 408 || status >= 500;
+      if (!decision.retry || (args.replayIfAmbiguous === false && ambiguous)) {
         return {
           method,
           path: args.path,

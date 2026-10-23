@@ -14,6 +14,16 @@ const POLL_INTERVAL_MS = 8000;
 /** Bounds the loop independently of the clock, so a stalled clock cannot hang a run. */
 const MAX_POLLS = Math.ceil(POLL_BUDGET_MS / POLL_INTERVAL_MS) + 2;
 
+/** How long a resend refused as INVALID_RESOURCE_ID is retried, and how often. */
+export const RESEND_RETRY_MS = 15_000;
+export const RESEND_BUDGET_MS = 120_000;
+const MAX_RESEND_ATTEMPTS = Math.floor(RESEND_BUDGET_MS / RESEND_RETRY_MS) + 1;
+
+function errorName(body: unknown): string | null {
+  const name = typeof body === "object" && body !== null ? (body as Record<string, unknown>)["name"] : null;
+  return typeof name === "string" ? name : null;
+}
+
 function eventsOf(body: unknown): Record<string, unknown>[] {
   const holder = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
   const raw = holder["events"];
@@ -83,23 +93,51 @@ export const resendWebhookHandler: StepHandler = async (ctx) => {
     );
   }
 
-  const resend = await ctx.seller.call({
-    method: "POST",
-    path: `/v1/notifications/webhooks-events/${eventId}/resend`,
-    idempotencySeed: ctx.seed,
-    body: { webhook_ids: [webhookId] },
-  });
-
   const ids = { resent_event_id: eventId };
-  if (resend.status < 200 || resend.status >= 300) {
-    return failed(
-      `resend of ${eventId} failed: http ${resend.status}, ${errorSummary(resend.body, resend.bodyPreview)}`,
-      ids,
-    );
-  }
+  const resendStarted = ctx.now().getTime();
 
-  return succeeded(
-    `asked PayPal to redeliver ${step.eventType} ${eventId} to webhook ${webhookId}`,
-    ids,
-  );
+  for (let attempt = 1; ; attempt += 1) {
+    const resend = await ctx.seller.call({
+      method: "POST",
+      path: `/v1/notifications/webhooks-events/${eventId}/resend`,
+      // A fresh request id per attempt, so PayPal cannot replay its cached 404.
+      // Only a 404 is ever retried, and a 404 accepted nothing, so a new id
+      // cannot cause a second resend.
+      idempotencySeed: attempt === 1 ? ctx.seed : ctx.seedFor("resend-attempt", String(attempt)),
+      body: { webhook_ids: [webhookId] },
+      // Nothing says PayPal dedupes a resend by request id. A timeout or 5xx
+      // may already have redelivered, and a replay would deliver a third time.
+      replayIfAmbiguous: false,
+    });
+
+    if (resend.status >= 200 && resend.status < 300) {
+      return succeeded(
+        `asked PayPal to redeliver ${step.eventType} ${eventId} to webhook ${webhookId}`,
+        ids,
+      );
+    }
+
+    const summary = `http ${resend.status}, ${errorSummary(resend.body, resend.bodyPreview)}`;
+    if (resend.status === 0 || resend.status === 408 || resend.status >= 500) {
+      return unknown(
+        `resend of ${eventId} may or may not have been accepted (${summary}); not retried, because a retry could deliver it a third time`,
+        ids,
+      );
+    }
+
+    // The event can appear in the list before the resend endpoint accepts its
+    // id. That one answer is worth waiting out; every other refusal is final.
+    const notYet = resend.status === 404 && errorName(resend.body) === "INVALID_RESOURCE_ID";
+    const waited = ctx.now().getTime() - resendStarted;
+    if (!notYet || attempt >= MAX_RESEND_ATTEMPTS || waited + RESEND_RETRY_MS > RESEND_BUDGET_MS) {
+      return failed(
+        notYet
+          ? `resend of ${eventId} still refused as INVALID_RESOURCE_ID after ${attempt} attempt(s) over ${Math.round(waited / 1000)}s`
+          : `resend of ${eventId} failed: ${summary}`,
+        ids,
+      );
+    }
+    ctx.log(`resend of ${eventId} refused as INVALID_RESOURCE_ID, retrying in ${RESEND_RETRY_MS / 1000}s`);
+    await ctx.sleep(RESEND_RETRY_MS);
+  }
 };

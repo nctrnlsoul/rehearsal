@@ -73,6 +73,39 @@ export function extractJsonObject(
   return { ok: false, detail: "no JSON object could be parsed from the reply" };
 }
 
+/** Lengths for text the model writes and a terminal later prints. */
+export const MAX_MODEL_NAME_CHARS = 60;
+export const MAX_MODEL_DESCRIPTION_CHARS = 200;
+
+/**
+ * Model-written text is printed to the operator's terminal. Control and format
+ * characters (escape sequences, bidi overrides, zero-width marks) can rewrite
+ * what the operator sees there, so they become spaces before anything prints.
+ * Truncation is by code point, so it never splits a character in half.
+ */
+export function cleanModelText(raw: string, maxChars: number): string {
+  const flat = raw.replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim();
+  const chars = Array.from(flat);
+  return chars.length <= maxChars ? flat : chars.slice(0, maxChars).join("").trimEnd();
+}
+
+function cleanNames(scenario: Scenario): Scenario {
+  const description =
+    scenario.profile.description === undefined
+      ? ""
+      : cleanModelText(scenario.profile.description, MAX_MODEL_DESCRIPTION_CHARS);
+  const { description: _dropped, ...profile } = scenario.profile;
+  return {
+    ...scenario,
+    name: cleanModelText(scenario.name, MAX_MODEL_NAME_CHARS) || "unnamed scenario",
+    profile: {
+      ...profile,
+      name: cleanModelText(scenario.profile.name, MAX_MODEL_NAME_CHARS) || "unnamed business",
+      ...(description === "" ? {} : { description }),
+    },
+  };
+}
+
 function refusalOf(value: unknown): string | null {
   if (typeof value !== "object" || value === null) return null;
   const raw = (value as Record<string, unknown>)["refusal"];
@@ -136,7 +169,7 @@ export async function planScenario(
     return { ok: false, reason: "over-caps", violations, raw };
   }
 
-  return { ok: true, scenario: validated.scenario, raw };
+  return { ok: true, scenario: cleanNames(validated.scenario), raw };
 }
 
 export function anthropicGenerator(opts: { apiKey: string; model: string }): GenerateFn {

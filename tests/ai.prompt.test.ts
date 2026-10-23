@@ -34,8 +34,10 @@ describe("buildPlannerPrompt system message", () => {
     expect(system).toContain(String(DEFAULT_CAPS.maxSteps));
   });
 
-  it("lists the allowed webhook origins verbatim", () => {
-    expect(build("a shop").system).toContain(STORE);
+  it("lists each allowed origin as its exact webhook handler URL", () => {
+    const { system } = build("a shop");
+    expect(system).toContain(`  ${STORE}/api/paypal/webhook`);
+    expect(system).not.toMatch(new RegExp(`^  ${STORE}$`, "m"));
   });
 
   it("forbids a webhook block when no origin is configured", () => {

@@ -8,7 +8,7 @@ import {
   planScenario,
 } from "../src/ai/planner";
 import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
-import { capsFromEnv } from "../src/core/caps";
+import { capsFromEnv, checkCaps } from "../src/core/caps";
 import { JsonStore } from "../src/adapters/jsonStore";
 import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf } from "../src/core/idempotency";
@@ -23,13 +23,17 @@ import {
   emptyBank,
   markExpired,
 } from "../src/core/purchaseBank";
-import { assertAllowedEventTarget } from "../src/core/eventTarget";
+import {
+  assertAllowedEventTarget,
+  parseEventAllowlist,
+  webhookHandlerUrl,
+} from "../src/core/eventTarget";
 import { type FinderDeps, finderReportLines, runFinder } from "../src/ai/finder";
 import { type RunState, retryStep } from "../src/core/runState";
 import { walletOrderBody } from "../src/core/sandboxFixtures";
 import { type Scenario, validateScenario } from "../src/core/scenario";
 import { dryRunLines } from "../src/executor/dryRun";
-import { executeScenario } from "../src/executor/executor";
+import { type WebhookMode, executeScenario } from "../src/executor/executor";
 import { runReportLines } from "../src/executor/report";
 import type { ClaimResult } from "../src/executor/types";
 
@@ -60,16 +64,16 @@ function args(rest: string[]): Record<string, string> {
 
 /** Origins a scenario may fire real events at. Empty means none are permitted. */
 function allowedEventOrigins(): string[] {
-  const raw = [
-    optionalEnv("REHEARSAL_EVENT_ORIGINS"),
-    optionalEnv("REHEARSAL_RECEIVER_ORIGIN"),
-    optionalEnv("REHEARSAL_STORE_ORIGIN"),
-  ]
-    .filter((v): v is string => v !== null)
-    .flatMap((v) => v.split(","))
-    .map((v) => v.trim())
-    .filter((v) => v !== "");
-  return [...new Set(raw)];
+  const parsed = parseEventAllowlist(
+    ["REHEARSAL_EVENT_ORIGINS", "REHEARSAL_RECEIVER_ORIGIN", "REHEARSAL_STORE_ORIGIN"].map(
+      (name) => ({ name, value: optionalEnv(name) }),
+    ),
+  );
+  if (!parsed.ok) {
+    console.error(parsed.error);
+    process.exit(1);
+  }
+  return parsed.origins;
 }
 
 function loadScenario(path: string | undefined): Scenario {
@@ -214,7 +218,7 @@ async function findCommand(rest: string[]): Promise<void> {
   console.log(`sample store: ${storeOrigin}`);
 
   const results = await runFinder(
-    { description, only: flags["only"] },
+    { description, only: flags["only"], webhookTarget: webhookHandlerUrl(storeOrigin) },
     {
       plan: (cls, desc) =>
         planScenario(
@@ -226,7 +230,15 @@ async function findCommand(rest: string[]): Promise<void> {
           },
           { generate, budget },
         ),
-      run: (scenario) => executeScenarioFromCli(scenario),
+      validate: (candidate) => {
+        const v = validateScenario(candidate, { allowedEventOrigins: allowedEventOrigins() });
+        if (!v.ok) return v;
+        const violations = checkCaps(v.scenario, caps);
+        return violations.length === 0
+          ? v
+          : { ok: false, errors: violations.map((x) => x.message) };
+      },
+      run: (scenario, { webhookMode }) => executeScenarioFromCli(scenario, {}, webhookMode),
       readStore: async (sinceIso) => {
         const url = new URL(`${storeOrigin}/api/store/state`);
         url.searchParams.set("since", sinceIso);
@@ -240,6 +252,7 @@ async function findCommand(rest: string[]): Promise<void> {
       bankAvailable: () => availablePurchases(bank.read()).length,
       log: (line) => console.log(line),
       now: () => new Date(),
+      sleep,
     },
   );
 
@@ -291,6 +304,7 @@ async function executeAndReport(
 async function executeScenarioFromCli(
   scenario: Scenario,
   flags: Record<string, string> = {},
+  webhookMode: WebhookMode = "register",
 ): Promise<RunState> {
   const resumeId = flags["resume"];
   const runId =
@@ -345,7 +359,7 @@ async function executeScenarioFromCli(
 
   console.log(`run ${runId}: ${scenario.name}`);
   const state = await executeScenario(
-    { scenario, runId, resume },
+    { scenario, runId, resume, webhookMode },
     {
       seller: client("seller"),
       buyer: client("buyer"),
