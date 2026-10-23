@@ -20,6 +20,7 @@ export const STEP_KINDS = [
   "invoice_record_payment",
   "invoice_cancel",
   "open_dispute",
+  "resend_webhook",
 ] as const;
 
 export type StepKind = (typeof STEP_KINDS)[number];
@@ -92,12 +93,29 @@ const invoiceRecordPaymentStep = z.object({
 
 const invoiceCancelStep = z.object({ ...baseStep, kind: z.literal("invoice_cancel"), from: stepId });
 
+/** Exported so the planner prompt lists exactly what the schema accepts. */
+export const DISPUTE_REASONS = [
+  "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+  "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+] as const;
+
 const openDisputeStep = z.object({
   ...baseStep,
   kind: z.literal("open_dispute"),
-  reason: z
-    .enum(["MERCHANDISE_OR_SERVICE_NOT_RECEIVED", "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED"])
-    .default("MERCHANDISE_OR_SERVICE_NOT_RECEIVED"),
+  reason: z.enum(DISPUTE_REASONS).default("MERCHANDISE_OR_SERVICE_NOT_RECEIVED"),
+});
+
+/**
+ * Asks PayPal to redeliver an event it already sent. This is how a duplicate
+ * delivery is produced on purpose: PayPal redelivers in the wild, so an app that
+ * does not treat the event id as an idempotency key will act twice.
+ */
+const resendWebhookStep = z.object({
+  ...baseStep,
+  kind: z.literal("resend_webhook"),
+  /** The step whose transaction the event belongs to. */
+  from: stepId,
+  eventType: z.string().min(1).max(120),
 });
 
 const stepSchema = z.discriminatedUnion("kind", [
@@ -109,6 +127,7 @@ const stepSchema = z.discriminatedUnion("kind", [
   invoiceRecordPaymentStep,
   invoiceCancelStep,
   openDisputeStep,
+  resendWebhookStep,
 ]);
 
 export type Step = z.infer<typeof stepSchema>;
@@ -141,12 +160,14 @@ const scenarioObject = z.object({
 
 export type Scenario = z.infer<typeof scenarioObject>;
 
-/** Which step kind each `from` reference must point at. */
-const FROM_MUST_BE: Partial<Record<StepKind, StepKind>> = {
-  refund: "card_order",
-  invoice_send: "invoice_create",
-  invoice_record_payment: "invoice_create",
-  invoice_cancel: "invoice_create",
+/** Which step kinds each `from` reference may point at. */
+const FROM_MUST_BE: Partial<Record<StepKind, readonly StepKind[]>> = {
+  refund: ["card_order"],
+  invoice_send: ["invoice_create"],
+  invoice_record_payment: ["invoice_create"],
+  invoice_cancel: ["invoice_create"],
+  // A resend needs a transaction id, which only these two produce.
+  resend_webhook: ["card_order", "refund"],
 };
 
 export type ScenarioOptions = {
@@ -211,10 +232,10 @@ export function scenarioSchema(options: ScenarioOptions) {
         issue(["steps", i, "from"], `${step.kind} step ${step.id} references unknown step ${from}`);
         return;
       }
-      if (target.kind !== required) {
+      if (!required.includes(target.kind)) {
         issue(
           ["steps", i, "from"],
-          `${step.kind} step ${step.id} must reference a ${required} step, but ${from} is a ${target.kind}`,
+          `${step.kind} step ${step.id} must reference a ${required.join(" or ")} step, but ${from} is a ${target.kind}`,
         );
       }
       // Transitive, not direct: depending on invoice_send and referencing the

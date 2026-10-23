@@ -250,6 +250,51 @@ describe("validateScenario checks from references", () => {
     expect(errs.join(" ")).toMatch(/nope/);
   });
 
+  it("lets a resend_webhook reference either a card order or a refund", () => {
+    const r = validateScenario(
+      {
+        ...base(),
+        webhook: { target: `${STORE}/hook` },
+        steps: [
+          { id: "o", kind: "card_order", amount: "40.00" },
+          { id: "rf", kind: "refund", from: "o", mode: "full", needs: ["o"] },
+          {
+            id: "dup1",
+            kind: "resend_webhook",
+            from: "o",
+            eventType: "PAYMENT.CAPTURE.COMPLETED",
+            needs: ["o"],
+          },
+          {
+            id: "dup2",
+            kind: "resend_webhook",
+            from: "rf",
+            eventType: "PAYMENT.CAPTURE.REFUNDED",
+            needs: ["rf"],
+          },
+        ],
+      },
+      OPTS,
+    );
+    expect(r.ok, r.ok ? "" : r.errors.join("; ")).toBe(true);
+  });
+
+  it("rejects a resend_webhook pointing at something with no transaction id", () => {
+    const errs = withSteps([
+      { id: "i", kind: "invoice_create", amount: "10.00" },
+      { id: "d", kind: "resend_webhook", from: "i", eventType: "X", needs: ["i"] },
+    ]);
+    expect(errs.join(" ")).toMatch(/card_order or refund/i);
+  });
+
+  it("requires an eventType on a resend_webhook", () => {
+    const errs = withSteps([
+      { id: "o", kind: "card_order", amount: "1.00" },
+      { id: "d", kind: "resend_webhook", from: "o", needs: ["o"] },
+    ]);
+    expect(errs.length).toBeGreaterThan(0);
+  });
+
   it("requires invoice steps to reference an invoice_create", () => {
     const errs = withSteps([
       { id: "o", kind: "card_order", amount: "1.00" },

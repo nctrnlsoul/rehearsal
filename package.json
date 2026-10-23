@@ -24,9 +24,13 @@
     "bank:add": "tsx bin/rehearsal.ts bank:add",
     "bank:confirm": "tsx bin/rehearsal.ts bank:confirm",
     "bank:set-txn": "tsx bin/rehearsal.ts bank:set-txn",
-    "bank:list": "tsx bin/rehearsal.ts bank:list"
+    "bank:list": "tsx bin/rehearsal.ts bank:list",
+    "find": "tsx bin/rehearsal.ts find",
+    "evals": "tsx evals/run.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.87",
+    "ai": "^7.0.151",
     "zod": "^3.23.8"
   },
   "devDependencies": {

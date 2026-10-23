@@ -129,6 +129,7 @@ export async function executeScenario(
       step,
       seed: seedOf(seedParts),
       seedFor: (...suffix: string[]) => seedOf([...seedParts, ...suffix]),
+      meta: state.meta,
       seller: deps.seller,
       buyer: deps.buyer,
       outputs,

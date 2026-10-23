@@ -1,0 +1,24 @@
+{
+  "name": "rehearsal-sample-store",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A sample merchant app with one planted bug, used as the subject of REHEARSAL's edge-case finder.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}

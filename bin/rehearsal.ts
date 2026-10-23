@@ -1,7 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { credentialsFor, optionalEnv } from "../src/adapters/env";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { AiBudgetTracker, aiBudgetFromEnv } from "../src/ai/budget";
+import {
+  DEFAULT_PLANNER_MODEL,
+  anthropicGenerator,
+  planScenario,
+} from "../src/ai/planner";
+import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
+import { capsFromEnv } from "../src/core/caps";
 import { JsonStore } from "../src/adapters/jsonStore";
 import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf } from "../src/core/idempotency";
@@ -10,11 +17,14 @@ import {
   type Bank,
   addPurchase,
   attachTransactionId,
+  availablePurchases,
   claimPurchase,
   confirmCapture,
   emptyBank,
   markExpired,
 } from "../src/core/purchaseBank";
+import { assertAllowedEventTarget } from "../src/core/eventTarget";
+import { type FinderDeps, finderReportLines, runFinder } from "../src/ai/finder";
 import { type RunState, retryStep } from "../src/core/runState";
 import { walletOrderBody } from "../src/core/sandboxFixtures";
 import { type Scenario, validateScenario } from "../src/core/scenario";
@@ -50,7 +60,11 @@ function args(rest: string[]): Record<string, string> {
 
 /** Origins a scenario may fire real events at. Empty means none are permitted. */
 function allowedEventOrigins(): string[] {
-  const raw = [optionalEnv("REHEARSAL_EVENT_ORIGINS"), optionalEnv("REHEARSAL_RECEIVER_ORIGIN")]
+  const raw = [
+    optionalEnv("REHEARSAL_EVENT_ORIGINS"),
+    optionalEnv("REHEARSAL_RECEIVER_ORIGIN"),
+    optionalEnv("REHEARSAL_STORE_ORIGIN"),
+  ]
     .filter((v): v is string => v !== null)
     .flatMap((v) => v.split(","))
     .map((v) => v.trim())
@@ -96,12 +110,188 @@ function dryRun(rest: string[]): void {
   for (const line of dryRunLines(scenario)) console.log(line);
 }
 
+// ---------------------------------------------------------------- plan
+
+async function planCommand(rest: string[]): Promise<void> {
+  const description = rest[0] !== undefined && !rest[0].startsWith("--") ? rest[0] : "";
+  const flags = args(rest.slice(description === "" ? 0 : 1));
+
+  if (description === "") {
+    console.error('usage: rehearsal plan "<business description>" [--out <file>] [--yes]');
+    process.exit(1);
+  }
+
+  const apiKey = requiredEnv("ANTHROPIC_API_KEY");
+  const model = optionalEnv("REHEARSAL_PLANNER_MODEL") ?? DEFAULT_PLANNER_MODEL;
+  const caps = capsFromEnv(process.env);
+  const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
+  const origins = allowedEventOrigins();
+
+  console.log(`planning with ${model}`);
+  const outcome = await planScenario(
+    { description, allowedEventOrigins: origins, caps },
+    { generate: anthropicGenerator({ apiKey, model }), budget },
+  );
+  console.log(`model spend: ${budget.summary()}`);
+  console.log("");
+
+  if (!outcome.ok) {
+    // Each of these is a refusal, not a crash. Nothing ran.
+    switch (outcome.reason) {
+      case "refused-by-model":
+        console.error(`REFUSED by the model: ${outcome.detail}`);
+        break;
+      case "unparseable":
+        console.error(`REFUSED: ${outcome.detail}`);
+        break;
+      case "schema-invalid":
+        console.error("REFUSED: the plan does not pass the scenario schema, so it will not run:");
+        for (const e of outcome.errors) console.error(`  ${e}`);
+        break;
+      case "over-caps":
+        console.error("REFUSED: the plan exceeds the spend caps, so it will not run:");
+        for (const v of outcome.violations) console.error(`  ${v.code}: ${v.message}`);
+        break;
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  for (const line of dryRunLines(outcome.scenario)) console.log(line);
+
+  // Always saved. Planning is NOT deterministic (claude-sonnet-5 ignores
+  // temperature), so "re-run the same command with --yes" would review one plan
+  // and execute a different one. The file is the artifact you reviewed.
+  const chosen = flags["out"];
+  const outPath =
+    chosen !== undefined && chosen !== "true"
+      ? resolve(chosen)
+      : resolve(RUNS_DIR, "plans", `plan-${isoNoMillis(new Date()).replace(/[:TZ-]/g, "")}.json`);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, `${JSON.stringify(outcome.scenario, null, 2)}\n`, "utf8");
+  console.log("");
+  console.log(`plan saved to ${outPath}`);
+
+  if (flags["yes"] !== "true") {
+    console.log("");
+    console.log("Nothing has run. This plan came from an untrusted description, so read it,");
+    console.log("then run the EXACT plan you just read:");
+    console.log(`  npm run rehearsal -- run ${outPath}`);
+    console.log("");
+    console.log("Re-running `plan --yes` would ask the model again and could execute a");
+    console.log("different plan from the one above.");
+    return;
+  }
+
+  console.log("");
+  console.log("--yes given: executing the plan printed above, from this same invocation.");
+  console.log("No second model call is made, so what ran is what you just read.");
+  await executeAndReport(outcome.scenario, {});
+}
+
+// ---------------------------------------------------------------- find
+
+async function findCommand(rest: string[]): Promise<void> {
+  const description =
+    rest[0] !== undefined && !rest[0].startsWith("--")
+      ? rest[0]
+      : "a small online shop that takes card orders, invoices wholesale buyers, pays suppliers, and occasionally gets a dispute";
+  const flags = args(rest.slice(rest[0] !== undefined && !rest[0].startsWith("--") ? 1 : 0));
+
+  const apiKey = requiredEnv("ANTHROPIC_API_KEY");
+  const model = optionalEnv("REHEARSAL_PLANNER_MODEL") ?? DEFAULT_PLANNER_MODEL;
+  const storeOrigin = assertAllowedEventTarget(
+    requiredEnv("REHEARSAL_STORE_ORIGIN"),
+    allowedEventOrigins(),
+  ).origin;
+  const storeToken = requiredEnv("REHEARSAL_STORE_TOKEN");
+  const caps = capsFromEnv(process.env);
+  const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
+  const generate = anthropicGenerator({ apiKey, model });
+  const bank = bankStore();
+
+  console.log(`edge-case finder, planning with ${model}`);
+  console.log(`sample store: ${storeOrigin}`);
+
+  const results = await runFinder(
+    { description, only: flags["only"] },
+    {
+      plan: (cls, desc) =>
+        planScenario(
+          {
+            description: desc,
+            extraInstruction: cls.ask,
+            allowedEventOrigins: allowedEventOrigins(),
+            caps,
+          },
+          { generate, budget },
+        ),
+      run: (scenario) => executeScenarioFromCli(scenario),
+      readStore: async (sinceIso) => {
+        const url = new URL(`${storeOrigin}/api/store/state`);
+        url.searchParams.set("since", sinceIso);
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${storeToken}` },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) throw new Error(`store state read returned http ${res.status}`);
+        return (await res.json()) as Awaited<ReturnType<FinderDeps["readStore"]>>;
+      },
+      bankAvailable: () => availablePurchases(bank.read()).length,
+      log: (line) => console.log(line),
+      now: () => new Date(),
+    },
+  );
+
+  const report = finderReportLines(results).join("\n");
+  const reportPath = resolve(RUNS_DIR, `finder-${isoNoMillis(new Date()).replace(/[:TZ-]/g, "")}.md`);
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${report}\n`, "utf8");
+
+  console.log("");
+  console.log(report);
+  console.log("");
+  console.log(`report written to ${reportPath}`);
+  console.log(`model spend: ${budget.summary()}`);
+
+  // Non-zero when a bug was found, so the before and after of a fix is visible
+  // in the exit code rather than only in prose.
+  process.exitCode = results.some((r) => r.finding.verdict === "bug") ? 1 : 0;
+}
+
 // ---------------------------------------------------------------- run
 
 async function run(rest: string[]): Promise<void> {
   const scenario = loadScenario(rest[0]);
-  const flags = args(rest.slice(1));
+  await executeAndReport(scenario, args(rest.slice(1)));
+}
 
+/** Shared by a file-based run and an AI-planned one, so both behave identically. */
+async function executeAndReport(
+  scenario: Scenario,
+  flags: Record<string, string>,
+): Promise<void> {
+  const state = await executeScenarioFromCli(scenario, flags);
+
+  const report = runReportLines(scenario, state).join("\n");
+  const reportPath = resolve(RUNS_DIR, `${state.runId}.md`);
+  writeFileSync(reportPath, `${report}\n`, "utf8");
+
+  console.log("");
+  console.log(report);
+  console.log("");
+  console.log(`report written to ${reportPath}`);
+  process.exitCode = state.halted ? 1 : 0;
+}
+
+/**
+ * Executes a scenario and hands back the run state. Separate from reporting so
+ * the finder can read the state and draw its own conclusions.
+ */
+async function executeScenarioFromCli(
+  scenario: Scenario,
+  flags: Record<string, string> = {},
+): Promise<RunState> {
   const resumeId = flags["resume"];
   const runId =
     resumeId ??
@@ -168,15 +358,7 @@ async function run(rest: string[]): Promise<void> {
     },
   );
 
-  const report = runReportLines(scenario, state).join("\n");
-  const reportPath = resolve(RUNS_DIR, `${runId}.md`);
-  writeFileSync(reportPath, `${report}\n`, "utf8");
-
-  console.log("");
-  console.log(report);
-  console.log("");
-  console.log(`report written to ${reportPath}`);
-  process.exitCode = state.halted ? 1 : 0;
+  return state;
 }
 
 // ---------------------------------------------------------------- bank
@@ -433,6 +615,8 @@ function bankList(): void {
 function usage(): void {
   console.log("REHEARSAL");
   console.log("  rehearsal dry-run <scenario.json>        print the plan, no network calls");
+  console.log('  rehearsal plan "<description>"           AI-plan a scenario, shows it only');
+  console.log('  rehearsal plan "<description>" --yes     plan it and then run it');
   console.log("  rehearsal run <scenario.json>            run it against the sandbox");
   console.log("  rehearsal run <scenario.json> --resume <runId> [--retry <stepId>]");
   console.log("  rehearsal bank:add [--amount 88.00]      create an order and print its approval link");
@@ -446,6 +630,12 @@ const [, , command, ...rest] = process.argv;
 switch (command) {
   case "dry-run":
     dryRun(rest);
+    break;
+  case "plan":
+    await planCommand(rest);
+    break;
+  case "find":
+    await findCommand(rest);
     break;
   case "run":
     await run(rest);

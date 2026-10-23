@@ -9,6 +9,7 @@ import {
 } from "./invoice";
 import { payoutBatchHandler } from "./payout";
 import { refundHandler } from "./refund";
+import { resendWebhookHandler } from "./resendWebhook";
 
 /**
  * One handler per step kind. Typed as a total record, so adding a step kind to
@@ -24,4 +25,5 @@ export const handlers: HandlerRegistry = {
   invoice_record_payment: invoiceRecordPaymentHandler,
   invoice_cancel: invoiceCancelHandler,
   open_dispute: openDisputeHandler,
+  resend_webhook: resendWebhookHandler,
 };

@@ -71,3 +71,34 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: receiver
+
+  store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: store/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: store
+
+      # The merchant logic and the db layer both take their dependencies by
+      # injection, so these tests open no socket and need no Supabase project.
+      # They include the proof that the planted bug exists and that the
+      # one-line fix removes it.
+      - name: Unit tests
+        run: npm test
+        working-directory: store
+
+      - name: Build
+        run: npm run build
+        working-directory: store

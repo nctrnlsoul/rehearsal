@@ -103,6 +103,7 @@ export function makeContext(opts: {
   outputs?: Record<string, Record<string, string>>;
   claim?: ClaimResult;
   env?: Record<string, string | undefined>;
+  meta?: Record<string, string>;
 }): { ctx: StepContext; logs: string[]; sleeps: number[] } {
   const step = opts.scenario.steps.find((s) => s.id === opts.stepId);
   if (step === undefined) throw new Error(`no step ${opts.stepId} in the test scenario`);
@@ -125,6 +126,7 @@ export function makeContext(opts: {
     seller: opts.seller,
     buyer: opts.buyer ?? opts.seller,
     outputs,
+    meta: opts.meta ?? {},
     claimPurchase: () => opts.claim ?? { ok: false, error: "the purchase bank is empty" },
     env: opts.env ?? {},
     now: () => new Date(clock),
