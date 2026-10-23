@@ -1,13 +1,13 @@
 # Day-1 gate results, 2026-10-22, gate 4 cleared 2026-10-23
 
 Run against `api-m.sandbox.paypal.com` only. Every id below is a real sandbox
-record created by `gate/` scripts. 107 unit tests pass, typecheck clean.
+record created by `gate/` scripts. 119 unit tests pass, typecheck clean.
 
 **Five of seven gates pass. Both remaining blockers need a human, not code.**
 
 | Gate | Verdict | What it proves |
 |---|---|---|
-| 0 preflight | **PASS** | Both apps authenticate on sandbox; host pin refuses live PayPal |
+| 0 preflight | **PASS** | Auth, host pin refuses live PayPal, and the two apps sit on separate accounts |
 | 1 card order | **PASS** | Card captured by API alone, no human step |
 | 2 partial refund | **PASS** | Partial refund, independently confirmed on the capture |
 | 3 unclaimed payout | **PASS** | Payout item reached UNCLAIMED |
@@ -18,8 +18,9 @@ record created by `gate/` scripts. 107 unit tests pass, typecheck clean.
 ## Ids created
 
 **Gate 0**
-- seller app `APP-4MC37550FA380534T`
-- buyer app `APP-07T66442GY4861820`
+- seller app `APP-4MC37550FA380534T`, account fingerprint `14aec0875b5f`
+- buyer app `APP-8US48173BY226571C`, account fingerprint `99adde75345e`
+- seller carries 29 scopes after Invoicing was enabled; 0 needed scopes absent
 
 **Gate 1** (single-step Orders v2, intent CAPTURE + `payment_source.card`)
 - order `09941019E4718134E`
@@ -41,9 +42,10 @@ record created by `gate/` scripts. 107 unit tests pass, typecheck clean.
 - external payment `EXTR-39445688NF757571V`
 - status path: `DRAFT`, then `UNPAID` after send, then `MARKED_AS_PAID`
 
-**Gate 6** (phase A only)
-- order `322573928N353731T`, status `PAYER_ACTION_REQUIRED`
-- approval URL: `https://www.sandbox.paypal.com/checkoutnow?token=322573928N353731T`
+**Gate 6** (phase A only, created by the SELLER app 2026-10-23)
+- order `3RK936819N963521R`, status `PAYER_ACTION_REQUIRED`
+- approval URL: `https://www.sandbox.paypal.com/checkoutnow?token=3RK936819N963521R`
+- supersedes order `322573928N353731T`, which could never be approved (see below)
 
 ## Gate 4, cleared 2026-10-23
 
@@ -59,6 +61,33 @@ Two separate causes, found in order.
    capture call, which is also bodyless, so it would have cost a second
    debugging round there. Fixed in the adapter for every write, with a
    regression test covering bodyless write, body write, and read.
+
+## Both apps were on one sandbox account, found 2026-10-23
+
+The first gate 6 approval attempt failed. Both apps had been created under the
+same sandbox business account (`sb-supl053463227`), so logging in to approve
+meant logging in as the merchant, and PayPal refused. Brian created a second
+sandbox business account, recreated `rehearsal-buyer` on it, and updated the
+buyer credentials.
+
+**Why nothing caught it.** Gate 0 compared `app_id`, and the two app ids were
+genuinely different. Distinct apps are not distinct accounts. Every API call
+succeeded, all five passing gates stayed green, and the only symptom appeared on
+a web page no gate looks at. The gate suite was measuring the wrong thing with
+complete confidence.
+
+**The check now in place.** `src/core/accountIdentity.ts` compares the owning
+account, read from `GET /v1/identity/oauth2/userinfo?schema=paypalv1.1`, whose
+`user_id` is per-account rather than per-app and which works with a plain
+client_credentials token. Gate 0 fails `UNSAFE` if the two subjects match, if the
+two apps are the same app, or if either owner cannot be read at all, since not
+knowing is not evidence of separation. Only a 12-character digest is logged, so
+no account identity reaches a log or a receipt.
+
+**Proven in both directions.** 12 unit tests, plus a live negative control that
+pointed the buyer slot at the seller's credentials by reference and confirmed
+gate 0 returns `FAIL (UNSAFE)` with identical fingerprints. A guard that has
+only ever been seen to pass is not yet known to work.
 
 ## The two remaining blockers, with remedies
 
