@@ -191,6 +191,22 @@ describe("summarise", () => {
     expect(summarise([row({ captureId: null })]).orders).toHaveLength(0);
   });
 
+  it("reports each event id's deliveries, so a resend is visible as the same event twice", () => {
+    const state = summarise([
+      row({ eventId: "WH-1" }),
+      row({ eventId: "WH-1" }),
+      row({ eventId: "WH-2", captureId: "CAP-2" }),
+      row({ eventId: "WH-2", captureId: "CAP-2", action: "duplicate_ignored" }),
+      row({ eventId: "WH-3", action: "ignored", verified: false }),
+      row({ eventId: null }),
+    ]);
+    expect(state.deliveries).toEqual([
+      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 2, duplicatesIgnored: 0, other: 0 },
+      { eventId: "WH-2", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: 1, other: 0 },
+      { eventId: "WH-3", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 0, duplicatesIgnored: 0, other: 1 },
+    ]);
+  });
+
   it("counts events whose signature failed, not those never checked", () => {
     const state = summarise([row({ verified: false }), row({ verified: null }), row({})]);
     expect(state.unverifiedCount).toBe(1);

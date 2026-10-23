@@ -26,6 +26,15 @@ const cachedWebhookIds = new Map<string, string>();
 
 export type WebhookIdResult = { id: string } | { id: null; detail: string };
 
+/** Every PayPal delivery carries these. Lacking any one, it is not a delivery. */
+const REQUIRED_HEADERS = [
+  "paypal-transmission-id",
+  "paypal-transmission-time",
+  "paypal-transmission-sig",
+  "paypal-auth-algo",
+  "paypal-cert-url",
+] as const;
+
 async function token(
   clientId: string,
   clientSecret: string,
@@ -125,9 +134,12 @@ export async function verifySignature(
     return { verified: null, detail: "store holds no PayPal credentials, cannot verify" };
   }
 
-  const resolved = await resolveWebhookId(env, selfOrigin, fetchImpl);
-  if (resolved.id === null) return { verified: null, detail: resolved.detail };
-  const webhookId = resolved.id;
+  // Local checks first. The endpoint is public, so a request that cannot be
+  // PayPal's must be refused before it costs a token call and a webhook lookup.
+  const missing = REQUIRED_HEADERS.filter((h) => (headers.get(h) ?? "").trim() === "");
+  if (missing.length > 0) {
+    return { verified: false, detail: `missing ${missing.join(", ")}` };
+  }
 
   const certUrl = headers.get("paypal-cert-url") ?? "";
   // cert_url arrives from the request and PayPal will fetch it. We do not fetch
@@ -141,6 +153,10 @@ export async function verifySignature(
   if (certHost !== "api.paypal.com" && !certHost.endsWith(".paypal.com")) {
     return { verified: false, detail: `paypal-cert-url host ${certHost} is not paypal.com` };
   }
+
+  const resolved = await resolveWebhookId(env, selfOrigin, fetchImpl);
+  if (resolved.id === null) return { verified: null, detail: resolved.detail };
+  const webhookId = resolved.id;
 
   try {
     const accessToken = await token(clientId, clientSecret, fetchImpl);

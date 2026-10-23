@@ -161,3 +161,43 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
     expect(verifyBodies).toEqual([expect.objectContaining({ webhook_id: "WH-STORE" })]);
   });
 });
+
+describe("verifySignature refuses junk before any PayPal call", () => {
+  const full = () =>
+    new Headers({
+      "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
+      "paypal-auth-algo": "SHA256withRSA",
+      "paypal-transmission-id": "T-1",
+      "paypal-transmission-sig": "sig",
+      "paypal-transmission-time": "2026-10-23T00:00:00Z",
+    });
+
+  it("refuses an unsigned request with no network call at all", async () => {
+    const origin = freshOrigin();
+    const { fetchImpl, calls } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }]);
+    const out = await verifySignature(new Headers(), { id: "E-1" }, CREDS, origin, fetchImpl);
+    expect(out.verified).toBe(false);
+    expect(out.detail).toContain("paypal-transmission-sig");
+    expect(calls).toEqual([]);
+  });
+
+  it("names the one header that is missing", async () => {
+    const origin = freshOrigin();
+    const { fetchImpl, calls } = fakePaypal([]);
+    const h = full();
+    h.delete("paypal-transmission-time");
+    const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
+    expect(out).toEqual({ verified: false, detail: "missing paypal-transmission-time" });
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses a non-PayPal cert host with no network call", async () => {
+    const origin = freshOrigin();
+    const { fetchImpl, calls } = fakePaypal([]);
+    const h = full();
+    h.set("paypal-cert-url", "https://evil.test/cert");
+    const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
+    expect(out.verified).toBe(false);
+    expect(calls).toEqual([]);
+  });
+});
