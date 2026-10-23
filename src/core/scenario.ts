@@ -98,7 +98,6 @@ const openDisputeStep = z.object({
   reason: z
     .enum(["MERCHANDISE_OR_SERVICE_NOT_RECEIVED", "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED"])
     .default("MERCHANDISE_OR_SERVICE_NOT_RECEIVED"),
-  note: z.string().max(2000).optional(),
 });
 
 const stepSchema = z.discriminatedUnion("kind", [
