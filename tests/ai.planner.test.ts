@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { AiBudgetTracker, BudgetExceededError, DEFAULT_AI_BUDGET } from "../src/ai/budget";
-import { type GenerateFn, extractJsonObject, planScenario } from "../src/ai/planner";
+import {
+  type GenerateFn,
+  MAX_MODEL_NAME_CHARS,
+  cleanModelText,
+  extractJsonObject,
+  planScenario,
+} from "../src/ai/planner";
 
 const STORE = "https://store.test";
 
@@ -246,5 +252,44 @@ describe("planScenario cost guard", () => {
       /permitted model calls/i,
     );
     expect(m.calls).toHaveLength(1);
+  });
+});
+
+describe("model-written names are cleaned before anything prints them", () => {
+  it("strips escape sequences, bidi overrides and newlines", async () => {
+    const out = await plan({
+      ...GOOD,
+      name: "\u001b[2J\u001b[31mCandle\nshop\u202e",
+      profile: { name: "Ember\u0007 and \u200bWick", description: "line one\r\nline two\u001b]0;title\u0007" },
+    }).run();
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.scenario.name).toBe("[2J [31mCandle shop");
+    expect(out.scenario.profile.name).toBe("Ember and Wick");
+    expect(out.scenario.profile.description).toBe("line one line two ]0;title");
+    for (const text of [out.scenario.name, out.scenario.profile.name, out.scenario.profile.description!]) {
+      expect(text).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+    }
+  });
+
+  it("caps length by character, never splitting one", () => {
+    const long = "\u{1F56F}".repeat(100);
+    const cut = cleanModelText(long, MAX_MODEL_NAME_CHARS);
+    expect(Array.from(cut)).toHaveLength(MAX_MODEL_NAME_CHARS);
+    expect(cut).toBe("\u{1F56F}".repeat(MAX_MODEL_NAME_CHARS));
+  });
+
+  it("caps the schema-legal 80-character name at the tighter limit", async () => {
+    const out = await plan({ ...GOOD, name: "x".repeat(80) }).run();
+    expect(out.ok && out.scenario.name).toBe("x".repeat(MAX_MODEL_NAME_CHARS));
+  });
+
+  it("falls back to a placeholder when nothing printable is left", async () => {
+    const out = await plan({ ...GOOD, name: "\u001b\u0007", profile: { name: "\u200b", description: "\u0000" } }).run();
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.scenario.name).toBe("unnamed scenario");
+    expect(out.scenario.profile.name).toBe("unnamed business");
+    expect(out.scenario.profile).not.toHaveProperty("description");
   });
 });

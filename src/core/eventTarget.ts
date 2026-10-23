@@ -82,3 +82,40 @@ export function assertWebhookHandlerTarget(raw: string, allowlist: readonly stri
   }
   return url;
 }
+
+export type AllowlistSource = { readonly name: string; readonly value: string | null };
+
+/**
+ * Reads the event-origin allowlist from configuration, once, at the boundary.
+ * A malformed entry is a configuration error that stops the command with a
+ * message naming where it came from. Skipping it would quietly shrink the
+ * guard, and letting it through crashed the planner with a stack trace. The
+ * value itself is never echoed, because it comes from the environment.
+ */
+export function parseEventAllowlist(
+  sources: readonly AllowlistSource[],
+): { ok: true; origins: string[] } | { ok: false; error: string } {
+  const origins: string[] = [];
+  for (const source of sources) {
+    if (source.value === null) continue;
+    const entries = source.value
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v !== "");
+    for (const [i, entry] of entries.entries()) {
+      try {
+        origins.push(normalizeOrigin(entry));
+      } catch (e) {
+        const reason =
+          e instanceof TargetRefusedError
+            ? e.message.replace(/^event target refused: /, "")
+            : "unreadable";
+        return {
+          ok: false,
+          error: `${source.name} entry ${i + 1} is not a usable origin (${reason}). It must look like https://host. Fix it in the Windows environment variable screen.`,
+        };
+      }
+    }
+  }
+  return { ok: true, origins: [...new Set(origins)] };
+}

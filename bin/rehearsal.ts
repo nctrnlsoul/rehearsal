@@ -23,7 +23,11 @@ import {
   emptyBank,
   markExpired,
 } from "../src/core/purchaseBank";
-import { assertAllowedEventTarget, webhookHandlerUrl } from "../src/core/eventTarget";
+import {
+  assertAllowedEventTarget,
+  parseEventAllowlist,
+  webhookHandlerUrl,
+} from "../src/core/eventTarget";
 import { type FinderDeps, finderReportLines, runFinder } from "../src/ai/finder";
 import { type RunState, retryStep } from "../src/core/runState";
 import { walletOrderBody } from "../src/core/sandboxFixtures";
@@ -60,16 +64,16 @@ function args(rest: string[]): Record<string, string> {
 
 /** Origins a scenario may fire real events at. Empty means none are permitted. */
 function allowedEventOrigins(): string[] {
-  const raw = [
-    optionalEnv("REHEARSAL_EVENT_ORIGINS"),
-    optionalEnv("REHEARSAL_RECEIVER_ORIGIN"),
-    optionalEnv("REHEARSAL_STORE_ORIGIN"),
-  ]
-    .filter((v): v is string => v !== null)
-    .flatMap((v) => v.split(","))
-    .map((v) => v.trim())
-    .filter((v) => v !== "");
-  return [...new Set(raw)];
+  const parsed = parseEventAllowlist(
+    ["REHEARSAL_EVENT_ORIGINS", "REHEARSAL_RECEIVER_ORIGIN", "REHEARSAL_STORE_ORIGIN"].map(
+      (name) => ({ name, value: optionalEnv(name) }),
+    ),
+  );
+  if (!parsed.ok) {
+    console.error(parsed.error);
+    process.exit(1);
+  }
+  return parsed.origins;
 }
 
 function loadScenario(path: string | undefined): Scenario {
@@ -248,6 +252,7 @@ async function findCommand(rest: string[]): Promise<void> {
       bankAvailable: () => availablePurchases(bank.read()).length,
       log: (line) => console.log(line),
       now: () => new Date(),
+      sleep,
     },
   );
 

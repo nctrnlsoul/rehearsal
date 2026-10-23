@@ -19,8 +19,18 @@ export type StoreOrder = {
   readonly duplicatesIgnored: number;
 };
 
+/** The store's record of one event id: how many deliveries did what. */
+export type StoreDelivery = {
+  readonly eventId: string;
+  readonly fulfilled: number;
+  readonly duplicatesIgnored: number;
+  readonly other: number;
+};
+
 export type StoreSnapshot = {
   readonly orders: readonly StoreOrder[];
+  /** Absent on a store deployment that predates per-event reporting. */
+  readonly deliveries?: readonly StoreDelivery[];
   readonly eventCount: number;
   readonly unverifiedCount: number;
   readonly dedupeEnabled?: boolean;
@@ -65,6 +75,12 @@ export type FailureClass = {
   readonly supported: boolean;
   readonly unsupportedReason?: string;
   check(store: StoreSnapshot, run: RunState): Finding;
+  /**
+   * For a class whose evidence arrives after the run, such as a redelivery:
+   * true once the store shows enough to decide, or once waiting cannot help.
+   * The finder re-reads the store until then, up to a timeout.
+   */
+  settled?(store: StoreSnapshot, run: RunState): boolean;
 };
 
 const stepsOfKind = (run: RunState, kind: string): StepRecord[] =>
@@ -79,6 +95,50 @@ function finding(
 ): Finding {
   return { classId: base.id, title: base.title, verdict, ...parts };
 }
+
+type DeliveryEvidence =
+  | { readonly kind: "no-resend" }
+  | { readonly kind: "no-event-id" }
+  | { readonly kind: "unreported" }
+  | { readonly kind: "malformed"; readonly eventId: string }
+  | {
+      readonly kind: "counts";
+      readonly eventId: string;
+      readonly fulfilled: number;
+      readonly duplicatesIgnored: number;
+      readonly other: number;
+    };
+
+const isCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+
+/**
+ * What the store recorded for the one event id the run resent. The store is the
+ * system under test, so its reply is checked here rather than trusted: anything
+ * malformed is no evidence at all.
+ */
+function resentDelivery(store: StoreSnapshot, run: RunState): DeliveryEvidence {
+  const resend = stepsOfKind(run, "resend_webhook").find((s) => s.status === "succeeded");
+  if (resend === undefined) return { kind: "no-resend" };
+  const eventId = resend.ids["resent_event_id"];
+  if (eventId === undefined || eventId.trim() === "") return { kind: "no-event-id" };
+
+  if (!Array.isArray(store.deliveries)) return { kind: "unreported" };
+  const entries = store.deliveries.filter(
+    (d) => typeof d === "object" && d !== null && d.eventId === eventId,
+  );
+  if (entries.length === 0) {
+    return { kind: "counts", eventId, fulfilled: 0, duplicatesIgnored: 0, other: 0 };
+  }
+  const d = entries[0]!;
+  // The store groups by event id, so two entries for one id is a broken reply.
+  if (entries.length > 1 || !isCount(d.fulfilled) || !isCount(d.duplicatesIgnored) || !isCount(d.other)) {
+    return { kind: "malformed", eventId };
+  }
+  return { kind: "counts", eventId, fulfilled: d.fulfilled, duplicatesIgnored: d.duplicatesIgnored, other: d.other };
+}
+
+const decisive = (e: DeliveryEvidence) =>
+  e.kind === "counts" && (e.fulfilled >= 2 || (e.fulfilled === 1 && e.duplicatesIgnored >= 1));
 
 /** Our instruction to the planner, derived from the template so the two cannot drift. */
 export function askFor(template: ScenarioTemplate): string {
@@ -124,46 +184,83 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     ...DUPLICATE_WEBHOOK,
     needsBankedPurchase: false,
     supported: true,
+    /**
+     * The verdict rests on the store's rows for the resent event id, never on
+     * having waited. A redelivery that has not arrived yet looks exactly like
+     * a store that coped, so one row is inconclusive, never ok.
+     */
     check(store: StoreSnapshot, run: RunState) {
-      const resends = stepsOfKind(run, "resend_webhook");
-      if (resends.length === 0 || !resends.some((s) => s.status === "succeeded")) {
-        return finding(DUPLICATE_WEBHOOK, "inconclusive", {
-          event: "PAYMENT.CAPTURE.COMPLETED",
-          expected: "a resend to deliver the capture event a second time",
-          actual: "no resend step completed, so no duplicate was ever delivered",
-          likelyFix: "re-run with a scenario whose resend_webhook step succeeds",
+      const event = "PAYMENT.CAPTURE.COMPLETED";
+      const e = resentDelivery(store, run);
+      const none = (actual: string, likelyFix: string) =>
+        finding(DUPLICATE_WEBHOOK, "inconclusive", {
+          event,
+          expected: "a second delivery of the resent event id to reach the store",
+          actual,
+          likelyFix,
         });
+
+      switch (e.kind) {
+        case "no-resend":
+          return none(
+            "no resend step completed, so no duplicate was ever delivered",
+            "re-run with a scenario whose resend_webhook step succeeds",
+          );
+        case "no-event-id":
+          return none(
+            "the resend step recorded no event id, so there is nothing to match in the store",
+            "check the resend_webhook handler records resent_event_id",
+          );
+        case "unreported":
+          return none(
+            "the store does not report deliveries by event id, so a second delivery cannot be proved",
+            "deploy the current store, whose state endpoint reports deliveries per event id",
+          );
+        case "malformed":
+          return none(
+            `the store's record for ${e.eventId} is malformed, so it proves nothing`,
+            "check the store's state endpoint",
+          );
+        case "counts":
+          break;
       }
 
-      const doubled = store.orders.filter((o) => o.fulfilmentCount > 1);
-      if (doubled.length > 0) {
+      if (e.fulfilled >= 2) {
         return finding(DUPLICATE_WEBHOOK, "bug", {
-          event: "PAYMENT.CAPTURE.COMPLETED",
-          expected: "exactly one fulfilment per capture, however many times the event arrives",
-          actual: doubled
-            .map((o) => `${o.captureId} was fulfilled ${o.fulfilmentCount} times`)
-            .join("; "),
+          event,
+          expected: "one fulfilment for an event id, however many times it is delivered",
+          actual: `event ${e.eventId} was delivered ${e.fulfilled + e.duplicatesIgnored + e.other} times and fulfilled ${e.fulfilled} times`,
           likelyFix:
             "treat the webhook event id as an idempotency key: record it and ignore an event already seen before fulfilling",
         });
       }
-
-      if (sum(store.orders.map((o) => o.fulfilmentCount)) === 0) {
-        return finding(DUPLICATE_WEBHOOK, "inconclusive", {
-          event: "PAYMENT.CAPTURE.COMPLETED",
-          expected: "the store to fulfil the order once",
-          actual: `the store fulfilled nothing across ${store.eventCount} events, so there was nothing to double-count`,
-          likelyFix:
-            "check the store is verifying signatures: it ignores anything it cannot verify, which also means it fulfils nothing",
+      if (e.fulfilled === 1 && e.duplicatesIgnored >= 1) {
+        return finding(DUPLICATE_WEBHOOK, "ok", {
+          event,
+          expected: "one fulfilment for an event id, however many times it is delivered",
+          actual: `event ${e.eventId} was fulfilled once and its ${e.duplicatesIgnored} redelivery(s) recognised and ignored`,
+          likelyFix: "none needed",
         });
       }
 
-      return finding(DUPLICATE_WEBHOOK, "ok", {
-        event: "PAYMENT.CAPTURE.COMPLETED",
-        expected: "exactly one fulfilment per capture",
-        actual: `each capture fulfilled once, with ${sum(store.orders.map((o) => o.duplicatesIgnored))} duplicate(s) recognised and ignored`,
-        likelyFix: "none needed",
-      });
+      const rows = e.fulfilled + e.duplicatesIgnored + e.other;
+      if (rows <= 1) {
+        return none(
+          rows === 0
+            ? `the store recorded no delivery of ${e.eventId}`
+            : `only one delivery of ${e.eventId} reached the store before the wait ended; a duplicate that never arrived proves nothing`,
+          "re-run; if it repeats, check PayPal's delivery status for the webhook",
+        );
+      }
+      return none(
+        `event ${e.eventId} reached the store ${rows} times but was fulfilled ${e.fulfilled} times, with ${e.other} delivery(s) neither fulfilled nor recognised as duplicates`,
+        "check the store is verifying signatures: it ignores anything it cannot verify",
+      );
+    },
+    settled(store: StoreSnapshot, run: RunState) {
+      const e = resentDelivery(store, run);
+      // Waiting only helps while there are counts that could still grow.
+      return e.kind !== "counts" || decisive(e);
     },
   }, {
     steps: [

@@ -9,6 +9,7 @@ type StepSpec = {
   kind: string;
   status?: "succeeded" | "failed" | "unknown" | "pending";
   detail?: string;
+  ids?: Record<string, string>;
 };
 
 function runWith(steps: StepSpec[]): RunState {
@@ -23,7 +24,7 @@ function runWith(steps: StepSpec[]): RunState {
   for (const s of steps) {
     if (s.status === undefined || s.status === "pending") continue;
     const kind = s.status === "succeeded" ? "success" : s.status === "failed" ? "failed" : "unknown";
-    state = recordOutcome(state, s.id, { kind, detail: s.detail ?? "" }, T);
+    state = recordOutcome(state, s.id, { kind, detail: s.detail ?? "", ids: s.ids ?? {} }, T);
   }
   return state;
 }
@@ -69,49 +70,114 @@ describe("the class list itself", () => {
 });
 
 describe("duplicate-webhook", () => {
+  const EV = "WH-RESENT-1";
   const resent: StepSpec[] = [
     { id: "o1", kind: "card_order", status: "succeeded" },
-    { id: "dup", kind: "resend_webhook", status: "succeeded" },
+    { id: "dup", kind: "resend_webhook", status: "succeeded", ids: { resent_event_id: EV } },
   ];
+  const delivered = (fulfilled: number, duplicatesIgnored = 0, other = 0) =>
+    store({ deliveries: [{ eventId: EV, fulfilled, duplicatesIgnored, other }] });
+  const cls = () => classById("duplicate-webhook")!;
 
-  // The planted bug.
-  it("calls a second fulfilment a bug and names the fix", () => {
-    const f = check(
-      "duplicate-webhook",
-      store({ orders: [order({ fulfilmentCount: 2 })], eventCount: 2 }),
-      runWith(resent),
-    );
+  // The planted bug: the same event id delivered twice and acted on twice.
+  it("is a bug when the resent event id was fulfilled twice", () => {
+    const f = check("duplicate-webhook", delivered(2), runWith(resent));
     expect(f.verdict).toBe("bug");
     expect(f.event).toBe("PAYMENT.CAPTURE.COMPLETED");
-    expect(f.actual).toContain("fulfilled 2 times");
+    expect(f.actual).toBe(`event ${EV} was delivered 2 times and fulfilled 2 times`);
     expect(f.likelyFix).toMatch(/idempotency key/i);
   });
 
-  it("passes once duplicates are recognised", () => {
-    const f = check(
-      "duplicate-webhook",
-      store({ orders: [order({ fulfilmentCount: 1, duplicatesIgnored: 1 })], eventCount: 2 }),
-      runWith(resent),
-    );
+  it("is ok when the second delivery was recognised and ignored", () => {
+    const f = check("duplicate-webhook", delivered(1, 1), runWith(resent));
     expect(f.verdict).toBe("ok");
-    expect(f.actual).toMatch(/1 duplicate\(s\) recognised/);
+    expect(f.actual).toContain("recognised and ignored");
+  });
+
+  // The false pass this replaces: one row looks exactly like a store that coped.
+  it("is inconclusive, never ok, when only one delivery has arrived", () => {
+    const f = check("duplicate-webhook", delivered(1), runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/only one delivery .* proves nothing/);
+  });
+
+  it("is inconclusive when the store recorded no delivery of that event", () => {
+    const f = check("duplicate-webhook", delivered(0), runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toContain("no delivery");
+  });
+
+  it("judges only the resent event id, not other events for the same capture", () => {
+    const other = store({
+      orders: [order({ fulfilmentCount: 2 })],
+      deliveries: [
+        { eventId: "WH-OTHER", fulfilled: 2, duplicatesIgnored: 0, other: 0 },
+        { eventId: EV, fulfilled: 1, duplicatesIgnored: 0, other: 0 },
+      ],
+    });
+    expect(check("duplicate-webhook", other, runWith(resent)).verdict).toBe("inconclusive");
+  });
+
+  // An older store deployment reports per capture only. That is not evidence
+  // of one event arriving twice, so it never yields a bug or a pass.
+  it("is inconclusive when the store does not report deliveries by event id", () => {
+    const old = store({ orders: [order({ fulfilmentCount: 2 })], eventCount: 2 });
+    const f = check("duplicate-webhook", old, runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.likelyFix).toMatch(/deploy the current store/);
+  });
+
+  it("is inconclusive when a redelivery was neither fulfilled nor recognised", () => {
+    const f = check("duplicate-webhook", delivered(1, 0, 1), runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.likelyFix).toMatch(/verifying signatures/i);
+  });
+
+  it("treats a malformed store record as no evidence", () => {
+    const bad = [
+      store({ deliveries: [{ eventId: EV, fulfilled: "2", duplicatesIgnored: 0, other: 0 } as never] }),
+      store({ deliveries: [{ eventId: EV, fulfilled: -1, duplicatesIgnored: 0, other: 0 }] }),
+      store({
+        deliveries: [
+          { eventId: EV, fulfilled: 1, duplicatesIgnored: 0, other: 0 },
+          { eventId: EV, fulfilled: 1, duplicatesIgnored: 0, other: 0 },
+        ],
+      }),
+      store({ deliveries: "lots" as never }),
+    ];
+    for (const s of bad) {
+      expect(check("duplicate-webhook", s, runWith(resent)).verdict).toBe("inconclusive");
+    }
   });
 
   // Not tested is not passed.
-  it("is inconclusive when no duplicate was ever delivered", () => {
+  it("is inconclusive when no resend completed", () => {
     const f = check(
       "duplicate-webhook",
-      store({ orders: [order()] }),
+      delivered(2),
       runWith([{ id: "o1", kind: "card_order", status: "succeeded" }]),
     );
     expect(f.verdict).toBe("inconclusive");
     expect(f.actual).toMatch(/no resend step completed/i);
   });
 
-  it("is inconclusive when the store fulfilled nothing at all", () => {
-    const f = check("duplicate-webhook", store({ eventCount: 4 }), runWith(resent));
-    expect(f.verdict).toBe("inconclusive");
-    expect(f.likelyFix).toMatch(/verifying signatures/i);
+  it("is inconclusive when the resend recorded no event id", () => {
+    const noId: StepSpec[] = [
+      { id: "o1", kind: "card_order", status: "succeeded" },
+      { id: "dup", kind: "resend_webhook", status: "succeeded" },
+    ];
+    expect(check("duplicate-webhook", delivered(2), runWith(noId)).verdict).toBe("inconclusive");
+  });
+
+  it("keeps the finder waiting only while one more delivery could decide it", () => {
+    const run = runWith(resent);
+    expect(cls().settled!(delivered(0), run)).toBe(false);
+    expect(cls().settled!(delivered(1), run)).toBe(false);
+    expect(cls().settled!(delivered(2), run)).toBe(true);
+    expect(cls().settled!(delivered(1, 1), run)).toBe(true);
+    // Waiting cannot fix these, so it does not wait for them.
+    expect(cls().settled!(store(), run)).toBe(true);
+    expect(cls().settled!(delivered(1), runWith([]))).toBe(true);
   });
 });
 

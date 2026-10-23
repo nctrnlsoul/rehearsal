@@ -18,6 +18,12 @@ import type { PlanOutcome } from "./planner";
  * check" is the whole value of the report.
  */
 
+/** How long the finder waits for evidence that arrives after a run, such as a redelivery. */
+export const EVIDENCE_TIMEOUT_MS = 90_000;
+export const EVIDENCE_POLL_MS = 5_000;
+/** Bounds the loop independently of the clock, so a stalled clock cannot hang a run. */
+const MAX_EVIDENCE_POLLS = Math.ceil(EVIDENCE_TIMEOUT_MS / EVIDENCE_POLL_MS) + 2;
+
 export type ClassResult = {
   readonly classId: string;
   readonly title: string;
@@ -45,6 +51,7 @@ export type FinderDeps = {
   bankAvailable: () => number;
   log: (line: string) => void;
   now: () => Date;
+  sleep: (ms: number) => Promise<void>;
 };
 
 function inconclusive(cls: FailureClass, actual: string, likelyFix: string): Finding {
@@ -57,6 +64,27 @@ function inconclusive(cls: FailureClass, actual: string, likelyFix: string): Fin
     actual,
     likelyFix,
   };
+}
+
+/**
+ * The store is the system under test, so its reply is checked before any class
+ * reads it. A throw or a reply without an orders array is a failed read, never
+ * a snapshot a check could misread.
+ */
+async function readStoreSafely(
+  deps: FinderDeps,
+  since: string,
+): Promise<{ ok: true; store: StoreSnapshot } | { ok: false; error: string }> {
+  let reply: unknown;
+  try {
+    reply = await deps.readStore(since);
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  if (typeof reply !== "object" || reply === null || !Array.isArray((reply as { orders?: unknown }).orders)) {
+    return { ok: false, error: "the reply was not a store state object" };
+  }
+  return { ok: true, store: reply as StoreSnapshot };
 }
 
 function getPath(from: unknown, path: string): unknown {
@@ -289,8 +317,59 @@ export async function runFinder(
     deps.log(`  running ${scenario.steps.length} step(s): ${scenario.name}`);
     const state = await deps.run(scenario, { webhookMode: "reuse-only" });
 
-    const store = await deps.readStore(since);
-    const finding = cls.check(store, state);
+    const first = await readStoreSafely(deps, since);
+    if (!first.ok) {
+      deps.log(`  store read failed: ${first.error}`);
+      results.push({
+        classId: cls.id,
+        title: cls.title,
+        finding: inconclusive(
+          cls,
+          `the store could not be read after the run: ${first.error}`,
+          "check the store's state endpoint, then re-run",
+        ),
+        skipped: null,
+        scenarioName: scenario.name,
+        runId: state.runId,
+        ignored: applied.ignored,
+      });
+      continue;
+    }
+    let store = first.store;
+    let failedReads = 0;
+    if (cls.settled !== undefined) {
+      const started = deps.now().getTime();
+      for (
+        let poll = 0;
+        poll < MAX_EVIDENCE_POLLS &&
+        !cls.settled(store, state) &&
+        deps.now().getTime() - started < EVIDENCE_TIMEOUT_MS;
+        poll += 1
+      ) {
+        deps.log(`  the store does not show enough yet, reading again in ${EVIDENCE_POLL_MS / 1000}s`);
+        await deps.sleep(EVIDENCE_POLL_MS);
+        const next = await readStoreSafely(deps, since);
+        if (next.ok) {
+          store = next.store;
+        } else {
+          // The previous snapshot stands. It was not decisive, so a failed
+          // re-read can only leave the verdict inconclusive, never invent one.
+          failedReads += 1;
+          deps.log(`  store re-read failed: ${next.error}`);
+        }
+      }
+      if (!cls.settled(store, state)) {
+        deps.log(`  stopped waiting after ${Math.round((deps.now().getTime() - started) / 1000)}s`);
+      }
+    }
+    let finding = cls.check(store, state);
+    if (failedReads > 0 && finding.verdict === "inconclusive") {
+      // Otherwise "no delivery" could really mean "no read succeeded".
+      finding = {
+        ...finding,
+        actual: `${finding.actual} (${failedReads} store re-read(s) failed while waiting)`,
+      };
+    }
     deps.log(`  ${finding.verdict.toUpperCase()}: ${finding.actual}`);
 
     results.push({

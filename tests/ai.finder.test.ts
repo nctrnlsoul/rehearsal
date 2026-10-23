@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { classById } from "../src/ai/failureClasses";
-import { type FinderDeps, applyTemplate, finderReportLines, runFinder } from "../src/ai/finder";
+import { type StoreSnapshot, classById } from "../src/ai/failureClasses";
+import {
+  EVIDENCE_POLL_MS,
+  EVIDENCE_TIMEOUT_MS,
+  type FinderDeps,
+  applyTemplate,
+  finderReportLines,
+  runFinder,
+} from "../src/ai/finder";
 import type { PlanOutcome } from "../src/ai/planner";
 import { DEFAULT_CAPS, checkCaps } from "../src/core/caps";
 import { initRunState, recordOutcome } from "../src/core/runState";
@@ -193,15 +200,33 @@ describe("every supported class has a minimal template that runs as is", () => {
   });
 });
 
+const EV = "WH-RESENT-1";
+
+/** A store reply carrying the resent event's delivery counts. */
+const snapshot = (fulfilled: number, duplicatesIgnored = 0): StoreSnapshot => ({
+  orders: [],
+  deliveries: [{ eventId: EV, fulfilled, duplicatesIgnored, other: 0 }],
+  eventCount: fulfilled + duplicatesIgnored,
+  unverifiedCount: 0,
+});
+
 describe("runFinder with templates", () => {
   function harness(
     plan: PlanOutcome,
-    opts: { validate?: FinderDeps["validate"] } = {},
+    opts: {
+      validate?: FinderDeps["validate"];
+      /** Store replies in order; the last one repeats. A function throws on that read. */
+      store?: Array<StoreSnapshot | (() => never)>;
+    } = {},
   ) {
     const ran: Scenario[] = [];
     const modes: string[] = [];
     const planCalls: string[] = [];
     const logs: string[] = [];
+    const sleeps: number[] = [];
+    const replies = opts.store ?? [snapshot(2)];
+    let reads = 0;
+    let clock = Date.parse("2026-10-23T12:00:00.000Z");
     const deps: FinderDeps = {
       plan: async (cls) => {
         planCalls.push(cls.id);
@@ -225,32 +250,34 @@ describe("runFinder with templates", () => {
           nowIso: "2026-10-23T12:00:00.000Z",
         });
         for (const st of scenario.steps) {
-          s = recordOutcome(s, st.id, { kind: "success", detail: "ok" }, "2026-10-23T12:00:01.000Z");
+          const ids: Record<string, string> = st.kind === "resend_webhook" ? { resent_event_id: EV } : {};
+          s = recordOutcome(s, st.id, { kind: "success", detail: "ok", ids }, "2026-10-23T12:00:01.000Z");
         }
         return s;
       },
-      readStore: async () => ({
-        orders: [
-          { captureId: "CAP-1", fulfilmentCount: 2, refundCount: 0, disputeCount: 0, duplicatesIgnored: 0 },
-        ],
-        eventCount: 2,
-        unverifiedCount: 0,
-      }),
+      readStore: async () => {
+        const next = replies[Math.min(reads, replies.length - 1)]!;
+        reads += 1;
+        return typeof next === "function" ? next() : next;
+      },
       bankAvailable: () => 0,
       log: (l) => logs.push(l),
-      now: () => new Date("2026-10-23T12:00:00.000Z"),
+      now: () => new Date(clock),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
     };
-    return { deps, ran, modes, planCalls, logs };
+    return { deps, ran, modes, planCalls, logs, sleeps, reads: () => reads };
   }
 
   const okPlan = (): PlanOutcome => ({ ok: true, scenario: padded(), raw: "{}" });
+  const findDup = (h: ReturnType<typeof harness>) =>
+    runFinder({ description: "a shop", only: "duplicate-webhook", webhookTarget: TARGET }, h.deps);
 
   it("runs the two template steps, not the padded plan, and reports what it ignored", async () => {
     const h = harness(okPlan());
-    const results = await runFinder(
-      { description: "a shop", only: "duplicate-webhook", webhookTarget: TARGET },
-      h.deps,
-    );
+    const results = await findDup(h);
     expect(h.ran).toHaveLength(1);
     expect(h.ran[0]!.steps.map((s) => s.kind)).toEqual(["card_order", "resend_webhook"]);
     expect(h.ran[0]!.webhook).toEqual({ target: TARGET, eventTypes: ["*"] });
@@ -276,12 +303,94 @@ describe("runFinder with templates", () => {
 
   it("does not run a filled template that fails validation", async () => {
     const h = harness(okPlan(), { validate: () => ({ ok: false, errors: ["over the caps"] }) });
-    const results = await runFinder(
-      { description: "a shop", only: "duplicate-webhook", webhookTarget: TARGET },
-      h.deps,
-    );
+    const results = await findDup(h);
     expect(h.ran).toEqual([]);
     expect(results[0]!.finding.verdict).toBe("inconclusive");
     expect(results[0]!.finding.likelyFix).toContain("over the caps");
+  });
+
+  // The three outcomes, each reached by evidence rather than by having waited.
+  describe("waiting for the redelivery", () => {
+    it("is a bug once the second delivery shows up fulfilled", async () => {
+      const h = harness(okPlan(), { store: [snapshot(1), snapshot(1), snapshot(2)] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("bug");
+      expect(h.reads()).toBe(3);
+      expect(h.sleeps).toEqual([EVIDENCE_POLL_MS, EVIDENCE_POLL_MS]);
+    });
+
+    it("is ok once the second delivery shows up recognised as a duplicate", async () => {
+      const h = harness(okPlan(), { store: [snapshot(1), snapshot(1, 1)] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("ok");
+      expect(h.reads()).toBe(2);
+    });
+
+    it("is inconclusive, never ok, when only one delivery has arrived by the timeout", async () => {
+      const h = harness(okPlan(), { store: [snapshot(1)] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(results[0]!.finding.actual).toMatch(/only one delivery/);
+      const waited = h.sleeps.reduce((a, b) => a + b, 0);
+      expect(waited).toBe(EVIDENCE_TIMEOUT_MS);
+      expect(h.logs.join("\n")).toContain("stopped waiting after 90s");
+    });
+
+    it("does not wait when the first read already decides", async () => {
+      const h = harness(okPlan(), { store: [snapshot(2)] });
+      await findDup(h);
+      expect(h.sleeps).toEqual([]);
+    });
+
+    it("keeps waiting through a failed re-read, and a failure never becomes a pass", async () => {
+      const boom = () => {
+        throw new Error("store state read returned http 503");
+      };
+      const h = harness(okPlan(), { store: [snapshot(1), boom, snapshot(2)] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("bug");
+      expect(h.logs.join("\n")).toContain("store re-read failed: store state read returned http 503");
+    });
+
+    it("turns a failed first read into an inconclusive finding, not a crash", async () => {
+      const boom = () => {
+        throw new Error("store state read returned http 503");
+      };
+      const h = harness(okPlan(), { store: [boom] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(results[0]!.finding.actual).toContain("store state read returned http 503");
+      expect(results[0]!.runId).toBe("run-x");
+    });
+
+    it("treats a reply that is not a store state object as a failed read", async () => {
+      for (const reply of [null, {}, { orders: "none" }, "ok"]) {
+        const h = harness(okPlan(), { store: [reply as never] });
+        const results = await findDup(h);
+        expect(results[0]!.finding.verdict, JSON.stringify(reply)).toBe("inconclusive");
+        expect(results[0]!.finding.actual).toContain("not a store state object");
+      }
+    });
+
+    it("says the re-reads failed, rather than that nothing arrived, when they all did", async () => {
+      const boom = () => {
+        throw new Error("timeout");
+      };
+      const h = harness(okPlan(), { store: [snapshot(0), boom] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(results[0]!.finding.actual).toMatch(/\(\d+ store re-read\(s\) failed while waiting\)$/);
+    });
+
+    it("stops on the poll bound even if the clock never moves", async () => {
+      const h = harness(okPlan(), { store: [snapshot(1)] });
+      const frozen = { ...h.deps, sleep: async () => {} };
+      const results = await runFinder(
+        { description: "a shop", only: "duplicate-webhook", webhookTarget: TARGET },
+        frozen,
+      );
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(h.reads()).toBeLessThanOrEqual(EVIDENCE_TIMEOUT_MS / EVIDENCE_POLL_MS + 3);
+    });
   });
 });

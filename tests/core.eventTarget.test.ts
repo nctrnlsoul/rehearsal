@@ -4,6 +4,7 @@ import {
   assertAllowedEventTarget,
   assertWebhookHandlerTarget,
   normalizeOrigin,
+  parseEventAllowlist,
   webhookHandlerUrl,
 } from "../src/core/eventTarget";
 
@@ -80,5 +81,40 @@ describe("assertWebhookHandlerTarget", () => {
 
   it("builds the handler URL from a normalized origin", () => {
     expect(webhookHandlerUrl("https://Rehearsal-Store.vercel.app:443/")).toBe(HANDLER);
+  });
+});
+
+describe("parseEventAllowlist", () => {
+  it("normalizes and dedupes across sources, skipping unset ones", () => {
+    expect(
+      parseEventAllowlist([
+        { name: "A", value: `${STORE}, https://receiver.test/` },
+        { name: "B", value: null },
+        { name: "C", value: "https://Rehearsal-Store.vercel.app:443" },
+      ]),
+    ).toEqual({ ok: true, origins: [STORE, "https://receiver.test"] });
+  });
+
+  it("refuses a malformed entry with a clear error naming its source, not a throw", () => {
+    const out = parseEventAllowlist([
+      { name: "REHEARSAL_EVENT_ORIGINS", value: `${STORE},http://plain.test` },
+    ]);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.error).toContain("REHEARSAL_EVENT_ORIGINS entry 2 is not a usable origin");
+      expect(out.error).toContain("scheme http: is not https:");
+      // The value comes from the environment and is never echoed.
+      expect(out.error).not.toContain("plain.test");
+    }
+  });
+
+  it("refuses userinfo and junk too", () => {
+    for (const value of ["https://u:p@x.test", "not a url"]) {
+      expect(parseEventAllowlist([{ name: "X", value }]).ok, value).toBe(false);
+    }
+  });
+
+  it("allows an empty allowlist, which then refuses every target downstream", () => {
+    expect(parseEventAllowlist([{ name: "A", value: " , " }])).toEqual({ ok: true, origins: [] });
   });
 });
