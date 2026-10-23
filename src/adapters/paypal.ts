@@ -183,10 +183,15 @@ export class PaypalClient {
       await this.#throttle();
       const token = await this.accessToken();
 
+      // Sent on every write, body or not. PayPal answers a bodyless POST with
+      // 415 UNSUPPORTED_MEDIA_TYPE when the header is absent, and several of
+      // its write endpoints take no body at all.
+      const sendsJson = payload !== undefined || MUST_BE_IDEMPOTENT.has(method);
+
       const headers: Record<string, string> = {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
-        ...(payload === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(sendsJson ? { "Content-Type": "application/json" } : {}),
         ...(requestIdSent === null ? {} : { "PayPal-Request-Id": requestIdSent }),
         ...(args.extraHeaders ?? {}),
       };

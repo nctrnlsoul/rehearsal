@@ -98,6 +98,35 @@ describe("PaypalClient guards", () => {
   });
 });
 
+describe("PaypalClient content type", () => {
+  // Regression: PayPal returned 415 UNSUPPORTED_MEDIA_TYPE on a bodyless POST
+  // because no Content-Type was sent. Orders capture and the invoice-number
+  // generator are both bodyless writes, so this bit two endpoints.
+  it("sends Content-Type application/json on a write with no body", async () => {
+    const h = harness([tokenOk(), { kind: "json", status: 200, body: { invoice_number: "0001" } }]);
+    await h.client.call({
+      method: "POST",
+      path: "/v2/invoicing/generate-next-invoice-number",
+      idempotencySeed: "s",
+    });
+    const call = h.apiCalls()[0]!;
+    expect(call.headers["Content-Type"]).toBe("application/json");
+    expect(call.body).toBeNull();
+  });
+
+  it("sends Content-Type application/json on a write with a body", async () => {
+    const h = harness([tokenOk(), { kind: "json", status: 201, body: { status: "COMPLETED" } }]);
+    await h.client.call({ method: "POST", path: "/v1/x", body: { a: 1 }, idempotencySeed: "s" });
+    expect(h.apiCalls()[0]!.headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("sends no Content-Type on a read", async () => {
+    const h = harness([tokenOk(), { kind: "json", status: 200, body: {} }]);
+    await h.client.call({ method: "GET", path: "/v1/x" });
+    expect(h.apiCalls()[0]!.headers["Content-Type"]).toBeUndefined();
+  });
+});
+
 describe("PaypalClient idempotency", () => {
   it("sends a derived PayPal-Request-Id and reuses it across a retry", async () => {
     const h = harness([
