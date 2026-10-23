@@ -18,7 +18,13 @@
     "gate:3": "tsx gate/03-payout-unclaimed.ts",
     "gate:4": "tsx gate/04-invoice.ts",
     "gate:5": "tsx gate/05-webhooks.ts",
-    "gate:6": "tsx gate/06-dispute.ts"
+    "gate:6": "tsx gate/06-dispute.ts",
+    "rehearsal": "tsx bin/rehearsal.ts",
+    "dry-run": "tsx bin/rehearsal.ts dry-run",
+    "bank:add": "tsx bin/rehearsal.ts bank:add",
+    "bank:confirm": "tsx bin/rehearsal.ts bank:confirm",
+    "bank:set-txn": "tsx bin/rehearsal.ts bank:set-txn",
+    "bank:list": "tsx bin/rehearsal.ts bank:list"
   },
   "dependencies": {
     "zod": "^3.23.8"

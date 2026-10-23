@@ -41,13 +41,28 @@ export type LedgerReport = {
   readonly notes: string[];
 };
 
+export type ReconcileOptions = {
+  /**
+   * True only when a write to the ledger has been positively read back in this
+   * run. Defaults to false, because an unverified ledger cannot distinguish a
+   * lost event from one it simply cannot see.
+   */
+  readonly ledgerVerified?: boolean;
+};
+
 export function reconcile(
   expected: readonly Expectation[],
   arrivals: readonly Arrival[],
+  options: ReconcileOptions = {},
 ): LedgerReport {
   const notes: string[] = [];
   const instanceIds = [...new Set(arrivals.map((a) => a.instanceId))].sort();
-  const degraded = instanceIds.length > 1;
+  const ledgerVerified = options.ledgerVerified === true;
+  // Two independent reasons the ledger may be partial: it spans instances, or it
+  // was never proved readable at all. The second is the dangerous one, because
+  // zero visible arrivals also means zero visible instance ids, so counting
+  // instance ids cannot detect it.
+  const degraded = instanceIds.length > 1 || !ledgerVerified;
 
   const byId = new Map<string, Arrival[]>();
   for (const a of arrivals) {
@@ -81,7 +96,12 @@ export function reconcile(
   const expectedIds = new Set(expected.map((e) => e.eventId));
   const unexpected = arrivals.filter((a) => !expectedIds.has(a.eventId));
 
-  if (degraded) {
+  if (!ledgerVerified) {
+    notes.push(
+      "receiver ledger was never proved readable in this run, so a missing event is unproven rather than lost",
+    );
+  }
+  if (instanceIds.length > 1) {
     notes.push(
       `receiver ledger spans ${instanceIds.length} instances (${instanceIds.join(", ")}); a read from one instance cannot see rows written to another`,
     );

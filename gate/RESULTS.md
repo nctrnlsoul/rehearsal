@@ -12,7 +12,7 @@ record created by `gate/` scripts. 119 unit tests pass, typecheck clean.
 | 2 partial refund | **PASS** | Partial refund, independently confirmed on the capture |
 | 3 unclaimed payout | **PASS** | Payout item reached UNCLAIMED |
 | 4 invoice | **PASS** | Invoice created, sent, and recorded paid by API |
-| 5 webhooks | **FAIL (BLOCKED)** | Needs the deployed receiver URL |
+| 5 webhooks | **FAIL (BLOCKED)** | PayPal sent all 5 events; the receiver's in-memory ledger is write-invisible on Vercel |
 | 6 dispute | **FAIL** | Dispute created by API; both sandbox state endpoints refuse at INQUIRY stage |
 
 ## Ids created
@@ -91,11 +91,57 @@ only ever been seen to pass is not yet known to work.
 
 ## The two remaining blockers, with remedies
 
-**Gate 5, receiver URL.** `receiver/` is written, builds clean, and its nine
-endpoint probes all behave as specified locally. It needs deploying to Vercel
-and `REHEARSAL_RECEIVER_ORIGIN` plus `REHEARSAL_RECEIVER_TOKEN` setting. See
-`receiver/README.md`. The deployment must be publicly reachable, so Vercel
-Deployment Protection has to be off for that project or PayPal cannot deliver.
+**Gate 5, the receiver needs durable storage.** Deployed at
+`https://receiver-lyart.vercel.app`, public, token configured on both sides, all
+six security headers present in production, `GET` on the webhook route correctly
+405s. None of that was the problem.
+
+**PayPal's side works completely.** It generated exactly the five events the gate
+wanted, from three actions:
+
+```
+PAYMENT.CAPTURE.COMPLETED        WH-31230315LW2124201-2MM209741C142311X
+PAYMENT.CAPTURE.REFUNDED         WH-7M019708Y67111942-1P757739W4894453D
+PAYMENT.PAYOUTSBATCH.PROCESSING  WH-5ME616355E511751M-76471491842062931
+PAYMENT.PAYOUTS-ITEM.UNCLAIMED   WH-0LP21002GF068300W-98D521050J3511603
+PAYMENT.PAYOUTSBATCH.SUCCESS     WH-01049609NT666711P-8ND9892820348284J
+```
+
+Webhook `9FU40962XL437872W` is registered for the right URL with
+`event_types: [{name:"*", description:"ALL", status:"ENABLED"}]`.
+
+**The receiver's in-memory ledger cannot work on Vercel.** Proved directly: a
+synthetic event POSTed by hand returns `200` and is then unreadable, across three
+consecutive reads, all served by the same stable instance. Writes and reads land
+on different serverless instances, so the ledger records arrivals into memory
+nothing can ever read. `receiver/README.md` predicted this exact failure; it is
+now confirmed rather than theoretical.
+
+**Three of my own bugs, found and fixed in the same run:**
+
+1. **A failed query read as an empty result.** The `webhooks-events` list returned
+   `400` and the code took the absent `events` array as "zero events sent". That
+   is the `?? []` fail-open shape the standing rules single out by name, and it
+   turned a malformed request into apparent silence from PayPal.
+2. **`start_time` must not carry milliseconds.** PayPal answers
+   `VALIDATION_ERROR: "Datetime needs to be in the ISO 8601 format specified in
+   RFC 3339"`. Without millis the same query returns `200` and five events.
+3. **The ambiguity detector could not see its own failure mode.** It flagged a
+   split ledger by counting distinct instance ids *among arrivals*. With arrivals
+   invisible there are zero arrivals and therefore zero instance ids, so it would
+   have reported a confident "five events missing". `reconcile` now takes
+   `ledgerVerified`, defaults to not trusting the ledger, and downgrades any
+   missing event to **ambiguous** unless a write has been positively read back.
+
+**The gate now positive-controls its instrument before measuring.** It POSTs a
+self-test event and requires it readable before firing anything real. Gate 5 now
+fails in about ten seconds with the correct diagnosis instead of spending four
+minutes to produce a false negative.
+
+**Remedy, needs a decision.** Replace the in-memory ledger with one durable
+table. Supabase is already in the stack and the console will need a database
+regardless. That means a table, a service role key in the Vercel project, and a
+redeploy, so it is Brian's call rather than something to do unilaterally.
 
 **Gate 6, the approval click is done.** Order `3RK936819N963521R` was approved as
 the sandbox buyer business account and captured as `1G18470618640833J`. A

@@ -17,45 +17,45 @@ const arr = (id: string, receivedAtMs: number, instanceId = "i1"): Arrival => ({
   instanceId,
 });
 
-describe("reconcile", () => {
+/** Most tests assume a ledger already proved readable; that is the normal path. */
+const rec = (e: readonly Expectation[], a: readonly Arrival[]) =>
+  reconcile(e, a, { ledgerVerified: true });
+
+describe("reconcile with a verified ledger", () => {
   it("passes when every expected event arrived, and reports latency", () => {
-    const r = reconcile([exp("a"), exp("b")], [arr("a", T + 400), arr("b", T + 1200)]);
+    const r = rec([exp("a"), exp("b")], [arr("a", T + 400), arr("b", T + 1200)]);
     expect(r.verdict).toBe("pass");
     expect(r.missing).toHaveLength(0);
     expect(r.matched.map((m) => m.latencyMs)).toEqual([400, 1200]);
   });
 
   it("fails and names the missing event", () => {
-    const r = reconcile([exp("a"), exp("b")], [arr("a", T + 400)]);
+    const r = rec([exp("a"), exp("b")], [arr("a", T + 400)]);
     expect(r.verdict).toBe("fail");
     expect(r.missing.map((m) => m.eventId)).toEqual(["b"]);
   });
 
-  // An in-memory receiver ledger read from one instance cannot see rows written
-  // to another, so "missing" and "stored elsewhere" are indistinguishable.
-  it("reports ambiguous, not fail, when the ledger is split across instances", () => {
-    const r = reconcile([exp("a"), exp("b")], [arr("a", T + 400, "i1"), arr("b", T + 500, "i2")]);
+  it("reports ambiguous when the ledger is split across instances", () => {
+    const r = rec([exp("a"), exp("b")], [arr("a", T + 400, "i1"), arr("b", T + 500, "i2")]);
     expect(r.degraded).toBe(true);
     expect(r.verdict).toBe("pass"); // nothing missing, so the split did not cost us
 
-    const r2 = reconcile(
+    const r2 = rec(
       [exp("a"), exp("b"), exp("c")],
       [arr("a", T + 400, "i1"), arr("b", T + 500, "i2")],
     );
-    expect(r2.degraded).toBe(true);
     expect(r2.verdict).toBe("ambiguous");
     expect(r2.notes.join(" ")).toMatch(/instance/i);
   });
 
-  // An empty run must never read as a pass.
   it("fails when nothing was expected", () => {
-    const r = reconcile([], []);
+    const r = rec([], []);
     expect(r.verdict).toBe("fail");
     expect(r.notes.join(" ")).toMatch(/nothing was expected/i);
   });
 
   it("counts a redelivery of the same event once and notes it", () => {
-    const r = reconcile([exp("a")], [arr("a", T + 400), arr("a", T + 9000)]);
+    const r = rec([exp("a")], [arr("a", T + 400), arr("a", T + 9000)]);
     expect(r.verdict).toBe("pass");
     expect(r.matched).toHaveLength(1);
     expect(r.matched[0]!.duplicates).toBe(1);
@@ -64,20 +64,48 @@ describe("reconcile", () => {
   });
 
   it("lists arrivals that match no expectation", () => {
-    const r = reconcile([exp("a")], [arr("a", T + 10), arr("zz", T + 20)]);
+    const r = rec([exp("a")], [arr("a", T + 10), arr("zz", T + 20)]);
     expect(r.unexpected.map((u) => u.eventId)).toEqual(["zz"]);
     expect(r.verdict).toBe("pass");
   });
 
   it("flags clock skew rather than reporting a negative latency silently", () => {
-    const r = reconcile([exp("a")], [arr("a", T - 5000)]);
+    const r = rec([exp("a")], [arr("a", T - 5000)]);
     expect(r.notes.join(" ")).toMatch(/skew/i);
     expect(r.matched[0]!.latencyMs).toBe(-5000);
   });
 
   it("surfaces an unverified arrival", () => {
-    const r = reconcile([exp("a")], [{ ...arr("a", T + 10), verified: false }]);
+    const r = rec([exp("a")], [{ ...arr("a", T + 10), verified: false }]);
     expect(r.matched[0]!.verified).toBe(false);
     expect(r.notes.join(" ")).toMatch(/signature/i);
+  });
+});
+
+describe("reconcile with an unproved ledger", () => {
+  // The real failure this guards: an in-memory receiver ledger on Vercel served
+  // reads from one instance while PayPal's deliveries landed on others. Zero
+  // arrivals were visible, so counting instance ids could not detect the problem
+  // and the old code would have called five delivered events "missing".
+  it("calls everything missing AMBIGUOUS, never a confident fail", () => {
+    const r = reconcile([exp("a"), exp("b"), exp("c")], []);
+    expect(r.verdict).toBe("ambiguous");
+    expect(r.degraded).toBe(true);
+    expect(r.missing).toHaveLength(3);
+    expect(r.notes.join(" ")).toMatch(/never proved readable/i);
+  });
+
+  it("defaults to unproved when no option is passed, rather than assuming trust", () => {
+    expect(reconcile([exp("a")], []).verdict).toBe("ambiguous");
+    expect(reconcile([exp("a")], [], { ledgerVerified: false }).verdict).toBe("ambiguous");
+  });
+
+  it("still passes when everything arrived, since nothing is then unproven", () => {
+    const r = reconcile([exp("a")], [arr("a", T + 50)]);
+    expect(r.verdict).toBe("pass");
+  });
+
+  it("still fails an empty expectation set, which proves nothing either way", () => {
+    expect(reconcile([], []).verdict).toBe("fail");
   });
 });

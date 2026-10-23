@@ -80,8 +80,16 @@ await runGate({
     const ledgerUrl = assertAllowedEventTarget(`${origin}${LEDGER_PATH}`, [origin]).toString();
     ctx.log(`target ${webhookTarget}`);
 
+    // Scope every read to this run's window. The ledger caps how many rows it
+    // returns, so relying on that cap alone would let an older backlog, or
+    // anyone posting junk to the public webhook endpoint, push this run's real
+    // arrivals out of view.
+    const ledgerSince = new Date(Date.now() - 60_000).toISOString();
+
     const readLedger = async (): Promise<LedgerSnapshot> => {
-      const res = await fetch(ledgerUrl, {
+      const url = new URL(ledgerUrl);
+      url.searchParams.set("since", ledgerSince);
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(15_000),
       });
@@ -100,6 +108,41 @@ await runGate({
       };
     }
     ctx.log(`receiver reachable, instance ${baseline.instanceId}, ${baseline.rows.length} existing rows`);
+
+    // Positive control on the measuring instrument, before any real event is
+    // fired. If a write we make ourselves cannot be read back, then "missing"
+    // means nothing. The absence of this check is what let an unreadable ledger
+    // look exactly like five lost events.
+    const probeId = `WH-REHEARSAL-SELFTEST-${ctx.runId}`;
+    const probe = await fetch(webhookTarget, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: probeId,
+        event_type: "REHEARSAL.SELFTEST",
+        resource: { id: "selftest" },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    ctx.log(`ledger self-test POST returned http ${probe.status}`);
+
+    let ledgerVerified = false;
+    for (let attempt = 1; attempt <= 3 && !ledgerVerified; attempt += 1) {
+      const snap = await readLedger();
+      ledgerVerified = snap.rows.some((r) => r.eventId === probeId);
+      ctx.log(
+        `ledger self-test read ${attempt}: instance ${snap.instanceId}, probe ${ledgerVerified ? "VISIBLE" : "not visible"}`,
+      );
+      if (!ledgerVerified && attempt < 3) await sleep(4000);
+    }
+
+    if (!ledgerVerified) {
+      return {
+        ok: false,
+        reason: `the receiver accepted our self-test event with http ${probe.status} but cannot read it back, so its ledger is write-invisible and any missing-event result would be meaningless. An in-memory ledger cannot work on Vercel because writes and reads land on different serverless instances. Replace it with a durable store before trusting this gate.`,
+        qualifier: "BLOCKED",
+      };
+    }
 
     const client = new PaypalClient(credentialsFor("seller"), {
       label: "seller",
@@ -139,7 +182,11 @@ await runGate({
     // 2. Cause real events. Three actions, which between them produce order,
     //    capture, refund and payout events.
     const actionsStartedAtMs = Date.now();
-    const startTimeIso = new Date(actionsStartedAtMs - 120_000).toISOString();
+    // PayPal rejects a start_time carrying milliseconds with VALIDATION_ERROR:
+    // "Datetime needs to be in the ISO 8601 format specified in RFC 3339".
+    const startTimeIso = new Date(actionsStartedAtMs - 120_000)
+      .toISOString()
+      .replace(/\.\d{3}Z$/, "Z");
 
     const order = await client.call({
       method: "POST",
@@ -210,12 +257,26 @@ await runGate({
     // 3. Ask PayPal what it actually sent. This is the authoritative "expected"
     //    list, independent of both our actions and the receiver.
     let expected: Expectation[] = [];
+    let listOk = false;
+    let listError = "the event list was never queried";
     const eventDeadline = Date.now() + EVENT_POLL_BUDGET_MS;
     while (Date.now() < eventDeadline) {
       const listed = await client.call({
         method: "GET",
         path: `/v1/notifications/webhooks-events?page_size=50&start_time=${encodeURIComponent(startTimeIso)}`,
       });
+
+      // A failed query must never read as "zero events". That is the fail-open
+      // shape the standing rules single out, and it made a 400 look like silence.
+      if (listed.status !== 200) {
+        listOk = false;
+        listError = `http ${listed.status}: ${errorSummary(listed.body, listed.bodyPreview)}`;
+        ctx.log(`webhooks-events list FAILED, ${listError}`);
+        await sleep(8000);
+        continue;
+      }
+      listOk = true;
+
       expected = arrayOf(listed.body, "events")
         .map((e) => ({
           eventId: typeof e["id"] === "string" ? e["id"] : "",
@@ -231,10 +292,17 @@ await runGate({
 
     for (const e of expected) ctx.log(`  sent ${e.eventType} ${e.eventId}`);
 
+    if (!listOk) {
+      return {
+        ok: false,
+        reason: `could not read PayPal's own event list, so what it sent is unknown and nothing can be reconciled: ${listError}`,
+        qualifier: "UNKNOWN",
+      };
+    }
     if (expected.length === 0) {
       return {
         ok: false,
-        reason: `PayPal reported no events in the window, so nothing could be delivered. Webhook ${webhookId} is registered for ${webhookTarget}.`,
+        reason: `PayPal's event list read cleanly but reported no events in the window, so nothing could be delivered. Webhook ${webhookId} is registered for ${webhookTarget}.`,
         qualifier: "UNKNOWN",
       };
     }
@@ -246,6 +314,7 @@ await runGate({
       const snap = await readLedger();
       arrivals = snap.rows
         .filter((r): r is LedgerRow & { eventId: string } => typeof r.eventId === "string")
+        .filter((r) => r.eventId !== probeId)
         .map((r) => ({
           eventId: r.eventId,
           eventType: r.eventType ?? "",
@@ -260,7 +329,7 @@ await runGate({
       await sleep(5000);
     }
 
-    const report = reconcile(expected, arrivals);
+    const report = reconcile(expected, arrivals, { ledgerVerified });
     for (const m of report.matched) {
       ctx.log(`  arrived ${m.eventType} ${m.eventId} after ${m.latencyMs}ms verified=${m.verified}`);
     }

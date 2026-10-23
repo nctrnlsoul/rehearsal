@@ -1,0 +1,73 @@
+name: CI
+
+# Typecheck and unit tests only.
+#
+# No secrets are referenced and no job talks to PayPal. The test suite is
+# hermetic: the pure core has no I/O at all, the adapter tests inject a fake
+# fetch, and the only filesystem tests use a temporary directory. The gate
+# scripts and the scenario runner are deliberately NOT run here, because both
+# create real records in the PayPal sandbox and both need credentials.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+  receiver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: receiver/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: receiver
+
+      # The ledger takes fetch by injection, so these tests open no socket and
+      # need no Supabase project.
+      - name: Unit tests
+        run: npm test
+        working-directory: receiver
+
+      # next build also type checks, and it needs no environment variables: the
+      # routes read them at request time.
+      - name: Build
+        run: npm run build
+        working-directory: receiver

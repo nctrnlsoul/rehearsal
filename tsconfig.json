@@ -21,6 +21,6 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "gate", "tests"],
+  "include": ["src", "gate", "tests", "bin"],
   "exclude": ["node_modules", "receiver"]
 }
