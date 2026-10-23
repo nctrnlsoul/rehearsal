@@ -2,6 +2,7 @@ import { credentialsFor, optionalEnv } from "../src/adapters/env";
 import { PaypalClient } from "../src/adapters/paypal";
 import { seedOf } from "../src/core/idempotency";
 import { classify } from "../src/core/outcome";
+import { selfLinkId } from "../src/core/paypalLinks";
 import { CURRENCY } from "./_fixtures";
 import { clearState, errorSummary, loadState, pick, runGate, saveState, sleep } from "./_harness";
 
@@ -285,8 +286,18 @@ await runGate({
           },
         },
       });
-      disputeId = pick(filed.body, ["dispute_id"]) ?? pick(filed.body, ["id"]);
-      if (disputeId !== null) ctx.record("dispute_id", disputeId);
+      // Sandbox dispute creation returns a 201 whose only content is a self
+      // link, so the id has to come out of the link when no id field exists.
+      disputeId =
+        pick(filed.body, ["dispute_id"]) ??
+        pick(filed.body, ["id"]) ??
+        selfLinkId(filed.body);
+      if (disputeId !== null) {
+        ctx.record("dispute_id", disputeId);
+        // Saved before anything else can fail, so a later error never orphans
+        // a dispute that already exists.
+        saveState("gate6", { ...saved, captureId, disputeId });
+      }
       ctx.log(`create dispute returned http ${filed.status}`);
 
       if (disputeId === null) {
@@ -321,18 +332,23 @@ await runGate({
     }
 
     // Phase D: move it. require-evidence is sandbox-only and seller-side.
-    const require = await seller.call({
+    //
+    // A rejection here is NOT fatal to the run. Both sandbox endpoints are
+    // undocumented as to life cycle stage, so the useful thing is to attempt
+    // both and report both rather than stopping at the first refusal and
+    // learning nothing about the second. The verdict below still demands both.
+    const requireEv = await seller.call({
       method: "POST",
       path: `/v1/customer/disputes/${disputeId}/require-evidence`,
       idempotencySeed: seedOf(["gate6", "require-evidence", disputeId]),
       body: { action: "SELLER_EVIDENCE" },
     });
-    ctx.log(`require-evidence returned http ${require.status}`);
-    if (require.status < 200 || require.status >= 300) {
-      return {
-        ok: false,
-        reason: `require-evidence failed on dispute ${disputeId}: http ${require.status}, ${errorSummary(require.body, require.bodyPreview)}`,
-      };
+    const requireOk = requireEv.status >= 200 && requireEv.status < 300;
+    ctx.log(`require-evidence returned http ${requireEv.status}`);
+    if (!requireOk) {
+      ctx.note(
+        `require-evidence REJECTED: http ${requireEv.status}, ${errorSummary(requireEv.body, requireEv.bodyPreview)}`,
+      );
     }
 
     const afterRequire = await seller.call({
@@ -340,7 +356,10 @@ await runGate({
       path: `/v1/customer/disputes/${disputeId}`,
     });
     const requiredStatus = pick(afterRequire.body, ["status"]);
-    ctx.log(`dispute after require-evidence: ${requiredStatus ?? "unreadable"}`);
+    const requiredStage = pick(afterRequire.body, ["dispute_life_cycle_stage"]);
+    ctx.log(
+      `dispute after require-evidence: status ${requiredStatus ?? "unreadable"}, stage ${requiredStage ?? "unreadable"}`,
+    );
 
     // Phase E: settle it.
     const adjudicate = await seller.call({
@@ -353,7 +372,7 @@ await runGate({
     if (adjudicate.status < 200 || adjudicate.status >= 300) {
       return {
         ok: false,
-        reason: `adjudicate failed on dispute ${disputeId}: http ${adjudicate.status}, ${errorSummary(adjudicate.body, adjudicate.bodyPreview)}`,
+        reason: `on dispute ${disputeId} at stage ${requiredStage ?? "unreadable"}: require-evidence ${requireOk ? "accepted" : "REJECTED"}, adjudicate failed with http ${adjudicate.status}, ${errorSummary(adjudicate.body, adjudicate.bodyPreview)}`,
       };
     }
 
@@ -374,6 +393,16 @@ await runGate({
         ok: false,
         reason: `adjudicate was accepted but dispute ${disputeId} reads ${finalStatus ?? "unreadable"}, not RESOLVED, within ${DISPUTE_POLL_BUDGET_MS / 1000}s`,
         qualifier: "AMBIGUOUS",
+      };
+    }
+
+    // Both halves are required. Settling without being able to move it first is
+    // a partial result, and a partial result must not print PASS.
+    if (!requireOk) {
+      return {
+        ok: false,
+        reason: `dispute ${disputeId} was filed by the buyer app and SETTLED to ${finalStatus} (${outcome ?? "outcome unreadable"}) by adjudicate, but require-evidence was rejected at stage ${requiredStage ?? "unreadable"}, so only the settle half is proven`,
+        qualifier: "PARTIAL",
       };
     }
 
