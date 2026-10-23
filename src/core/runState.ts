@@ -30,6 +30,8 @@ export type RunState = {
   readonly updatedAt: string;
   readonly halted: boolean;
   readonly haltReason: string | null;
+  /** Run-level ids that belong to no single step, such as a registered webhook. */
+  readonly meta: Record<string, string>;
   readonly steps: Record<string, StepRecord>;
 };
 
@@ -70,8 +72,18 @@ export function initRunState(args: {
     updatedAt: args.nowIso,
     halted: false,
     haltReason: null,
+    meta: {},
     steps,
   };
+}
+
+export function recordMeta(
+  state: RunState,
+  key: string,
+  value: string,
+  nowIso: string,
+): RunState {
+  return { ...state, meta: { ...state.meta, [key]: value }, updatedAt: nowIso };
 }
 
 export function markStarted(state: RunState, stepId: string, nowIso: string): RunState {
@@ -123,6 +135,47 @@ export function recordOutcome(
       ? `step ${stepId} ended in an unknown state: ${outcome.detail}`
       : `step ${stepId} failed: ${outcome.detail}`;
   return { ...next, halted: true, haltReason: why };
+}
+
+export type RetryResult =
+  | { readonly ok: true; readonly state: RunState }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * Clears one failed or unknown step back to pending and lifts the halt.
+ *
+ * Deliberately NOT automatic. An unknown step may already have written, so
+ * re-running it could double a payment. Only a human who has checked what
+ * actually happened can authorise this, which is why it is an explicit call and
+ * why a succeeded step can never be reset.
+ */
+export function retryStep(state: RunState, stepId: string, nowIso: string): RetryResult {
+  const step = state.steps[stepId];
+  if (step === undefined) {
+    return { ok: false, error: `run ${state.runId} has no step ${stepId}` };
+  }
+  if (step.status === "succeeded") {
+    return {
+      ok: false,
+      error: `step ${stepId} already succeeded; re-running it could duplicate a payment`,
+    };
+  }
+  if (step.status === "pending") {
+    return { ok: false, error: `step ${stepId} has not run yet, so there is nothing to retry` };
+  }
+  return {
+    ok: true,
+    state: {
+      ...state,
+      halted: false,
+      haltReason: null,
+      updatedAt: nowIso,
+      steps: {
+        ...state.steps,
+        [stepId]: { ...step, status: "pending", detail: "", finishedAt: null },
+      },
+    },
+  };
 }
 
 export function haltRun(state: RunState, reason: string, nowIso: string): RunState {

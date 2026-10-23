@@ -5,7 +5,9 @@ import {
   initRunState,
   markStarted,
   nextRunnableStep,
+  recordMeta,
   recordOutcome,
+  retryStep,
   summarize,
 } from "../src/core/runState";
 
@@ -127,6 +129,51 @@ describe("resume behaviour", () => {
     let s = markStarted(fresh(), "a", T1);
     s = markStarted(s, "a", T1);
     expect(s.steps["a"]!.attempts).toBe(2);
+  });
+});
+
+describe("retryStep", () => {
+  it("clears an unknown step back to pending and lifts the halt", () => {
+    const halted = recordOutcome(fresh(), "a", { kind: "unknown", detail: "threw" }, T1);
+    expect(halted.halted).toBe(true);
+    const r = retryStep(halted, "a", T1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.state.halted).toBe(false);
+    expect(r.state.steps["a"]!.status).toBe("pending");
+    expect(nextRunnableStep(r.state, needs)).toBe("a");
+  });
+
+  it("clears a failed step too", () => {
+    const halted = recordOutcome(fresh(), "a", { kind: "failed", detail: "declined" }, T1);
+    expect(retryStep(halted, "a", T1).ok).toBe(true);
+  });
+
+  // Never re-run a success: that is how a payment gets made twice.
+  it("refuses to reset a step that already succeeded", () => {
+    const done = recordOutcome(fresh(), "a", { kind: "success", detail: "ok" }, T1);
+    const r = retryStep(done, "a", T1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/duplicate a payment/i);
+  });
+
+  it("refuses an unknown step id or a step that never ran", () => {
+    expect(retryStep(fresh(), "ghost", T1).ok).toBe(false);
+    expect(retryStep(fresh(), "a", T1).ok).toBe(false);
+  });
+});
+
+describe("recordMeta", () => {
+  it("stores run-level ids that belong to no single step", () => {
+    const s = recordMeta(fresh(), "webhook_id", "WH-1", T1);
+    expect(s.meta).toEqual({ webhook_id: "WH-1" });
+    expect(s.updatedAt).toBe(T1);
+  });
+
+  it("starts empty and accumulates", () => {
+    expect(fresh().meta).toEqual({});
+    const s = recordMeta(recordMeta(fresh(), "a", "1", T1), "b", "2", T1);
+    expect(s.meta).toEqual({ a: "1", b: "2" });
   });
 });
 
