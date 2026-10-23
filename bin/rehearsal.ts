@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { AiBudgetTracker, aiBudgetFromEnv } from "../src/ai/budget";
 import {
   DEFAULT_PLANNER_MODEL,
@@ -152,22 +152,33 @@ async function planCommand(rest: string[]): Promise<void> {
 
   for (const line of dryRunLines(outcome.scenario)) console.log(line);
 
-  const out = flags["out"];
-  if (out !== undefined && out !== "true") {
-    writeFileSync(resolve(out), `${JSON.stringify(outcome.scenario, null, 2)}\n`, "utf8");
-    console.log("");
-    console.log(`scenario written to ${resolve(out)}`);
-  }
+  // Always saved. Planning is NOT deterministic (claude-sonnet-5 ignores
+  // temperature), so "re-run the same command with --yes" would review one plan
+  // and execute a different one. The file is the artifact you reviewed.
+  const chosen = flags["out"];
+  const outPath =
+    chosen !== undefined && chosen !== "true"
+      ? resolve(chosen)
+      : resolve(RUNS_DIR, "plans", `plan-${isoNoMillis(new Date()).replace(/[:TZ-]/g, "")}.json`);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, `${JSON.stringify(outcome.scenario, null, 2)}\n`, "utf8");
+  console.log("");
+  console.log(`plan saved to ${outPath}`);
 
   if (flags["yes"] !== "true") {
     console.log("");
-    console.log("Nothing has run. This plan was generated from an untrusted description,");
-    console.log("so read it, then re-run the same command with --yes to execute it.");
+    console.log("Nothing has run. This plan came from an untrusted description, so read it,");
+    console.log("then run the EXACT plan you just read:");
+    console.log(`  npm run rehearsal -- run ${outPath}`);
+    console.log("");
+    console.log("Re-running `plan --yes` would ask the model again and could execute a");
+    console.log("different plan from the one above.");
     return;
   }
 
   console.log("");
-  console.log("--yes given, executing this plan against the sandbox");
+  console.log("--yes given: executing the plan printed above, from this same invocation.");
+  console.log("No second model call is made, so what ran is what you just read.");
   await executeAndReport(outcome.scenario, {});
 }
 
