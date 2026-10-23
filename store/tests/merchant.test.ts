@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { Db, StoreRow } from "../lib/db";
 import {
   DEDUPE_BY_EVENT_ID,
+  MAX_REASON_CHARS,
   actionFor,
+  cleanReason,
   handleEvent,
   readEvent,
+  recordRefusal,
   summarise,
 } from "../lib/merchant";
 
@@ -133,18 +136,70 @@ describe("signature enforcement", () => {
   // The webhook endpoint is public, so without this anyone could post a forged
   // capture event and have an order fulfilled for free. This is NOT the planted
   // bug; the planted bug is the missing dedupe.
-  it("never fulfils an event whose signature failed", async () => {
+  it("never fulfils an event whose signature failed, and records why", async () => {
     const { db, inserted } = fakeDb();
-    const action = await handleEvent(db, captureEvent("WH-FORGED"), { verified: false });
-    expect(action).toBe("ignored");
-    expect(inserted[0]!.action).toBe("ignored");
+    const action = await handleEvent(db, captureEvent("WH-FORGED"), {
+      verified: false,
+      detail: "missing paypal-transmission-sig",
+    });
+    expect(action).toBe("refused");
+    expect(inserted[0]!.action).toBe("refused");
+    expect(inserted[0]!.reason).toBe("missing paypal-transmission-sig");
     expect(summarise(inserted.map((r) => ({ ...r, receivedAtMs: 0 }))).orders[0]!.fulfilmentCount).toBe(0);
   });
 
-  it("never fulfils when it could not check at all", async () => {
+  it("never fulfils when it could not check at all, and records why", async () => {
     const { db, inserted } = fakeDb();
-    expect(await handleEvent(db, captureEvent("WH-UNCHECKED"), { verified: null })).toBe("ignored");
-    expect(inserted[0]!.action).toBe("ignored");
+    expect(
+      await handleEvent(db, captureEvent("WH-UNCHECKED"), {
+        verified: null,
+        detail: "no webhook is registered for this store's handler URL",
+      }),
+    ).toBe("refused");
+    expect(inserted[0]!).toMatchObject({ action: "refused", verified: null });
+    expect(inserted[0]!.reason).toContain("no webhook is registered");
+  });
+
+  it("still names a reason when the caller gave none", async () => {
+    const { db, inserted } = fakeDb();
+    await handleEvent(db, captureEvent("WH-A"), { verified: false });
+    await handleEvent(db, captureEvent("WH-B"), { verified: null });
+    expect(inserted.map((r) => r.reason)).toEqual(["signature did not verify", "could not verify"]);
+  });
+
+  it("keeps a reason single-line and bounded, because the endpoint is public", () => {
+    expect(cleanReason("host \u001b[31mevil\nnext\u202e")).toBe("host [31mevil next");
+    expect(Array.from(cleanReason("x".repeat(5000)))).toHaveLength(MAX_REASON_CHARS);
+    expect(cleanReason("\u0000\u0007")).toBe("refused");
+  });
+
+  it("records a request that could not be read as an event", async () => {
+    const { db, inserted } = fakeDb();
+    await recordRefusal(db, "body is not JSON");
+    expect(inserted).toEqual([
+      {
+        eventId: null,
+        eventType: "UNKNOWN",
+        captureId: null,
+        amount: null,
+        currency: null,
+        action: "refused",
+        verified: null,
+        reason: "body is not JSON",
+      },
+    ]);
+  });
+
+  // "ignored" now means only: verified, but of no use to the shop.
+  it("still ignores, without a reason, a verified event of a type it does not handle", async () => {
+    const { db, inserted } = fakeDb();
+    const action = await handleEvent(
+      db,
+      { id: "WH-X", event_type: "BILLING.PLAN.CREATED", resource: {} },
+      { verified: true },
+    );
+    expect(action).toBe("ignored");
+    expect(inserted[0]!.reason).toBeNull();
   });
 
   it("records the attempt so an ignored event is still visible", async () => {
@@ -170,6 +225,7 @@ describe("summarise", () => {
     currency: "USD",
     action: "fulfilled",
     verified: true,
+    reason: null,
     receivedAtMs: 0,
     ...over,
   });
@@ -197,14 +253,47 @@ describe("summarise", () => {
       row({ eventId: "WH-1" }),
       row({ eventId: "WH-2", captureId: "CAP-2" }),
       row({ eventId: "WH-2", captureId: "CAP-2", action: "duplicate_ignored" }),
-      row({ eventId: "WH-3", action: "ignored", verified: false }),
+      row({ eventId: "WH-3", action: "refused", verified: false, reason: "bad sig" }),
+      row({ eventId: "WH-3", action: "refused", verified: false, reason: "bad sig" }),
+      row({ eventId: "WH-3", action: "refused", verified: null, reason: "no webhook" }),
       row({ eventId: null }),
     ]);
+    const none = { refused: 0, refusalReasons: [] };
     expect(state.deliveries).toEqual([
-      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 2, duplicatesIgnored: 0, other: 0 },
-      { eventId: "WH-2", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: 1, other: 0 },
-      { eventId: "WH-3", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 0, duplicatesIgnored: 0, other: 1 },
+      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 2, duplicatesIgnored: 0, other: 0, ...none },
+      { eventId: "WH-2", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: 1, other: 0, ...none },
+      {
+        eventId: "WH-3",
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+        fulfilled: 0,
+        duplicatesIgnored: 0,
+        other: 3,
+        refused: 3,
+        refusalReasons: ["bad sig", "no webhook"],
+      },
     ]);
+  });
+
+  it("reports refusals that carry no event id separately, so they are not lost", () => {
+    const state = summarise([
+      row({ eventId: null, action: "refused", reason: "body is not JSON" }),
+      row({ eventId: null, action: "refused", reason: "body is not JSON" }),
+      row({ eventId: null, action: "refused", reason: null }),
+      row({ eventId: null, action: "fulfilled" }),
+    ]);
+    expect(state.unattributedRefusals).toEqual({
+      count: 3,
+      reasons: ["body is not JSON", "no reason recorded"],
+    });
+  });
+
+  it("caps the reasons it lists, however much junk arrives", () => {
+    const junk = Array.from({ length: 50 }, (_, i) =>
+      row({ eventId: null, action: "refused", reason: `junk ${i}` }),
+    );
+    const state = summarise(junk);
+    expect(state.unattributedRefusals.count).toBe(50);
+    expect(state.unattributedRefusals.reasons).toHaveLength(5);
   });
 
   it("counts events whose signature failed, not those never checked", () => {

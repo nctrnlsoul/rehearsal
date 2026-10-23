@@ -9,14 +9,17 @@ const REQUEST_TIMEOUT_MS = 8000;
 export const MAX_ROWS = 1000;
 
 const SELECT_COLUMNS =
-  "event_id,event_type,capture_id,amount,currency,action,verified,received_at";
+  "event_id,event_type,capture_id,amount,currency,action,verified,reason,received_at";
 
 export type StoreAction =
   | "fulfilled"
   | "refund_recorded"
   | "dispute_noted"
   | "duplicate_ignored"
-  | "ignored";
+  /** Verified, but an event type the shop has no use for. */
+  | "ignored"
+  /** Not acted on because it could not be trusted or read. `reason` says why. */
+  | "refused";
 
 export type StoreRow = {
   eventId: string | null;
@@ -26,6 +29,8 @@ export type StoreRow = {
   currency: string | null;
   action: StoreAction;
   verified: boolean | null;
+  /** Why a delivery was refused. Null for anything that was not. */
+  reason: string | null;
   receivedAtMs: number;
 };
 
@@ -110,6 +115,7 @@ function toRow(raw: Record<string, unknown>): StoreRow {
     currency: str(raw["currency"]),
     action: (str(raw["action"]) ?? "ignored") as StoreAction,
     verified: typeof raw["verified"] === "boolean" ? raw["verified"] : null,
+    reason: str(raw["reason"]),
     receivedAtMs: Number.isNaN(at) ? 0 : at,
   };
 }
@@ -149,6 +155,7 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
             currency: row.currency,
             action: row.action,
             verified: row.verified,
+            reason: row.reason,
           },
         ]),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),

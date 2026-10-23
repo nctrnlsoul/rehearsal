@@ -68,6 +68,7 @@ describe("db operations", () => {
       currency: "USD",
       action: "fulfilled",
       verified: true,
+      reason: null,
     });
     const headers = f.calls[0]!.headers;
     expect(headers["apikey"]).toBe(KEY);
@@ -114,6 +115,37 @@ describe("db operations", () => {
     expect(rows.map((r) => r.eventId)).toEqual(["WH-OLD", "WH-NEW"]);
   });
 
+  it("selects, inserts and reads back the refusal reason", async () => {
+    const f = fakeFetch([
+      { status: 201 },
+      {
+        status: 200,
+        body: [
+          { event_id: "WH-1", event_type: "X", action: "refused", verified: false, reason: "bad sig", received_at: "2026-10-23T12:00:00Z" },
+          { event_id: "WH-2", event_type: "X", action: "fulfilled", verified: true, reason: null, received_at: "2026-10-23T12:00:01Z" },
+        ],
+      },
+    ]);
+    const db = createDb(CONFIG, { fetchImpl: f.impl });
+    await db.insert({
+      eventId: "WH-1",
+      eventType: "X",
+      captureId: null,
+      amount: null,
+      currency: null,
+      action: "refused",
+      verified: false,
+      reason: "bad sig",
+    });
+    expect((f.calls[0]!.body as Array<Record<string, unknown>>)[0]!["reason"]).toBe("bad sig");
+    const rows = await db.rows();
+    expect(decodeURIComponent(f.calls[1]!.url)).toContain("reason");
+    expect(rows.map((r) => [r.action, r.reason])).toEqual([
+      ["fulfilled", null],
+      ["refused", "bad sig"],
+    ]);
+  });
+
   it("clamps the row limit", async () => {
     const f = fakeFetch([{ status: 200, body: [] }, { status: 200, body: [] }]);
     const db = createDb(CONFIG, { fetchImpl: f.impl });
@@ -137,6 +169,7 @@ describe("db operations", () => {
           currency: "USD",
           action: "fulfilled",
           verified: true,
+          reason: null,
         })],
       [403, "event lookup", (d: ReturnType<typeof createDb>) => d.hasEvent("WH-1")],
     ] as const) {

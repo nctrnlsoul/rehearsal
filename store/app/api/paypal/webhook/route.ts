@@ -1,5 +1,5 @@
 import { createDb, readConfig } from "../../../../lib/db";
-import { handleEvent } from "../../../../lib/merchant";
+import { handleEvent, recordRefusal } from "../../../../lib/merchant";
 import { verifySignature } from "../../../../lib/verify";
 
 /**
@@ -32,16 +32,30 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false }, { status: 503 });
   }
 
+  const db = createDb(config);
+
+  // Every refusal leaves a row, so a refused delivery can never be mistaken
+  // for one that did not arrive. The status sent back is the same whether or
+  // not the row could be written: recording is evidence, never a way in.
+  const refuse = async (status: number, reason: string): Promise<Response> => {
+    try {
+      await recordRefusal(db, reason);
+    } catch (e) {
+      console.error(`store could not record a refusal: ${(e as Error).message}`);
+    }
+    return Response.json({ ok: false }, { status });
+  };
+
   const raw = await req.text();
   if (raw.length > MAX_BODY_BYTES) {
-    return Response.json({ ok: false }, { status: 413 });
+    return refuse(413, `body over ${MAX_BODY_BYTES} characters`);
   }
 
   let event: unknown;
   try {
     event = JSON.parse(raw);
   } catch {
-    return Response.json({ ok: false }, { status: 400 });
+    return refuse(400, "body is not JSON");
   }
 
   // This endpoint is public, so the signature is the only thing distinguishing
@@ -56,7 +70,7 @@ export async function POST(req: Request): Promise<Response> {
   );
 
   try {
-    await handleEvent(createDb(config), event, { verified });
+    await handleEvent(db, event, { verified, detail });
   } catch (e) {
     console.error(`store handling failed: ${(e as Error).message}`);
     return Response.json({ ok: false }, { status: 500 });
