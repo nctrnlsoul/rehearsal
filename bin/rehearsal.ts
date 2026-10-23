@@ -13,6 +13,7 @@ import {
   claimPurchase,
   confirmCapture,
   emptyBank,
+  markExpired,
 } from "../src/core/purchaseBank";
 import { type RunState, retryStep } from "../src/core/runState";
 import { walletOrderBody } from "../src/core/sandboxFixtures";
@@ -231,6 +232,10 @@ async function bankAdd(rest: string[]): Promise<void> {
     console.log("APPROVE THIS AS THE SANDBOX BUYER BUSINESS ACCOUNT:");
     console.log(`  ${approvalUrl}`);
     console.log("");
+    console.log("Approve it promptly. The link is short lived: one left unapproved for about");
+    console.log("12 hours returned 404 and had to be marked expired. PayPal does not publish");
+    console.log("the exact lifetime, so treat it as minutes to hours, not a day.");
+    console.log("");
     console.log("then run:  npm run bank:confirm");
   }
 }
@@ -254,6 +259,26 @@ async function bankConfirm(): Promise<void> {
       method: "GET",
       path: `/v2/checkout/orders/${purchase.orderId}`,
     });
+    // A 404 means PayPal no longer holds the order, so no amount of waiting will
+    // make it approvable. Mark it dead rather than checking it forever.
+    if (look.status === 404) {
+      const expired = markExpired(
+        bank,
+        purchase.orderId,
+        "PayPal returned 404 on the order, so it lapsed before anyone approved it",
+      );
+      if (expired.ok) {
+        bank = expired.value;
+        store.write(bank);
+        console.log(
+          `order ${purchase.orderId} EXPIRED: PayPal no longer has it (404), so it can never be approved. Run bank:add for a fresh one.`,
+        );
+      } else {
+        console.log(`  ${expired.error}`);
+      }
+      continue;
+    }
+
     const status = pick(look.body, ["status"]);
     console.log(`order ${purchase.orderId} reads ${status ?? "unreadable"}`);
 
