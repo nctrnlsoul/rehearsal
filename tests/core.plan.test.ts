@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { topologicalOrder } from "../src/core/plan";
+import { ancestors, topologicalOrder } from "../src/core/plan";
 
 const n = (id: string, ...needs: string[]) => ({ id, needs });
 
@@ -86,6 +86,45 @@ describe("topologicalOrder", () => {
   });
 
   it("reports every problem at once rather than only the first", () => {
+    const r = topologicalOrder([n("a", "ghost"), n("b", "phantom")]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.filter((e) => e.code === "dangling-dependency")).toHaveLength(2);
+  });
+});
+
+describe("ancestors", () => {
+  it("follows dependencies transitively", () => {
+    const a = ancestors([n("create"), n("send", "create"), n("pay", "send")]);
+    expect([...a.get("pay")!].sort()).toEqual(["create", "send"]);
+    expect([...a.get("send")!]).toEqual(["create"]);
+    expect([...a.get("create")!]).toEqual([]);
+  });
+
+  it("collects both sides of a diamond", () => {
+    const a = ancestors([n("a"), n("b", "a"), n("c", "a"), n("d", "b", "c")]);
+    expect([...a.get("d")!].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("ignores a dangling dependency rather than inventing a node", () => {
+    const a = ancestors([n("x", "ghost")]);
+    expect([...a.get("x")!]).toEqual([]);
+  });
+
+  it("terminates on a cycle instead of recursing forever", () => {
+    const a = ancestors([n("a", "b"), n("b", "a")]);
+    expect(a.has("a")).toBe(true);
+    expect(a.has("b")).toBe(true);
+  });
+
+  it("is unaffected by declaration order", () => {
+    const forward = ancestors([n("create"), n("send", "create"), n("pay", "send")]);
+    const backward = ancestors([n("pay", "send"), n("send", "create"), n("create")]);
+    expect([...forward.get("pay")!].sort()).toEqual([...backward.get("pay")!].sort());
+  });
+});
+
+describe("topologicalOrder, remaining cases", () => {
+  it("still reports multiple dangling dependencies", () => {
     const r = topologicalOrder([n("a", "ghost"), n("b", "phantom")]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.filter((e) => e.code === "dangling-dependency")).toHaveLength(2);

@@ -211,12 +211,38 @@ describe("validateScenario checks from references", () => {
     expect(errs.join(" ")).toMatch(/must reference a card_order/i);
   });
 
-  it("rejects a from reference that is not listed in needs", () => {
+  it("rejects a from reference with no ordering guarantee at all", () => {
     const errs = withSteps([
       { id: "o", kind: "card_order", amount: "40.00" },
       { id: "r", kind: "refund", from: "o", mode: "full" },
     ]);
-    expect(errs.join(" ")).toMatch(/does not list it in needs/i);
+    expect(errs.join(" ")).toMatch(/nothing guarantees/i);
+  });
+
+  // Depending on invoice_send while referencing the invoice_create it needed is
+  // correct, and must not require a redundant second edge.
+  it("accepts a from reference reachable transitively", () => {
+    const r = validateScenario(
+      {
+        ...base(),
+        steps: [
+          { id: "i", kind: "invoice_create", amount: "10.00" },
+          { id: "s", kind: "invoice_send", from: "i", needs: ["i"] },
+          { id: "p", kind: "invoice_record_payment", from: "i", needs: ["s"] },
+        ],
+      },
+      OPTS,
+    );
+    expect(r.ok, r.ok ? "" : r.errors.join("; ")).toBe(true);
+  });
+
+  it("still rejects a from reference on a parallel branch", () => {
+    const errs = withSteps([
+      { id: "i", kind: "invoice_create", amount: "10.00" },
+      { id: "other", kind: "card_order", amount: "1.00" },
+      { id: "s", kind: "invoice_send", from: "i", needs: ["other"] },
+    ]);
+    expect(errs.join(" ")).toMatch(/nothing guarantees/i);
   });
 
   it("rejects a from reference to a step that does not exist", () => {

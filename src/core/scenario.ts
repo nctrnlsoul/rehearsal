@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { assertAllowedEventTarget } from "./eventTarget";
 import { currencyExponent, toMinor } from "./money";
-import { topologicalOrder } from "./plan";
+import { ancestors, topologicalOrder } from "./plan";
 
 /**
  * The scenario schema. Nothing runs unless it passes this, so every rule the
@@ -201,6 +201,7 @@ export function scenarioSchema(options: ScenarioOptions) {
     }
 
     const byId = new Map(scenario.steps.map((s) => [s.id, s]));
+    const reachable = ancestors(scenario.steps.map((s) => ({ id: s.id, needs: s.needs })));
     scenario.steps.forEach((step, i) => {
       const required = FROM_MUST_BE[step.kind];
       if (required === undefined) return;
@@ -216,10 +217,12 @@ export function scenarioSchema(options: ScenarioOptions) {
           `${step.kind} step ${step.id} must reference a ${required} step, but ${from} is a ${target.kind}`,
         );
       }
-      if (!step.needs.includes(from)) {
+      // Transitive, not direct: depending on invoice_send and referencing the
+      // invoice_create it needed is correct, and should not need a second edge.
+      if (!reachable.get(step.id)?.has(from)) {
         issue(
           ["steps", i, "needs"],
-          `${step.kind} step ${step.id} references ${from} but does not list it in needs, so the run order would be implicit`,
+          `${step.kind} step ${step.id} references ${from}, but nothing guarantees ${from} runs first; add it to needs, or depend on a step that already does`,
         );
       }
     });

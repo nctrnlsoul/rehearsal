@@ -20,6 +20,37 @@ export type PlanResult =
   | { readonly ok: true; readonly order: string[]; readonly waves: string[][] }
   | { readonly ok: false; readonly errors: PlanError[] };
 
+/**
+ * Every step that is guaranteed to run before each step, following dependencies
+ * transitively. A step may reference any ancestor's output, not only a direct
+ * dependency, so this is what "will already have run" actually means.
+ */
+export function ancestors(nodes: readonly PlanNode[]): Map<string, Set<string>> {
+  const needs = new Map<string, readonly string[]>(nodes.map((n) => [n.id, n.needs]));
+  const memo = new Map<string, Set<string>>();
+
+  const walk = (id: string, visiting: Set<string>): Set<string> => {
+    const cached = memo.get(id);
+    if (cached !== undefined) return cached;
+    // A cycle is reported elsewhere; here it just must not recurse forever.
+    if (visiting.has(id)) return new Set();
+
+    visiting.add(id);
+    const out = new Set<string>();
+    for (const parent of needs.get(id) ?? []) {
+      if (!needs.has(parent)) continue;
+      out.add(parent);
+      for (const grand of walk(parent, visiting)) out.add(grand);
+    }
+    visiting.delete(id);
+    memo.set(id, out);
+    return out;
+  };
+
+  for (const node of nodes) walk(node.id, new Set());
+  return memo;
+}
+
 export function topologicalOrder(nodes: readonly PlanNode[]): PlanResult {
   const errors: PlanError[] = [];
 
