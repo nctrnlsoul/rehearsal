@@ -17,11 +17,14 @@ import {
   type Bank,
   addPurchase,
   attachTransactionId,
+  availablePurchases,
   claimPurchase,
   confirmCapture,
   emptyBank,
   markExpired,
 } from "../src/core/purchaseBank";
+import { assertAllowedEventTarget } from "../src/core/eventTarget";
+import { type FinderDeps, finderReportLines, runFinder } from "../src/ai/finder";
 import { type RunState, retryStep } from "../src/core/runState";
 import { walletOrderBody } from "../src/core/sandboxFixtures";
 import { type Scenario, validateScenario } from "../src/core/scenario";
@@ -57,7 +60,11 @@ function args(rest: string[]): Record<string, string> {
 
 /** Origins a scenario may fire real events at. Empty means none are permitted. */
 function allowedEventOrigins(): string[] {
-  const raw = [optionalEnv("REHEARSAL_EVENT_ORIGINS"), optionalEnv("REHEARSAL_RECEIVER_ORIGIN")]
+  const raw = [
+    optionalEnv("REHEARSAL_EVENT_ORIGINS"),
+    optionalEnv("REHEARSAL_RECEIVER_ORIGIN"),
+    optionalEnv("REHEARSAL_STORE_ORIGIN"),
+  ]
     .filter((v): v is string => v !== null)
     .flatMap((v) => v.split(","))
     .map((v) => v.trim())
@@ -182,6 +189,76 @@ async function planCommand(rest: string[]): Promise<void> {
   await executeAndReport(outcome.scenario, {});
 }
 
+// ---------------------------------------------------------------- find
+
+async function findCommand(rest: string[]): Promise<void> {
+  const description =
+    rest[0] !== undefined && !rest[0].startsWith("--")
+      ? rest[0]
+      : "a small online shop that takes card orders, invoices wholesale buyers, pays suppliers, and occasionally gets a dispute";
+  const flags = args(rest.slice(rest[0] !== undefined && !rest[0].startsWith("--") ? 1 : 0));
+
+  const apiKey = requiredEnv("ANTHROPIC_API_KEY");
+  const model = optionalEnv("REHEARSAL_PLANNER_MODEL") ?? DEFAULT_PLANNER_MODEL;
+  const storeOrigin = assertAllowedEventTarget(
+    requiredEnv("REHEARSAL_STORE_ORIGIN"),
+    allowedEventOrigins(),
+  ).origin;
+  const storeToken = requiredEnv("REHEARSAL_STORE_TOKEN");
+  const caps = capsFromEnv(process.env);
+  const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
+  const generate = anthropicGenerator({ apiKey, model });
+  const bank = bankStore();
+
+  console.log(`edge-case finder, planning with ${model}`);
+  console.log(`sample store: ${storeOrigin}`);
+
+  const results = await runFinder(
+    { description, only: flags["only"] },
+    {
+      plan: (cls, desc) =>
+        planScenario(
+          {
+            description: desc,
+            extraInstruction: cls.ask,
+            allowedEventOrigins: allowedEventOrigins(),
+            caps,
+          },
+          { generate, budget },
+        ),
+      run: (scenario) => executeScenarioFromCli(scenario),
+      readStore: async (sinceIso) => {
+        const url = new URL(`${storeOrigin}/api/store/state`);
+        url.searchParams.set("since", sinceIso);
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${storeToken}` },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) throw new Error(`store state read returned http ${res.status}`);
+        return (await res.json()) as Awaited<ReturnType<FinderDeps["readStore"]>>;
+      },
+      bankAvailable: () => availablePurchases(bank.read()).length,
+      log: (line) => console.log(line),
+      now: () => new Date(),
+    },
+  );
+
+  const report = finderReportLines(results).join("\n");
+  const reportPath = resolve(RUNS_DIR, `finder-${isoNoMillis(new Date()).replace(/[:TZ-]/g, "")}.md`);
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${report}\n`, "utf8");
+
+  console.log("");
+  console.log(report);
+  console.log("");
+  console.log(`report written to ${reportPath}`);
+  console.log(`model spend: ${budget.summary()}`);
+
+  // Non-zero when a bug was found, so the before and after of a fix is visible
+  // in the exit code rather than only in prose.
+  process.exitCode = results.some((r) => r.finding.verdict === "bug") ? 1 : 0;
+}
+
 // ---------------------------------------------------------------- run
 
 async function run(rest: string[]): Promise<void> {
@@ -194,6 +271,27 @@ async function executeAndReport(
   scenario: Scenario,
   flags: Record<string, string>,
 ): Promise<void> {
+  const state = await executeScenarioFromCli(scenario, flags);
+
+  const report = runReportLines(scenario, state).join("\n");
+  const reportPath = resolve(RUNS_DIR, `${state.runId}.md`);
+  writeFileSync(reportPath, `${report}\n`, "utf8");
+
+  console.log("");
+  console.log(report);
+  console.log("");
+  console.log(`report written to ${reportPath}`);
+  process.exitCode = state.halted ? 1 : 0;
+}
+
+/**
+ * Executes a scenario and hands back the run state. Separate from reporting so
+ * the finder can read the state and draw its own conclusions.
+ */
+async function executeScenarioFromCli(
+  scenario: Scenario,
+  flags: Record<string, string> = {},
+): Promise<RunState> {
   const resumeId = flags["resume"];
   const runId =
     resumeId ??
@@ -260,15 +358,7 @@ async function executeAndReport(
     },
   );
 
-  const report = runReportLines(scenario, state).join("\n");
-  const reportPath = resolve(RUNS_DIR, `${runId}.md`);
-  writeFileSync(reportPath, `${report}\n`, "utf8");
-
-  console.log("");
-  console.log(report);
-  console.log("");
-  console.log(`report written to ${reportPath}`);
-  process.exitCode = state.halted ? 1 : 0;
+  return state;
 }
 
 // ---------------------------------------------------------------- bank
@@ -543,6 +633,9 @@ switch (command) {
     break;
   case "plan":
     await planCommand(rest);
+    break;
+  case "find":
+    await findCommand(rest);
     break;
   case "run":
     await run(rest);
