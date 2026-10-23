@@ -13,7 +13,7 @@ record created by `gate/` scripts. 119 unit tests pass, typecheck clean.
 | 3 unclaimed payout | **PASS** | Payout item reached UNCLAIMED |
 | 4 invoice | **PASS** | Invoice created, sent, and recorded paid by API |
 | 5 webhooks | **FAIL (BLOCKED)** | Needs the deployed receiver URL |
-| 6 dispute | **FAIL (BLOCKED)** | Needs one browser approval click |
+| 6 dispute | **FAIL** | Dispute created by API; both sandbox state endpoints refuse at INQUIRY stage |
 
 ## Ids created
 
@@ -97,23 +97,78 @@ and `REHEARSAL_RECEIVER_ORIGIN` plus `REHEARSAL_RECEIVER_TOKEN` setting. See
 `receiver/README.md`. The deployment must be publicly reachable, so Vercel
 Deployment Protection has to be off for that project or PayPal cannot deliver.
 
-**Gate 6, one approval click.** A PayPal-wallet payment has no server-to-server
-approval path, which is why this is the one human step in the suite. Open the
-approval URL above, log in as the sandbox **buyer business** account, approve,
-then `npm run gate:6` again. The gate is resumable and picks up from the
-approved order.
+**Gate 6, the approval click is done.** Order `3RK936819N963521R` was approved as
+the sandbox buyer business account and captured as `1G18470618640833J`. A
+PayPal-wallet payment has no server-to-server approval path, so one human step
+per disputed transaction is structural and will not go away.
 
-## Known unknown, not yet proven either way
+What remains on gate 6 is not an approval but the claim-stage problem above.
 
-Sandbox dispute **creation** is absent from PayPal's published OpenAPI spec
-(`customer_disputes_v1.json` has only GET and PATCH on `/v1/customer/disputes`),
-even though both apps' tokens carry a `disputes/create` scope. `require-evidence`
-and `adjudicate` are both in the spec and both sandbox-only, with the enums the
-gate uses. So gate 6 phase C is a genuine open question that only running it
-will answer. The scope says yes, the spec says no.
+## Gate 6, what is now proven, 2026-10-23
 
-Confirmed independently of the recon note: neither app has
-`disputes/update-buyer`, so `change-reason` is genuinely unavailable.
+**Buyer-side dispute creation by API works.** This was the open question and the
+answer is yes. `POST /v1/customer/disputes` with the buyer app's own
+client_credentials token, no `PayPal-Auth-Assertion` header, returned **201** and
+created dispute `PP-R-DXC-10194171` on buyer transaction `176520997B301664B`.
+The endpoint is absent from PayPal's published OpenAPI spec, so this is a
+capability the spec does not admit to having.
+
+Three things it took to get there, each a finding in its own right:
+
+1. **`buyer_transaction_id`, not the seller's capture id.** Using the capture id
+   returned `400 TRANSACTION_NOT_ELIGIBLE`. That error also proved the body shape
+   itself was accepted, including the `extensions` block.
+2. **The buyer-side transaction id is not reachable from the seller side at all.**
+   Dumped both the full order and the full capture: the only related id is
+   `supplementary_data.related_ids.order_id`. Buyer-side Transaction Search
+   returns `403` because the buyer app has no reporting scope. Brian read the id
+   from the buyer's activity page.
+3. **The new dispute's id exists only in a self link.** The 201 body is
+   `{"links":[{"href":".../disputes/PP-R-DXC-10194171","rel":"self"}]}` with no
+   `id` or `dispute_id` field. Our first run reported FAIL on a write that had
+   actually succeeded. Fixed in `src/core/paypalLinks.ts` with a test against the
+   literal response body.
+
+**Where it is stuck: both sandbox state endpoints refuse at the INQUIRY stage.**
+
+```
+status                   UNDER_REVIEW        <- the spec's stated precondition, satisfied
+dispute_state            UNDER_PAYPAL_REVIEW
+dispute_life_cycle_stage INQUIRY             <- the actual blocker
+require-evidence  -> 400 ACTION_NOT_ALLOWED_IN_CURRENT_DISPUTE_STATE
+adjudicate        -> 400 ACTION_NOT_ALLOWED_IN_CURRENT_DISPUTE_STATE
+```
+
+The spec states the precondition for both as "the dispute `status` must be
+`UNDER_REVIEW`". Our status **is** `UNDER_REVIEW` and both still refuse, so that
+documented precondition is necessary but **not sufficient**. Both are claim-stage
+tools, and PayPal does not adjudicate an inquiry.
+
+**Getting to the claim stage is the unsolved part.** `POST /{id}/escalate`
+returns `403 ACTION_NOT_ALLOWED` with the buyer token, which independently
+confirms the recon note that no `disputes/update-buyer` scope means no buyer-side
+state changes. With the **seller** token it returns `200`, but the stage stayed
+`INQUIRY` afterwards. The only action PayPal offers now is `provide_evidence`,
+which takes `multipart/form-data` rather than JSON.
+
+**Most likely answer, untested.** The recon note lists sandbox **create
+chargeback** as a capability distinct from create dispute. A dispute that starts
+as a chargeback would already be at the stage these two endpoints want. Testing
+it needs another approved order, so another human click and another manual
+transaction id read.
+
+**Observed sandbox dispute lifecycle**, which is documented nowhere and takes
+minutes per transition:
+
+```
+created -> UNDER_REVIEW / UNDER_PAYPAL_REVIEW   no actions offered
+        -> WAITING_FOR_SELLER_RESPONSE / REQUIRED_ACTION
+           actions: send_message, escalate, accept_claim, provide_evidence, make_offer
+        -> after seller escalate: UNDER_REVIEW / UNDER_PAYPAL_REVIEW, still INQUIRY
+           actions: provide_evidence only
+```
+
+## The two remaining blockers, with remedies
 
 ## What the passing gates mean for scope
 
