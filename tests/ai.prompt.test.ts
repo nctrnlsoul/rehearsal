@@ -73,6 +73,9 @@ describe("buildPlannerPrompt system message", () => {
     const { system } = build("a shop");
     expect(system).toMatch(/currency must be exactly "USD"/);
     expect(system).toMatch(/At most 2 open_dispute steps/);
+    // A dispute needs no card_order: told only "draws from the bank", the model
+    // added one and said the dispute was opened against it.
+    expect(system).toMatch(/open_dispute .*never a card_order from this scenario, so it needs no other step/);
   });
 });
 

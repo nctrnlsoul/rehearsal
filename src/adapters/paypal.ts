@@ -130,7 +130,16 @@ export class PaypalClient {
     const text = await res.text();
     if (!res.ok) {
       this.#log(`POST ${TOKEN_PATH} -> ${res.status}`);
-      throw new Error(`sandbox token request failed with http ${res.status}: ${text.slice(0, 300)}`);
+      // PayPal's error code only. The body is not echoed: this message reaches
+      // step details, run reports and MCP tool output.
+      let code = "";
+      try {
+        const e = (JSON.parse(text) as { error?: unknown }).error;
+        if (typeof e === "string" && /^[a-z_]{1,40}$/.test(e)) code = ` (${e})`;
+      } catch {
+        // Not JSON: the status alone says enough.
+      }
+      throw new Error(`sandbox token request failed with http ${res.status}${code}`);
     }
     const parsed = JSON.parse(text) as {
       access_token?: unknown;
