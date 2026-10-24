@@ -112,16 +112,21 @@ tool says `needs a banked purchase: run bank:add` instead of guessing.
 
 What the server holds to, in code:
 
-- The same schema, spend caps, event-target allowlist, sandbox host pin,
-  idempotency keys and resumable run state as the CLI. It calls the same modules.
+- The scenario schema, spend caps, event-target allowlist, sandbox host pin,
+  idempotency keys and resumable run state, through the same modules the CLI
+  uses. Every MCP path checks the caps; the CLI checks them on `plan` and
+  `find`, but not yet on `run <file>`.
+- A resume must present the exact scenario the run started from (its SHA-256
+  is recorded in the run state), so a changed scenario cannot finish a run.
 - Nothing writes to PayPal without `confirm: true`. Leave `run_scenario` and
   `find_edge_cases` on "ask" in Claude Code's permissions, so you approve each
   call and see its arguments.
 - A halted run is not retried over MCP. Retrying a step that may already have
   written is a CLI action, after you check: `--resume <runId> --retry <stepId>`.
 - One execution at a time, and per-session ceilings: 20 model calls
-  (`REHEARSAL_MCP_MAX_MODEL_CALLS`) and 10 executions (`REHEARSAL_MCP_MAX_RUNS`).
-  Restart the server to reset them.
+  (`REHEARSAL_MCP_MAX_MODEL_CALLS`) and 10 executing tool calls
+  (`REHEARSAL_MCP_MAX_RUNS`; one `find_edge_cases` call counts once but can run
+  up to four scenarios). Restart the server to reset them.
 - Every input is size-capped. Every output has control characters stripped,
   error text is generic, and no environment value is ever returned.
 - The finder reuses the store's registered webhook and never registers one.

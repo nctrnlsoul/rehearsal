@@ -22,7 +22,8 @@ export const MAX_ERROR_CHARS = 500;
 export function cleanOutputText(text: string, maxChars = MAX_OUTPUT_CHARS): string {
   const cleaned = text
     .split("\n")
-    .map((line) => printable(line).trimEnd())
+    // U+2028 and U+2029 are neither Cc nor Cf, but they break a line all the same.
+    .map((line) => printable(line).replace(/[\u2028\u2029]/g, " ").trimEnd())
     .join("\n");
   const chars = Array.from(cleaned);
   if (chars.length <= maxChars) return cleaned;

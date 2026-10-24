@@ -26,8 +26,7 @@
     "bank:set-txn": "tsx bin/rehearsal.ts bank:set-txn",
     "bank:list": "tsx bin/rehearsal.ts bank:list",
     "find": "tsx bin/rehearsal.ts find",
-    "evals": "tsx evals/run.ts",
-    "mcp": "tsx bin/mcp.ts"
+    "evals": "tsx evals/run.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.87",

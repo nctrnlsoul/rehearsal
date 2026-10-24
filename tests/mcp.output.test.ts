@@ -5,15 +5,19 @@ import { MissingCredentialError } from "../src/adapters/env";
 import { TargetRefusedError } from "../src/core/eventTarget";
 import { cleanOutputText, guardTransport, safeErrorText, sanitizeOutgoing } from "../src/mcp/output";
 
-const NASTY = "a\u001b[31mred\u0007‮evil​zero\rcr\tb";
+const NASTY = "a\u001b[31mred\u0007\u202eevil\u200bzero\rcr\tb";
 
 describe("cleanOutputText", () => {
   it("strips control and format characters but keeps line breaks", () => {
     const out = cleanOutputText(`${NASTY}\nsecond line`);
     expect(out.split("\n")).toHaveLength(2);
-    expect(out).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f​‮]/);
+    expect(out).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u200b\u202e]/);
     expect(out).toContain("red");
     expect(out).toContain("evil");
+  });
+
+  it("strips the Unicode line and paragraph separators too", () => {
+    expect(cleanOutputText("a\u2028b\u2029c")).toBe("a b c");
   });
 
   it("caps the length by code point and says so", () => {
@@ -30,7 +34,7 @@ describe("sanitizeOutgoing", () => {
       result: { content: [{ type: "text", text: NASTY }, { type: "image", data: "x", mimeType: "image/png" }] },
     } as unknown as JSONRPCMessage;
     const out = sanitizeOutgoing(msg) as unknown as { result: { content: Array<{ text?: string; data?: string }> } };
-    expect(out.result.content[0]!.text).not.toMatch(/[\u001b\u0007‮​\r\t]/);
+    expect(out.result.content[0]!.text).not.toMatch(/[\u001b\u0007\u202e\u200b\r\t]/);
     expect(out.result.content[1]!.data).toBe("x");
     // Never mutates the original.
     expect((msg as unknown as { result: { content: Array<{ text: string }> } }).result.content[0]!.text).toBe(NASTY);
@@ -39,7 +43,7 @@ describe("sanitizeOutgoing", () => {
   it("cleans and caps a JSON-RPC error message", () => {
     const msg = { jsonrpc: "2.0", id: 2, error: { code: -32602, message: `${NASTY}${"z".repeat(2000)}` } } as JSONRPCMessage;
     const out = sanitizeOutgoing(msg) as unknown as { error: { message: string } };
-    expect(out.error.message).not.toMatch(/[\u001b‮]/);
+    expect(out.error.message).not.toMatch(/[\u001b\u202e]/);
     expect(out.error.message.length).toBeLessThan(600);
   });
 
@@ -61,7 +65,7 @@ describe("guardTransport", () => {
     };
     guardTransport(transport);
     await transport.send({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: NASTY }] } } as unknown as JSONRPCMessage);
-    expect(JSON.stringify(sent[0])).not.toMatch(/\\u001b|‮/);
+    expect(JSON.stringify(sent[0])).not.toMatch(/\\u001b|\u202e/);
   });
 });
 
