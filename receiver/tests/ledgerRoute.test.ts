@@ -49,6 +49,15 @@ describe("ledger read endpoint gates", () => {
     expect((await get()).status).toBe(503);
   });
 
+  // A blank variable is a misconfiguration, not a password of spaces.
+  it("locks itself when the token is blank, even for a caller who sends that blank", async () => {
+    process.env["REHEARSAL_RECEIVER_TOKEN"] = "   ";
+    for (const res of [await get("", "Bearer    "), await get()]) {
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "receiver not configured" });
+    }
+  });
+
   // Auth is checked before anything else, so an unauthenticated caller cannot
   // probe the endpoint's configuration through its error codes.
   it("checks auth before validating the query", async () => {

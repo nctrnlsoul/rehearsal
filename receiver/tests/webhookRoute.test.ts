@@ -84,3 +84,18 @@ describe("the receiver refuses a bad cert URL before any PayPal call", () => {
     expect(paypalCalls.length).toBeGreaterThan(0);
   });
 });
+
+describe("the receiver bounds what it will read", () => {
+  it("refuses an oversized body with 413, records nothing and calls nobody", async () => {
+    const res = await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body: "x".repeat(1_000_001),
+        headers: headers("https://api.sandbox.paypal.com/c"),
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(rows).toEqual([]);
+    expect(paypalCalls).toEqual([]);
+  });
+});

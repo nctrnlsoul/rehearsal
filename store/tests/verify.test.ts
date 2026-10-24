@@ -15,7 +15,10 @@ let n = 0;
 const freshOrigin = () => `https://store-${(n += 1)}.test`;
 
 /** Answers the token call and the webhook list; counts verify calls. */
-function fakePaypal(webhooks: unknown, opts: { listStatus?: number } = {}) {
+function fakePaypal(
+  webhooks: unknown,
+  opts: { listStatus?: number; verificationStatus?: unknown } = {},
+) {
   const calls: string[] = [];
   const verifyBodies: unknown[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -29,7 +32,8 @@ function fakePaypal(webhooks: unknown, opts: { listStatus?: number } = {}) {
     }
     if (url.endsWith("/v1/notifications/verify-webhook-signature")) {
       verifyBodies.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({ verification_status: "SUCCESS" }), { status: 200 });
+      const status = "verificationStatus" in opts ? opts.verificationStatus : "SUCCESS";
+      return new Response(JSON.stringify({ verification_status: status }), { status: 200 });
     }
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -165,6 +169,18 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
     const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
     expect(out.verified).toBe(true);
     expect(verifyBodies).toEqual([expect.objectContaining({ webhook_id: "WH-STORE" })]);
+  });
+
+  // PayPal answers 200 for a FAILURE too, so the status code alone proves nothing.
+  it("verifies only on SUCCESS, never on a 200 that says otherwise", async () => {
+    for (const status of ["FAILURE", "success", "", null, undefined, 1]) {
+      const origin = freshOrigin();
+      const { fetchImpl } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }], {
+        verificationStatus: status,
+      });
+      const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
+      expect(out.verified, String(status)).toBe(false);
+    }
   });
 });
 
