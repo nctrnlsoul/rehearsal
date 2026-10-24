@@ -250,7 +250,12 @@ describe("runFinder with templates", () => {
           nowIso: "2026-10-23T12:00:00.000Z",
         });
         for (const st of scenario.steps) {
-          const ids: Record<string, string> = st.kind === "resend_webhook" ? { resent_event_id: EV } : {};
+          const ids: Record<string, string> =
+            st.kind === "resend_webhook"
+              ? { resent_event_id: EV }
+              : st.kind === "refund"
+                ? { refund_id: `RF-${st.id}` }
+                : {};
           s = recordOutcome(s, st.id, { kind: "success", detail: "ok", ids }, "2026-10-23T12:00:01.000Z");
         }
         return s;
@@ -299,6 +304,39 @@ describe("runFinder with templates", () => {
     expect(h.planCalls).toEqual([]);
     expect(h.ran).toEqual([]);
     expect(results[0]!.finding.verdict).toBe("inconclusive");
+  });
+
+  it("turns a planner call that throws into an inconclusive class, and keeps going", async () => {
+    const h = harness(okPlan());
+    let calls = 0;
+    const throwing = {
+      ...h.deps,
+      plan: async () => {
+        calls += 1;
+        const e = new Error("The operation was aborted due to timeout");
+        e.name = "TimeoutError";
+        throw e;
+      },
+    };
+    const results = await runFinder({ description: "a shop", webhookTarget: TARGET }, throwing);
+    expect(calls).toBe(4);
+    expect(h.ran).toEqual([]);
+    const ran = results.filter((r) => r.skipped === "planner call failed");
+    expect(ran).toHaveLength(4);
+    for (const r of ran) {
+      expect(r.finding.verdict).toBe("inconclusive");
+      expect(r.finding.actual).toBe("the planner call failed: TimeoutError: The operation was aborted due to timeout");
+    }
+  });
+
+  // The planner strips its own output; this proves the sinks do too, whatever reaches them.
+  it("strips control characters from every log line and report line", async () => {
+    const nasty = "\u001b[2J\u001b]0;pwned\u0007‮";
+    const h = harness({ ok: false, reason: "schema-invalid", errors: [`bad ${nasty}`], raw: "" });
+    const results = await findDup(h);
+    const report = finderReportLines(results);
+    expect(h.logs.join("\n")).toContain("[2J ]0;pwned");
+    for (const line of [...h.logs, ...report]) expect(line).not.toMatch(/[\p{Cc}\p{Cf}]/u);
   });
 
   it("does not run a filled template that fails validation", async () => {
@@ -391,6 +429,52 @@ describe("runFinder with templates", () => {
       );
       expect(results[0]!.finding.verdict).toBe("inconclusive");
       expect(h.reads()).toBeLessThanOrEqual(EVIDENCE_TIMEOUT_MS / EVIDENCE_POLL_MS + 3);
+    });
+  });
+
+  // refund-after-partial used to read the store once, so a refund event still
+  // in flight read as one the store never got.
+  describe("waiting for the refund events", () => {
+    const refunds = (partial: unknown, second: unknown): StoreSnapshot => ({
+      orders: [
+        ...(partial === null
+          ? []
+          : [{ captureId: "RF-refund-partial", fulfilmentCount: 0, refundCount: partial as number, disputeCount: 0, duplicatesIgnored: 0 }]),
+        ...(second === null
+          ? []
+          : [{ captureId: "RF-refund-second", fulfilmentCount: 0, refundCount: second as number, disputeCount: 0, duplicatesIgnored: 0 }]),
+      ],
+      eventCount: 0,
+      unverifiedCount: 0,
+    });
+    const findRefund = (h: ReturnType<typeof harness>) =>
+      runFinder({ description: "a shop", only: "refund-after-partial", webhookTarget: TARGET }, h.deps);
+
+    it("is ok once the second refund event shows up, recorded once", async () => {
+      const h = harness(okPlan(), { store: [refunds(1, null), refunds(1, null), refunds(1, 1)] });
+      const results = await findRefund(h);
+      expect(results[0]!.finding.verdict).toBe("ok");
+      expect(h.reads()).toBe(3);
+    });
+
+    it("is a bug once a refund event shows up recorded twice", async () => {
+      const h = harness(okPlan(), { store: [refunds(1, null), refunds(1, 2)] });
+      const results = await findRefund(h);
+      expect(results[0]!.finding.verdict).toBe("bug");
+    });
+
+    it("is inconclusive, never ok or bug, when a refund event is still missing at the timeout", async () => {
+      const h = harness(okPlan(), { store: [refunds(1, null)] });
+      const results = await findRefund(h);
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(h.sleeps.reduce((a, b) => a + b, 0)).toBe(EVIDENCE_TIMEOUT_MS);
+    });
+
+    it("does not wait on a non-numeric count, and calls it inconclusive", async () => {
+      const h = harness(okPlan(), { store: [refunds(1, "1")] });
+      const results = await findRefund(h);
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(h.sleeps).toEqual([]);
     });
   });
 });

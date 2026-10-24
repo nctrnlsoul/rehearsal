@@ -45,6 +45,15 @@ describe("store state endpoint gates", () => {
     expect((await get()).status).toBe(503);
   });
 
+  // A blank variable is a misconfiguration, not a password of spaces.
+  it("locks itself when the token is blank, even for a caller who sends that blank", async () => {
+    process.env["REHEARSAL_STORE_TOKEN"] = "   ";
+    for (const res of [await get("", "Bearer    "), await get()]) {
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "store not configured" });
+    }
+  });
+
   it("checks auth before the query, so an anonymous caller learns nothing", async () => {
     expect((await get("?since=nonsense", null)).status).toBe(401);
   });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { STORE_WEBHOOK_PATH, resolveWebhookId, verifySignature } from "../lib/verify";
+import {
+  PAYPAL_CERT_HOSTS,
+  STORE_WEBHOOK_PATH,
+  checkCertUrl,
+  resolveWebhookId,
+  verifySignature,
+} from "../lib/verify";
 
 const CREDS = { PAYPAL_SELLER_CLIENT_ID: "id", PAYPAL_SELLER_CLIENT_SECRET: "secret" };
 
@@ -9,7 +15,10 @@ let n = 0;
 const freshOrigin = () => `https://store-${(n += 1)}.test`;
 
 /** Answers the token call and the webhook list; counts verify calls. */
-function fakePaypal(webhooks: unknown, opts: { listStatus?: number } = {}) {
+function fakePaypal(
+  webhooks: unknown,
+  opts: { listStatus?: number; verificationStatus?: unknown } = {},
+) {
   const calls: string[] = [];
   const verifyBodies: unknown[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -23,7 +32,8 @@ function fakePaypal(webhooks: unknown, opts: { listStatus?: number } = {}) {
     }
     if (url.endsWith("/v1/notifications/verify-webhook-signature")) {
       verifyBodies.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({ verification_status: "SUCCESS" }), { status: 200 });
+      const status = "verificationStatus" in opts ? opts.verificationStatus : "SUCCESS";
+      return new Response(JSON.stringify({ verification_status: status }), { status: 200 });
     }
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -160,6 +170,18 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
     expect(out.verified).toBe(true);
     expect(verifyBodies).toEqual([expect.objectContaining({ webhook_id: "WH-STORE" })]);
   });
+
+  // PayPal answers 200 for a FAILURE too, so the status code alone proves nothing.
+  it("verifies only on SUCCESS, never on a 200 that says otherwise", async () => {
+    for (const status of ["FAILURE", "success", "", null, undefined, 1]) {
+      const origin = freshOrigin();
+      const { fetchImpl } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }], {
+        verificationStatus: status,
+      });
+      const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
+      expect(out.verified, String(status)).toBe(false);
+    }
+  });
 });
 
 describe("verifySignature refuses junk before any PayPal call", () => {
@@ -199,5 +221,80 @@ describe("verifySignature refuses junk before any PayPal call", () => {
     const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
     expect(out.verified).toBe(false);
     expect(calls).toEqual([]);
+  });
+
+  it("refuses every malformed cert URL with no network call", async () => {
+    for (const bad of ["http://api.sandbox.paypal.com/c", "https://www.paypal.com/c"]) {
+      const origin = freshOrigin();
+      const { fetchImpl, calls } = fakePaypal([]);
+      const h = full();
+      h.set("paypal-cert-url", bad);
+      const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
+      expect(out.verified, bad).toBe(false);
+      expect(calls, bad).toEqual([]);
+    }
+  });
+});
+
+describe("checkCertUrl", () => {
+  it("accepts https on the four PayPal API hosts, whatever the path", () => {
+    for (const host of PAYPAL_CERT_HOSTS) {
+      expect(checkCertUrl(`https://${host}/v1/notifications/certs/CERT-1`), host).toEqual({ ok: true });
+    }
+    // URL parsing lower-cases the host, so case alone is not a way round the list.
+    expect(checkCertUrl("https://API.Sandbox.PayPal.com/c")).toEqual({ ok: true });
+  });
+
+  it("requires https", () => {
+    for (const bad of [
+      "http://api.sandbox.paypal.com/c",
+      "ftp://api.paypal.com/c",
+      "file:///etc/passwd",
+      "data:text/plain,x",
+    ]) {
+      expect(checkCertUrl(bad), bad).toMatchObject({ ok: false });
+    }
+    expect(checkCertUrl("http://api.paypal.com/c")).toEqual({
+      ok: false,
+      detail: "paypal-cert-url is not https",
+    });
+  });
+
+  // The old check let any *.paypal.com through, a far wider set than the API.
+  it("refuses any other paypal.com host, and every look-alike", () => {
+    for (const bad of [
+      "https://www.paypal.com/c",
+      "https://evil.paypal.com/c",
+      "https://api.sandbox.paypal.com.evil.test/c",
+      "https://evilpaypal.com/c",
+      "https://paypal.com/c",
+      "https://api.paypal.com./c",
+      "https://api.paypal.co/c",
+      "https://xn--pypal-4ve.com/c",
+    ]) {
+      const out = checkCertUrl(bad);
+      expect(out, bad).toMatchObject({ ok: false });
+      if (!out.ok) expect(out.detail, bad).toMatch(/is not a PayPal API host$/);
+    }
+  });
+
+  it("refuses credentials, a port, and anything unparseable", () => {
+    expect(checkCertUrl("https://evil@api.paypal.com/c")).toEqual({
+      ok: false,
+      detail: "paypal-cert-url carries credentials",
+    });
+    expect(checkCertUrl("https://u:p@api.paypal.com/c")).toMatchObject({ ok: false });
+    expect(checkCertUrl("https://api.paypal.com:8443/c")).toEqual({
+      ok: false,
+      detail: "paypal-cert-url names a port",
+    });
+    for (const bad of ["", "not a url", "//api.paypal.com/c", "https://"]) {
+      expect(checkCertUrl(bad), bad).toMatchObject({ ok: false });
+    }
+  });
+
+  it("never echoes an overlong host into the reason", () => {
+    const out = checkCertUrl(`https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.test/`);
+    expect(out).toEqual({ ok: false, detail: "paypal-cert-url host an overlong host is not a PayPal API host" });
   });
 });

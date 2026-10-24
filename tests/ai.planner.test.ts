@@ -3,9 +3,14 @@ import { AiBudgetTracker, BudgetExceededError, DEFAULT_AI_BUDGET } from "../src/
 import {
   type GenerateFn,
   MAX_MODEL_NAME_CHARS,
+  MAX_MODEL_REFUSAL_CHARS,
+  MAX_PLAN_ERRORS,
+  PLANNER_TIMEOUT_MS,
+  anthropicGenerator,
   cleanModelText,
   extractJsonObject,
   planScenario,
+  stripControlDeep,
 } from "../src/ai/planner";
 
 const STORE = "https://store.test";
@@ -291,5 +296,110 @@ describe("model-written names are cleaned before anything prints them", () => {
     expect(out.scenario.name).toBe("unnamed scenario");
     expect(out.scenario.profile.name).toBe("unnamed business");
     expect(out.scenario.profile).not.toHaveProperty("description");
+  });
+});
+
+describe("the real generator is bounded", () => {
+  type Args = { maxOutputTokens?: number; maxRetries?: number; abortSignal?: AbortSignal };
+  const fakeSdk = (impl: (args: Args) => Promise<unknown>) => {
+    const seen: Args[] = [];
+    const fn = (async (args: Args) => {
+      seen.push(args);
+      return impl(args);
+    }) as never;
+    return { fn, seen };
+  };
+  const reply = { text: "{}", usage: { inputTokens: 1, outputTokens: 1 } };
+
+  it("passes the output cap, one retry, and a timeout on every call", async () => {
+    const sdk = fakeSdk(async () => reply);
+    const gen = anthropicGenerator({ apiKey: "test-only", model: "m" }, { generateText: sdk.fn });
+    await gen({ system: "s", prompt: "p", maxOutputTokens: 123 });
+    expect(sdk.seen[0]!.maxOutputTokens).toBe(123);
+    expect(sdk.seen[0]!.maxRetries).toBe(1);
+    expect(sdk.seen[0]!.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(PLANNER_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("gives up on a call that hangs, rather than hanging the run", async () => {
+    // Settles only when aborted, as the SDK does.
+    const sdk = fakeSdk(
+      (args) =>
+        new Promise((_, reject) => {
+          args.abortSignal!.addEventListener("abort", () => reject(args.abortSignal!.reason));
+        }),
+    );
+    const gen = anthropicGenerator(
+      { apiKey: "test-only", model: "m", timeoutMs: 20 },
+      { generateText: sdk.fn },
+    );
+    await expect(gen({ system: "s", prompt: "p", maxOutputTokens: 1 })).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+  });
+});
+
+/** Every string in a value, keys included, so a test can sweep all of it. */
+function allStrings(v: unknown, out: string[] = []): string[] {
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) for (const x of v) allStrings(x, out);
+  else if (typeof v === "object" && v !== null) {
+    for (const [k, x] of Object.entries(v)) {
+      out.push(k);
+      allStrings(x, out);
+    }
+  }
+  return out;
+}
+const CONTROL = /[\p{Cc}\p{Cf}]/u;
+const NASTY = "\u001b[2J\u001b]0;pwned\u0007‮";
+
+describe("all model text is stripped before it can print", () => {
+  it("cleans and caps a refusal", async () => {
+    const out = await plan({ refusal: `no ${NASTY}${"x".repeat(500)}` }).run();
+    expect(out.ok).toBe(false);
+    if (out.ok || out.reason !== "refused-by-model") throw new Error("expected a refusal");
+    expect(out.detail).not.toMatch(CONTROL);
+    expect(out.detail.startsWith("no [2J ]0;pwned")).toBe(true);
+    expect(Array.from(out.detail).length).toBeLessThanOrEqual(MAX_MODEL_REFUSAL_CHARS);
+  });
+
+  it("cleans schema errors, which echo the model's values and keys", async () => {
+    const out = await plan({
+      ...GOOD,
+      [`evil${NASTY}`]: 1,
+      steps: [{ id: "o1", kind: `card_order${NASTY}`, amount: "54.00" }],
+    }).run();
+    if (out.ok || out.reason !== "schema-invalid") throw new Error("expected schema-invalid");
+    expect(out.errors.length).toBeGreaterThan(0);
+    for (const e of out.errors) expect(e).not.toMatch(CONTROL);
+  });
+
+  it("keeps at most a bounded number of schema errors and says how many it dropped", async () => {
+    const steps = Array.from({ length: 30 }, (_, i) => ({ id: `s${i}`, kind: `bad${NASTY}`, amount: 5 }));
+    const out = await plan({ ...GOOD, steps }).run();
+    if (out.ok || out.reason !== "schema-invalid") throw new Error("expected schema-invalid");
+    expect(out.errors).toHaveLength(MAX_PLAN_ERRORS + 1);
+    expect(out.errors.at(-1)).toMatch(/^and \d+ more$/);
+  });
+
+  it("strips every string in an accepted plan, not only the names", async () => {
+    const out = await plan({
+      ...GOOD,
+      steps: [
+        { id: "o1", kind: "card_order", amount: "5.00", label: `pay${NASTY}` },
+        { id: "p1", kind: "payout_batch", items: [{ amount: "1.00", note: `thanks${NASTY}` }] },
+      ],
+    }).run();
+    if (!out.ok) throw new Error(`expected ok, got ${out.reason}`);
+    for (const s of allStrings(out.scenario)) expect(s).not.toMatch(CONTROL);
+    expect(out.scenario.steps[0]!.label).toBe("pay [2J ]0;pwned ");
+  });
+
+  it("cannot be steered into the prototype by a __proto__ key", () => {
+    const cleaned = stripControlDeep(JSON.parse('{"__proto__": {"polluted": true}, "a": "b\\u001b"}'));
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+    expect(Object.getPrototypeOf(cleaned)).toBe(Object.prototype);
+    expect((cleaned as Record<string, unknown>)["a"]).toBe("b ");
   });
 });

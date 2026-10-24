@@ -89,6 +89,40 @@ export function cleanModelText(raw: string, maxChars: number): string {
   return chars.length <= maxChars ? flat : chars.slice(0, maxChars).join("").trimEnd();
 }
 
+/** The same stripping without truncation, for a line about to be printed whatever its source. */
+export function printable(line: string): string {
+  return line.replace(/[\p{Cc}\p{Cf}]+/gu, " ");
+}
+
+/**
+ * Every string in a parsed reply, keys included, with control and format
+ * characters stripped. Run before validation, so whatever survives (step
+ * labels, notes, item names, the saved plan, PayPal request bodies, and the
+ * schema's own error messages, which echo values and keys) is already clean.
+ */
+export function stripControlDeep(value: unknown): unknown {
+  if (typeof value === "string") return printable(value);
+  if (Array.isArray(value)) return value.map(stripControlDeep);
+  if (typeof value === "object" && value !== null) {
+    // fromEntries defines own properties, so a "__proto__" key cannot reach the prototype.
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [printable(k), stripControlDeep(v)]),
+    );
+  }
+  return value;
+}
+
+export const MAX_MODEL_REFUSAL_CHARS = 300;
+export const MAX_PLAN_ERROR_CHARS = 300;
+/** A reply can fail the schema in hundreds of places; the first few say enough. */
+export const MAX_PLAN_ERRORS = 20;
+
+function cleanErrors(errors: readonly string[]): string[] {
+  const kept = errors.slice(0, MAX_PLAN_ERRORS).map((e) => cleanModelText(e, MAX_PLAN_ERROR_CHARS));
+  const dropped = errors.length - kept.length;
+  return dropped > 0 ? [...kept, `and ${dropped} more`] : kept;
+}
+
 function cleanNames(scenario: Scenario): Scenario {
   const description =
     scenario.profile.description === undefined
@@ -149,37 +183,60 @@ export async function planScenario(
     return { ok: false, reason: "unparseable", detail: parsed.detail, raw };
   }
 
-  const refusal = refusalOf(parsed.value);
+  const value = stripControlDeep(parsed.value);
+
+  const refusal = refusalOf(value);
   if (refusal !== null) {
-    return { ok: false, reason: "refused-by-model", detail: refusal, raw };
+    return {
+      ok: false,
+      reason: "refused-by-model",
+      detail: cleanModelText(refusal, MAX_MODEL_REFUSAL_CHARS) || "refused",
+      raw,
+    };
   }
 
   // The same gate a hand-written scenario passes. Host pinning and the event
   // allowlist are enforced here, so no reply can reach live PayPal or an
   // unapproved target however it was produced.
-  const validated = validateScenario(parsed.value, {
+  const validated = validateScenario(value, {
     allowedEventOrigins: args.allowedEventOrigins,
   });
   if (!validated.ok) {
-    return { ok: false, reason: "schema-invalid", errors: validated.errors, raw };
+    return { ok: false, reason: "schema-invalid", errors: cleanErrors(validated.errors), raw };
   }
 
   const violations = checkCaps(validated.scenario, caps);
   if (violations.length > 0) {
-    return { ok: false, reason: "over-caps", violations, raw };
+    return {
+      ok: false,
+      reason: "over-caps",
+      violations: violations.map((v) => ({ ...v, message: cleanModelText(v.message, MAX_PLAN_ERROR_CHARS) })),
+      raw,
+    };
   }
 
   return { ok: true, scenario: cleanNames(validated.scenario), raw };
 }
 
-export function anthropicGenerator(opts: { apiKey: string; model: string }): GenerateFn {
+/**
+ * Wall-clock cap on one planner call, retry included: a stalled connection
+ * would otherwise hang the run with a call already reserved against the budget.
+ */
+export const PLANNER_TIMEOUT_MS = 60_000;
+
+export function anthropicGenerator(
+  opts: { apiKey: string; model: string; timeoutMs?: number },
+  deps: { generateText?: typeof generateText } = {},
+): GenerateFn {
   const provider = createAnthropic({ apiKey: opts.apiKey });
+  const generate = deps.generateText ?? generateText;
   return async ({ system, prompt, maxOutputTokens }) => {
-    const res = await generateText({
+    const res = await generate({
       model: provider(opts.model),
       system,
       prompt,
       maxOutputTokens,
+      abortSignal: AbortSignal.timeout(opts.timeoutMs ?? PLANNER_TIMEOUT_MS),
       // No temperature: claude-sonnet-5 does not support it and the SDK warns
       // that it is ignored. Planning is therefore NOT deterministic, which is
       // why nothing runs without --yes and why the schema and caps re-check

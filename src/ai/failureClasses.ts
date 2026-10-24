@@ -91,8 +91,6 @@ export type FailureClass = {
 const stepsOfKind = (run: RunState, kind: string): StepRecord[] =>
   Object.values(run.steps).filter((s) => s.kind === kind);
 
-const sum = (ns: readonly number[]) => ns.reduce((a, b) => a + b, 0);
-
 function finding(
   base: Pick<FailureClass, "id" | "title">,
   verdict: Verdict,
@@ -179,6 +177,57 @@ function refusalNote(store: StoreSnapshot, reasons: readonly string[]): string {
 
 const decisive = (e: DeliveryEvidence) =>
   e.kind === "counts" && (e.fulfilled >= 2 || (e.fulfilled === 1 && e.duplicatesIgnored >= 1));
+
+type RefundEvidence =
+  | { readonly kind: "too-few-steps"; readonly planned: number }
+  | { readonly kind: "unknown-step"; readonly stepId: string }
+  | { readonly kind: "none-accepted" }
+  | { readonly kind: "no-refund-id"; readonly stepId: string }
+  | { readonly kind: "malformed"; readonly refundId: string }
+  | {
+      readonly kind: "counts";
+      readonly perRefund: readonly { readonly refundId: string; readonly recorded: number }[];
+      readonly refusedByPaypal: number;
+    };
+
+/**
+ * What the store recorded for each refund PayPal accepted in this run.
+ *
+ * A PAYMENT.CAPTURE.REFUNDED event carries the refund as its resource, so the
+ * store files it under the refund id, not the capture id. Matching on refund
+ * ids also keeps refunds from other runs in the same window out of the count.
+ */
+function refundEvidence(store: StoreSnapshot, run: RunState): RefundEvidence {
+  const refunds = stepsOfKind(run, "refund");
+  if (refunds.length < 2) return { kind: "too-few-steps", planned: refunds.length };
+  // PayPal may or may not have accepted an unknown refund, so the count to
+  // expect is itself unknown.
+  const unknown = refunds.find((r) => r.status !== "succeeded" && r.status !== "failed");
+  if (unknown !== undefined) return { kind: "unknown-step", stepId: unknown.id };
+  const accepted = refunds.filter((r) => r.status === "succeeded");
+  if (accepted.length === 0) return { kind: "none-accepted" };
+
+  const perRefund: { refundId: string; recorded: number }[] = [];
+  for (const r of accepted) {
+    const refundId = r.ids["refund_id"];
+    if (refundId === undefined || refundId.trim() === "") return { kind: "no-refund-id", stepId: r.id };
+    const entries = store.orders.filter(
+      (o) => typeof o === "object" && o !== null && o.captureId === refundId,
+    );
+    if (entries.length === 0) {
+      perRefund.push({ refundId, recorded: 0 });
+      continue;
+    }
+    // The store groups by resource id, so two entries for one id is a broken reply.
+    if (entries.length > 1 || !isCount(entries[0]!.refundCount)) return { kind: "malformed", refundId };
+    perRefund.push({ refundId, recorded: entries[0]!.refundCount });
+  }
+  return { kind: "counts", perRefund, refusedByPaypal: refunds.length - accepted.length };
+}
+
+const refundDecisive = (e: RefundEvidence) =>
+  e.kind === "counts" &&
+  (e.perRefund.some((p) => p.recorded >= 2) || e.perRefund.every((p) => p.recorded === 1));
 
 /** Our instruction to the planner, derived from the template so the two cannot drift. */
 export function askFor(template: ScenarioTemplate): string {
@@ -324,45 +373,85 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     ...REFUND_AFTER_PARTIAL,
     needsBankedPurchase: false,
     supported: true,
+    /**
+     * Like duplicate-webhook, the verdict rests on the store's rows for this
+     * run's refund ids. A refund event that has not arrived yet looks exactly
+     * like one the store dropped, so a missing count is inconclusive, never ok.
+     */
     check(store: StoreSnapshot, run: RunState) {
-      const refunds = stepsOfKind(run, "refund");
-      if (refunds.length < 2) {
-        return finding(REFUND_AFTER_PARTIAL, "inconclusive", {
-          event: "PAYMENT.CAPTURE.REFUNDED",
-          expected: "two refunds against one capture",
-          actual: `the plan contained ${refunds.length} refund step(s)`,
-          likelyFix: "re-plan with a partial refund followed by a second refund",
+      const event = "PAYMENT.CAPTURE.REFUNDED";
+      const e = refundEvidence(store, run);
+      const none = (actual: string, likelyFix: string) =>
+        finding(REFUND_AFTER_PARTIAL, "inconclusive", {
+          event,
+          expected: "one refund event recorded per refund PayPal accepted",
+          actual,
+          likelyFix,
         });
+
+      switch (e.kind) {
+        case "too-few-steps":
+          return none(
+            `the plan contained ${e.planned} refund step(s)`,
+            "re-plan with a partial refund followed by a second refund",
+          );
+        case "unknown-step":
+          return none(
+            `refund step ${e.stepId} ended unknown, so PayPal may or may not have accepted it and the count to expect is unknown`,
+            "check the refund in PayPal, then re-run",
+          );
+        case "none-accepted":
+          return none(
+            "PayPal accepted no refund, so there was nothing for the store to record",
+            "re-run with an order that captured, so the partial refund can succeed",
+          );
+        case "no-refund-id":
+          return none(
+            `refund step ${e.stepId} recorded no refund id, so there is nothing to match in the store`,
+            "check the refund handler records refund_id",
+          );
+        case "malformed":
+          return none(
+            `the store's record for refund ${e.refundId} is malformed, so it proves nothing`,
+            "check the store's state endpoint",
+          );
+        case "counts":
+          break;
       }
 
-      const succeeded = refunds.filter((r) => r.status === "succeeded").length;
-      const recorded = sum(store.orders.map((o) => o.refundCount));
-
-      if (recorded > succeeded) {
+      const twice = e.perRefund.filter((p) => p.recorded >= 2);
+      if (twice.length > 0) {
         return finding(REFUND_AFTER_PARTIAL, "bug", {
-          event: "PAYMENT.CAPTURE.REFUNDED",
-          expected: `${succeeded} refund event(s) recorded, one per refund that actually succeeded`,
-          actual: `the store recorded ${recorded}`,
+          event,
+          expected: "one refund event recorded per refund PayPal accepted",
+          actual: twice.map((p) => `refund ${p.refundId} was recorded ${p.recorded} times`).join("; "),
           likelyFix:
             "dedupe refund events by event id too: the same redelivery hazard applies to every event type, not only captures",
         });
       }
-      if (recorded < succeeded) {
-        return finding(REFUND_AFTER_PARTIAL, "bug", {
-          event: "PAYMENT.CAPTURE.REFUNDED",
-          expected: `${succeeded} refund event(s) recorded`,
-          actual: `the store recorded ${recorded}, so at least one refund never reached it`,
-          likelyFix:
-            "check the store returns a 2xx for refund events; PayPal stops retrying only once it does",
+
+      const accepted = e.perRefund.length;
+      const refusedNote =
+        e.refusedByPaypal > 0 ? `; PayPal refused the other ${e.refusedByPaypal} itself` : "";
+      if (e.perRefund.every((p) => p.recorded === 1)) {
+        return finding(REFUND_AFTER_PARTIAL, "ok", {
+          event,
+          expected: "one refund event recorded per refund PayPal accepted",
+          actual: `${accepted} refund(s) accepted and each recorded once${refusedNote}`,
+          likelyFix: "none needed",
         });
       }
 
-      return finding(REFUND_AFTER_PARTIAL, "ok", {
-        event: "PAYMENT.CAPTURE.REFUNDED",
-        expected: "the refund ledger to match what PayPal actually accepted",
-        actual: `${succeeded} refund(s) accepted and ${recorded} recorded; PayPal refused any over-refund itself`,
-        likelyFix: "none needed",
-      });
+      const missing = e.perRefund.filter((p) => p.recorded === 0).map((p) => p.refundId);
+      return none(
+        `${accepted - missing.length} of ${accepted} accepted refund(s) had reached the store when the wait ended (missing: ${missing.join(", ")}); a refund event that never arrived proves nothing${refusalNote(store, [])}`,
+        "re-run; if it repeats, check the store returns a 2xx for refund events and PayPal's delivery status",
+      );
+    },
+    settled(store: StoreSnapshot, run: RunState) {
+      const e = refundEvidence(store, run);
+      // Waiting only helps while a missing refund could still arrive.
+      return e.kind !== "counts" || refundDecisive(e);
     },
   }, {
     steps: [
