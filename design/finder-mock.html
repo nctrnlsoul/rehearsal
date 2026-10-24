@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REHEARSAL edge-case finder (MOCK)</title>
+<link rel="icon" href="data:,">
+<!-- Mock only: the app self-hosts both faces with next/font/local (R-027). -->
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="mock-base.css">
+<style>
+header.page { padding: 28px 24px 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; align-items: end; }
+header.page p { margin-top: 8px; color: var(--text-2); max-width: 66ch; }
+
+/* The verdict as numerals, before and after, read in one glance. */
+.verdicts { display: grid; grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr); align-items: center; gap: 0; padding: 28px 24px 8px; max-width: 980px; }
+.verdict-big .num { font: 500 64px/1 var(--font-mono); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.verdict-big .num small { font: 500 20px var(--font-sans); letter-spacing: 0; color: var(--text-2); margin-left: 6px; }
+.verdict-big.bug .num { color: var(--state-bug); }
+.verdict-big.ok .num { color: var(--state-ok); }
+.verdict-big .when { margin-top: 8px; font: 400 12.5px var(--font-mono); color: var(--text-3); }
+.verdict-big .mark { margin-top: 6px; }
+.arrow { justify-self: center; color: var(--text-3); }
+.arrow svg { width: 40px; height: 16px; }
+
+/* The lab report: one check per row, the same rows for both runs. */
+.report { padding: 16px 24px 8px; }
+.report h2 { margin-bottom: 4px; }
+.report .cls { font-size: 17px; font-weight: 600; }
+.report .cls .mono { font-size: 13px; color: var(--text-3); font-weight: 400; margin-left: 8px; }
+table.lab { width: 100%; max-width: 1180px; margin-top: 14px; border-collapse: collapse; font-size: 14px; }
+.lab th { text-align: left; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); font-weight: 500; padding: 0 12px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+.lab th .mono { text-transform: none; letter-spacing: 0; font-size: 12px; display: block; color: var(--text-2); }
+.lab td { padding: 11px 12px 11px 0; border-bottom: 1px dashed var(--rule); vertical-align: top; }
+.lab td.obs { font: 500 15px var(--font-mono); font-variant-numeric: tabular-nums; }
+.lab td.exp { color: var(--text-2); }
+.lab tr.hit td.obs.before { color: var(--state-bug); }
+.flag { font: 500 11px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
+.flag.out { color: var(--state-bug); }
+.flag.in { color: var(--text-3); }
+
+/* Evidence: the store's own rows, not our summary of them. */
+.evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding: 24px 24px 8px; max-width: 1228px; }
+.run { background: var(--bg-card); border: 1px solid var(--rule); border-radius: var(--card-radius); }
+.run .plate { display: flex; justify-content: space-between; gap: 10px; padding: 9px 14px; background: var(--bg-card-head); border-radius: var(--card-radius) var(--card-radius) 0 0; font: 500 12.5px var(--font-mono); flex-wrap: wrap; }
+.run .plate .tag { font: 500 12px var(--font-sans); }
+.run .plate .tag.bug { color: var(--state-bug); }
+.run .plate .tag.ok { color: var(--state-ok); }
+.run .body { padding: 12px 14px 14px; }
+.run dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font: 400 12.5px var(--font-mono); }
+.run dt { color: var(--text-3); }
+.run dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.rows { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+.rows li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 0 12px; padding: 8px 0; border-bottom: 1px dashed var(--rule); font-size: 13.5px; }
+.rows li:last-child { border-bottom: 0; }
+.rows .t { font: 400 12.5px var(--font-mono); color: var(--text-3); padding-top: 1px; }
+.rows .act { font: 500 13px var(--font-mono); }
+.rows .act.twice { color: var(--state-bug); }
+.rows .proof { color: var(--text-3); font-size: 12.5px; }
+.rows .proof .mono { font-size: 12px; }
+
+/* Between the runs: the actual change. */
+.fix { padding: 24px 24px 8px; max-width: 1228px; }
+.fix .diff { margin-top: 10px; background: var(--bg-panel); border: 1px solid var(--rule); border-radius: var(--control-radius); font: 400 13px/1.7 var(--font-mono); padding: 10px 14px; overflow-x: auto; }
+.fix .diff .file { color: var(--text-3); }
+.fix .diff .del { color: var(--state-bug); }
+.fix .diff .add { color: var(--state-ok); }
+.fix .meta { margin-top: 8px; font: 400 12.5px var(--font-mono); color: var(--text-3); }
+
+.rule { padding: 24px 24px 8px; max-width: 980px; }
+.rule ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 4px; color: var(--text-2); }
+.rule b { color: var(--text); font-weight: 600; }
+.actions { padding: 20px 24px 40px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+@media (max-width: 960px) {
+  header.page { grid-template-columns: 1fr; padding: 24px 16px 0; }
+  .verdicts { grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr); padding: 22px 16px 4px; }
+  .verdict-big .num { font-size: 44px; }
+  .verdict-big .num small { display: block; margin: 6px 0 0; font-size: 15px; }
+  .report, .evidence, .fix, .rule, .actions { padding-left: 16px; padding-right: 16px; }
+  .evidence { grid-template-columns: 1fr; }
+  /* The table becomes one block per check, labels kept beside their values. */
+  table.lab, .lab tbody, .lab tr, .lab td { display: block; width: 100%; }
+  .lab thead { display: none; }
+  .lab tr { padding: 10px 0; border-bottom: 1px solid var(--rule); }
+  .lab td { border: 0; padding: 3px 0; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; }
+  .lab td::before { content: attr(data-l); font: 500 11px var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); padding-top: 3px; }
+  .lab td.check { font-weight: 600; display: block; }
+  .lab td.check::before { content: none; }
+}
+</style>
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+<a class="skip" href="#report">Skip to the report</a>
+
+<div class="mock-banner" role="note">
+  <strong>MOCK</strong>
+  <span>Design mock only, laid out with real data: the two runs, ids, counts and the fix are from REHEARSAL's own runs on 23 and 24 Oct 2026. Nothing here links anywhere.</span>
+</div>
+
+<div class="topbar">
+  <div><span class="wordmark">REHEARSAL</span> <span class="where">/ <b>Edge-case finder</b></span></div>
+  <div class="env"><span class="label">Sample store</span> webhook <span class="mono">4DE52141J0303334X</span></div>
+</div>
+
+<header class="page">
+  <div>
+    <h1>The finder caught a real bug in the sample store, then proved the one-line fix.</h1>
+    <p>Same scenario, same check, run before and after the change. Each verdict rests on the store's own rows, not on the absence of an error.</p>
+  </div>
+</header>
+
+<section class="verdicts" aria-label="Verdicts before and after the fix">
+  <div class="verdict-big bug arrive" style="--i:0">
+    <div class="label">Before</div>
+    <div class="num">1<small>bug</small></div>
+    <span class="mark bug"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2"/></svg>BUG · duplicate-webhook</span>
+    <div class="when">run 20261023231552-60ea96 · 23 Oct, 23:15 UTC</div>
+  </div>
+  <div class="arrow" aria-hidden="true"><svg viewBox="0 0 40 16"><path d="M2 8h34M30 3l6 5-6 5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></div>
+  <div class="verdict-big ok arrive" style="--i:1">
+    <div class="label">After</div>
+    <div class="num">0<small>bugs</small></div>
+    <span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>OK · duplicate-webhook</span>
+    <div class="when">run 20261024011812-208f4e · 24 Oct, 01:18 UTC</div>
+  </div>
+</section>
+
+<section class="report arrive" style="--i:2" id="report" aria-labelledby="cls-h">
+  <h2 class="label">Lab report</h2>
+  <p class="cls" id="cls-h">A redelivered capture event fulfills the order twice <span class="mono">duplicate-webhook · PAYMENT.CAPTURE.COMPLETED</span></p>
+  <table class="lab">
+    <thead>
+      <tr><th>Check</th><th>Expected</th><th>Before<span class="mono">60ea96</span></th><th>Flag</th><th>After<span class="mono">208f4e</span></th><th>Flag</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="check">Deliveries of the resent event</td>
+        <td class="exp" data-l="Expected">at least 2: the resend has to arrive</td>
+        <td class="obs before" data-l="Before">2</td><td data-l="Before flag"><span class="flag in">in range</span></td>
+        <td class="obs" data-l="After">2</td><td data-l="After flag"><span class="flag in">in range</span></td>
+      </tr>
+      <tr class="hit">
+        <td class="check">Fulfillments for that event id</td>
+        <td class="exp" data-l="Expected">exactly 1, however many deliveries</td>
+        <td class="obs before" data-l="Before">2</td><td data-l="Before flag"><span class="flag out">high · bug</span></td>
+        <td class="obs" data-l="After">1</td><td data-l="After flag"><span class="flag in">in range</span></td>
+      </tr>
+      <tr class="hit">
+        <td class="check">Redeliveries recognized and ignored</td>
+        <td class="exp" data-l="Expected">every delivery after the first</td>
+        <td class="obs before" data-l="Before">0</td><td data-l="Before flag"><span class="flag out">low</span></td>
+        <td class="obs" data-l="After">1</td><td data-l="After flag"><span class="flag in">in range</span></td>
+      </tr>
+      <tr>
+        <td class="check">Deliveries verified as PayPal's</td>
+        <td class="exp" data-l="Expected">all of them</td>
+        <td class="obs before" data-l="Before">2 of 2</td><td data-l="Before flag"><span class="flag in">in range</span></td>
+        <td class="obs" data-l="After">2 of 2</td><td data-l="After flag"><span class="flag in">in range</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="evidence" aria-label="Evidence: the store's rows for each run">
+  <article class="run arrive" style="--i:3">
+    <div class="plate"><span>20261023231552-60ea96</span><span class="tag bug">before the fix</span></div>
+    <div class="body">
+      <dl>
+        <dt>order</dt><dd>3Y2144672G186725Y</dd>
+        <dt>capture</dt><dd>80644537PH409550V · USD 25.00</dd>
+        <dt>event</dt><dd>WH-23242717T8452430B-4FP87531JX1278159</dd>
+        <dt>report</dt><dd>runs/finder-20261023231753.md</dd>
+      </dl>
+      <ol class="rows" aria-label="Store rows for this event">
+        <li><span class="t">23:16:17</span><span><span class="act twice">fulfilled</span><span class="proof"> · verified · cert host <span class="mono">api.sandbox.paypal.com</span></span></span></li>
+        <li><span class="t">23:17:51</span><span><span class="act twice">fulfilled again</span><span class="proof"> · verified · cert host <span class="mono">api.sandbox.paypal.com</span></span></span></li>
+      </ol>
+    </div>
+  </article>
+  <article class="run arrive" style="--i:4">
+    <div class="plate"><span>20261024011812-208f4e</span><span class="tag ok">after the fix</span></div>
+    <div class="body">
+      <dl>
+        <dt>order</dt><dd>9XW82145R0198523E</dd>
+        <dt>capture</dt><dd>7FK80862277639113 · USD 25.00</dd>
+        <dt>event</dt><dd>WH-1XN5343594084053N-3NH67648AD6825106</dd>
+        <dt>report</dt><dd>runs/finder-20261024011922.md</dd>
+      </dl>
+      <ol class="rows" aria-label="Store rows for this event">
+        <li><span class="t">01:18:37</span><span><span class="act">fulfilled</span><span class="proof"> · verified</span></span></li>
+        <li><span class="t">01:19:21</span><span><span class="act">duplicate_ignored</span><span class="proof"> · verified</span></span></li>
+      </ol>
+    </div>
+  </article>
+</section>
+
+<section class="fix arrive" style="--i:5" aria-labelledby="fix-h">
+  <h2 class="label" id="fix-h">The change between the two runs</h2>
+  <div class="diff" role="img" aria-label="DEDUPE_BY_EVENT_ID changed from false to true in store/lib/merchant.ts, line 18">
+    <div class="file">store/lib/merchant.ts:18</div>
+    <div class="del">- export const DEDUPE_BY_EVENT_ID = false;</div>
+    <div class="add">+ export const DEDUPE_BY_EVENT_ID = true;</div>
+  </div>
+  <p class="meta">commit d6b8ff6 · fix(store): dedupe webhook events by event id · merged in PR #6</p>
+</section>
+
+<section class="rule arrive" style="--i:6" aria-labelledby="rule-h">
+  <h2 class="label" id="rule-h">How a verdict is decided</h2>
+  <ol>
+    <li><b>BUG</b> only when one event id was fulfilled twice.</li>
+    <li><b>OK</b> only when the event was fulfilled once and a redelivery reached the store and was ignored.</li>
+    <li>Anything else, including a redelivery PayPal never sent, is <b>INCONCLUSIVE</b>, never OK.</li>
+  </ol>
+</section>
+
+<div class="actions">
+  <button class="btn btn-primary" type="button">Run duplicate-webhook again</button>
+  <span class="note">One class per request on the hosted demo. These two runs took about 70 seconds and 2 minutes, mostly waiting on PayPal's redelivery; longer when PayPal's event list lags.</span>
+</div>
+
+<footer>MOCK · REHEARSAL console, surface 4 of 5: edge-case finder · runs, ids, counts and the fix are real · the cert host for the after-run rows is not in our notes, so it is not shown</footer>
+</body>
+</html>
