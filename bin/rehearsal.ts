@@ -11,10 +11,11 @@ import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
 import { capsFromEnv } from "../src/core/caps";
 import { PaypalClient } from "../src/adapters/paypal";
 import {
+  DEFAULT_FINDER_DESCRIPTION,
   bankStore as sharedBankStore,
   eventOriginsFromEnv,
   executeWithPersistence,
-  gateScenario,
+  finderDepsFrom,
   loadResume,
   newRunId,
   pathsUnder,
@@ -194,9 +195,7 @@ async function planCommand(rest: string[]): Promise<void> {
 
 async function findCommand(rest: string[]): Promise<void> {
   const description =
-    rest[0] !== undefined && !rest[0].startsWith("--")
-      ? rest[0]
-      : "a small online shop that takes card orders, invoices wholesale buyers, pays suppliers, and occasionally gets a dispute";
+    rest[0] !== undefined && !rest[0].startsWith("--") ? rest[0] : DEFAULT_FINDER_DESCRIPTION;
   const flags = args(rest.slice(rest[0] !== undefined && !rest[0].startsWith("--") ? 1 : 0));
 
   const apiKey = requiredEnv("ANTHROPIC_API_KEY");
@@ -216,26 +215,18 @@ async function findCommand(rest: string[]): Promise<void> {
 
   const results = await runFinder(
     { description, only: flags["only"], webhookTarget: webhookHandlerUrl(storeOrigin) },
-    {
-      plan: (cls, desc) =>
-        planScenario(
-          {
-            description: desc,
-            extraInstruction: cls.ask,
-            allowedEventOrigins: allowedEventOrigins(),
-            caps,
-          },
-          { generate, budget },
-        ),
-      validate: (candidate) =>
-        gateScenario(candidate, { allowedEventOrigins: allowedEventOrigins(), caps }),
+    finderDepsFrom({
+      generate,
+      budget,
+      caps,
+      allowedEventOrigins: allowedEventOrigins(),
       run: (scenario, { webhookMode }) => executeScenarioFromCli(scenario, {}, webhookMode),
       readStore: storeStateReader({ origin: storeOrigin, token: storeToken }),
       bankAvailable: () => availablePurchases(bank.read()).length,
       log: (line) => console.log(line),
       now: () => new Date(),
       sleep,
-    },
+    }),
   );
 
   const report = finderReportLines(results).join("\n");

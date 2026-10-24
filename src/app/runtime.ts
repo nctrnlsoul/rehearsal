@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
+import type { AiBudgetTracker } from "../ai/budget";
 import type { FinderDeps } from "../ai/finder";
+import { type GenerateFn, planScenario } from "../ai/planner";
 import type { PaypalClient } from "../adapters/paypal";
 import { JsonStore } from "../adapters/jsonStore";
 import { type Caps, checkCaps } from "../core/caps";
@@ -204,5 +206,47 @@ export function storeStateReader(opts: {
     });
     if (!res.ok) throw new Error(`store state read returned http ${res.status}`);
     return (await res.json()) as Awaited<ReturnType<FinderDeps["readStore"]>>;
+  };
+}
+
+export const DEFAULT_FINDER_DESCRIPTION =
+  "a small online shop that takes card orders, invoices wholesale buyers, pays suppliers, and occasionally gets a dispute";
+
+/**
+ * The finder's dependencies. Planning aims the model at each class with the
+ * class's own ask, and every filled template passes the same scenario gate a
+ * hand-written scenario does.
+ */
+export function finderDepsFrom(opts: {
+  generate: GenerateFn;
+  budget: AiBudgetTracker;
+  caps: Caps;
+  allowedEventOrigins: readonly string[];
+  run: FinderDeps["run"];
+  readStore: FinderDeps["readStore"];
+  bankAvailable: () => number;
+  log: (line: string) => void;
+  now: () => Date;
+  sleep: (ms: number) => Promise<void>;
+}): FinderDeps {
+  return {
+    plan: (cls, description) =>
+      planScenario(
+        {
+          description,
+          extraInstruction: cls.ask,
+          allowedEventOrigins: opts.allowedEventOrigins,
+          caps: opts.caps,
+        },
+        { generate: opts.generate, budget: opts.budget },
+      ),
+    validate: (candidate) =>
+      gateScenario(candidate, { allowedEventOrigins: opts.allowedEventOrigins, caps: opts.caps }),
+    run: opts.run,
+    readStore: opts.readStore,
+    bankAvailable: opts.bankAvailable,
+    log: opts.log,
+    now: opts.now,
+    sleep: opts.sleep,
   };
 }
