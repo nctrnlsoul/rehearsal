@@ -16,7 +16,7 @@ console yet. Day-1 capability findings are in [gate/RESULTS.md](gate/RESULTS.md)
 ## Layout
 
 ```
-src/core/        pure, no network, no I/O. All the judgement lives here.
+src/core/        pure, no network, no I/O. All the judgment lives here.
 src/adapters/    thin. Credentials, HTTP transport, JSON file storage.
 src/executor/    scenario execution: handlers, runner, dry run, report.
 src/ai/          planner (plain English to scenario) and the edge-case finder.

@@ -70,6 +70,11 @@ describe("the class list itself", () => {
 });
 
 describe("duplicate-webhook", () => {
+  // Shown in the finder report and the console, so it is in US spelling (R-033).
+  it("titles the class in US spelling", () => {
+    expect(classById("duplicate-webhook")!.title).toBe("A redelivered capture event fulfills the order twice");
+  });
+
   const EV = "WH-RESENT-1";
   const resent: StepSpec[] = [
     { id: "o1", kind: "card_order", status: "succeeded" },
@@ -88,10 +93,10 @@ describe("duplicate-webhook", () => {
     expect(f.likelyFix).toMatch(/idempotency key/i);
   });
 
-  it("is ok when the second delivery was recognised and ignored", () => {
+  it("is ok when the second delivery was recognized and ignored", () => {
     const f = check("duplicate-webhook", delivered(1, 1), runWith(resent));
     expect(f.verdict).toBe("ok");
-    expect(f.actual).toContain("recognised and ignored");
+    expect(f.actual).toContain("recognized and ignored");
   });
 
   // The false pass this replaces: one row looks exactly like a store that coped.
@@ -127,7 +132,7 @@ describe("duplicate-webhook", () => {
     expect(f.likelyFix).toMatch(/deploy the current store/);
   });
 
-  it("is inconclusive when a redelivery was neither fulfilled nor recognised", () => {
+  it("is inconclusive when a redelivery was neither fulfilled nor recognized", () => {
     const f = check("duplicate-webhook", delivered(1, 0, 1), runWith(resent));
     expect(f.verdict).toBe("inconclusive");
     expect(f.likelyFix).toMatch(/verifying signatures/i);

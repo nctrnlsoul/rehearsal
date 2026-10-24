@@ -27,7 +27,7 @@ describe("parseRetryAfter", () => {
 });
 
 describe("retryDecision", () => {
-  it("retries 429 and honours Retry-After", () => {
+  it("retries 429 and honors Retry-After", () => {
     const d = retryDecision({ ...base, status: 429, retryAfter: "3" });
     expect(d.retry).toBe(true);
     expect(d.delayMs).toBe(3000);

@@ -185,8 +185,8 @@ export const invoiceCancelHandler: StepHandler = async (ctx) => {
     path: `/v2/invoicing/invoices/${invoiceId}/cancel`,
     idempotencySeed: ctx.seed,
     body: {
-      subject: "REHEARSAL cancelled this invoice",
-      note: `Cancelled by REHEARSAL step ${step.id}.`,
+      subject: "REHEARSAL canceled this invoice",
+      note: `Canceled by REHEARSAL step ${step.id}.`,
       send_to_invoicer: false,
       send_to_recipient: false,
     },

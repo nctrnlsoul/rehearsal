@@ -6,7 +6,7 @@ export default function Page() {
   return (
     <main>
       <h1>Ember and Wick</h1>
-      <p>A sample merchant app. It takes PayPal webhooks and fulfils orders.</p>
+      <p>A sample merchant app. It takes PayPal webhooks and fulfills orders.</p>
       <ul>
         <li>
           <code>POST /api/paypal/webhook</code> handles an event
