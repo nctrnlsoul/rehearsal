@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REHEARSAL scenario builder (MOCK)</title>
+<link rel="icon" href="data:,">
+<!-- Mock only: the app self-hosts both faces with next/font/local (R-027). -->
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="mock-base.css">
+<style>
+header.page { padding: 28px 24px 8px; }
+header.page p { margin-top: 8px; color: var(--text-2); max-width: 70ch; }
+
+/* Two columns kept in step: what you wrote on the left, what it became on the right. */
+main { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 32px; padding: 20px 24px 40px; }
+
+.steps-nav { display: flex; gap: 20px; margin-bottom: 16px; font-size: 13px; color: var(--text-3); flex-wrap: wrap; }
+.steps-nav span b { font: 500 12px var(--font-mono); color: var(--text-2); margin-right: 6px; }
+.steps-nav .on { color: var(--text); }
+
+.describe label { display: block; font-weight: 500; margin-bottom: 8px; }
+.describe textarea {
+  width: 100%; min-height: 168px; resize: vertical; padding: 12px 14px;
+  background: var(--bg-canvas); color: var(--text); border: 1px solid var(--rule); border-radius: var(--control-radius);
+  font: 400 15px/1.55 var(--font-sans);
+}
+.describe .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.describe .count { font: 400 12px var(--font-mono); color: var(--text-3); }
+.describe .src { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule); }
+.describe .src p + p { margin-top: 6px; }
+
+/* The plan: a list of what will be created in PayPal, in the grammar of a plan before an apply. */
+.plan { background: var(--bg-card); border: 1px solid var(--rule); border-radius: var(--card-radius); }
+.plan .plate { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; background: var(--bg-card-head); border-radius: var(--card-radius) var(--card-radius) 0 0; flex-wrap: wrap; }
+.plan .plate .mono { font-size: 12.5px; color: var(--text-2); }
+.plan .body { padding: 14px 16px 16px; }
+.plan h2 { font-size: 17px; font-weight: 600; }
+.plan .about { color: var(--text-2); font-size: 14px; margin-top: 2px; }
+
+.creates { margin: 14px 0 0; padding: 0; list-style: none; font: 400 13px/1.5 var(--font-mono); }
+.creates li { display: grid; grid-template-columns: 14px 190px minmax(0, 1fr); gap: 0 10px; padding: 5px 0; border-top: 1px dashed var(--rule); }
+.creates li:first-child { border-top: 0; }
+.creates .plus { color: var(--state-ok); }
+.creates .kind { color: var(--text); }
+.creates .id { color: var(--text-3); display: block; }
+.creates .what { font-family: var(--font-sans); color: var(--text-2); font-size: 14px; }
+.creates .after { color: var(--text-3); font-size: 12px; font-family: var(--font-mono); }
+.totals { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); font: 500 13.5px var(--font-mono); color: var(--text); }
+
+.checks { margin-top: 16px; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 14px; }
+.checks dt { color: var(--text-3); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 500; white-space: nowrap; padding-top: 2px; }
+.checks dd { margin: 0; }
+.checks dd .mono { font-size: 13px; }
+
+details.json { margin-top: 16px; border-top: 1px solid var(--rule); padding-top: 12px; }
+details.json summary { cursor: pointer; font-size: 14px; color: var(--text-2); }
+details.json pre { margin: 10px 0 0; max-height: 260px; overflow: auto; padding: 12px; background: var(--bg-canvas); border: 1px solid var(--rule); border-radius: var(--control-radius); font: 400 12.5px/1.5 var(--font-mono); color: var(--text-2); }
+
+.confirm { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: center; }
+.confirm .digest { font: 400 12px var(--font-mono); color: var(--text-3); overflow-wrap: anywhere; }
+.confirm p.note { grid-column: 1 / -1; }
+
+/* A second real plan, shown in the state it is really in today. */
+.blocked { margin-top: 20px; border: 1px dashed var(--rule); border-radius: var(--card-radius); padding: 14px 16px; }
+.blocked .head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.blocked q { quotes: "\201C" "\201D"; color: var(--text); }
+.blocked .creates { margin-top: 10px; }
+.blocked .why { margin-top: 10px; display: grid; gap: 4px; font-size: 14px; color: var(--text-2); }
+.blocked .why .mono { font-size: 13px; color: var(--text); }
+.blocked .btn { margin-top: 12px; }
+
+@media (max-width: 960px) {
+  main { grid-template-columns: 1fr; padding: 16px 16px 32px; }
+  header.page { padding: 24px 16px 4px; }
+  .creates li { grid-template-columns: 14px minmax(0, 1fr); }
+  .creates li > :nth-child(3) { grid-column: 2; }
+  .confirm { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+<a class="skip" href="#plan">Skip to the plan</a>
+
+<div class="mock-banner" role="note">
+  <strong>MOCK</strong>
+  <span>Design mock only. Both plans are real planner outputs saved by the CLI; the description text is illustrative. Nothing here calls a model or PayPal.</span>
+</div>
+
+<div class="topbar">
+  <div><span class="wordmark">REHEARSAL</span> <span class="where">/ <b>Scenario builder</b></span></div>
+  <div class="env"><span class="label">Sandbox only</span> <span class="mono">api-m.sandbox.paypal.com</span></div>
+</div>
+
+<header class="page">
+  <h1>Describe a business. Read exactly what it becomes. Then run that, and only that.</h1>
+  <p>The model writes a plan. The schema, the spend caps and the event-target allowlist decide whether it may run. Nothing reaches PayPal until you press Run.</p>
+</header>
+
+<main>
+  <section class="describe arrive" style="--i:0" aria-labelledby="describe-h">
+    <div class="steps-nav" aria-label="Builder steps">
+      <span class="on"><b>01</b>Describe</span><span class="on"><b>02</b>Plan</span><span class="on"><b>03</b>Dry run</span><span><b>04</b>Run</span>
+    </div>
+    <label id="describe-h" for="desc">Your business, in plain English</label>
+    <textarea id="desc">A tiny bakery. Two customers pay by card, one for pastries and one for a custom cake. A catering client gets an invoice for USD 120 and pays it outside PayPal.</textarea>
+    <div class="row">
+      <span class="count">159 of 4,000 characters</span>
+      <button class="btn btn-quiet" type="button">Plan it again</button>
+    </div>
+    <div class="src">
+      <p class="note">Planning again asks the model again and makes a new plan with a new digest. Run only ever runs the plan shown on the right.</p>
+      <p class="note">One model call per plan, at most 4,000 output tokens, 60 seconds.</p>
+    </div>
+  </section>
+
+  <section class="plan-col arrive" style="--i:1" id="plan" aria-labelledby="plan-h">
+    <article class="plan">
+      <div class="plate"><span class="label">Plan</span><span class="mono">plan-20261023193216</span></div>
+      <div class="body">
+        <h2 id="plan-h">Tiny Bakery Sandbox Scenario</h2>
+        <p class="about">Tiny Bakery (US) · A small bakery testing card payments and invoicing</p>
+
+        <ol class="creates" aria-label="What this plan creates in the PayPal sandbox">
+          <li><span class="plus" aria-hidden="true">+</span><span><span class="kind">card_order</span><span class="id">card-order-1</span></span><span><span class="what">Customer buys pastries, USD 45.00 captured by card</span></span></li>
+          <li><span class="plus" aria-hidden="true">+</span><span><span class="kind">card_order</span><span class="id">card-order-2</span></span><span><span class="what">Customer buys custom cake, USD 60.00 captured by card</span></span></li>
+          <li><span class="plus" aria-hidden="true">+</span><span><span class="kind">invoice_create</span><span class="id">invoice-1</span></span><span><span class="what">Invoice for catering order, USD 120.00, due in 7 days</span></span></li>
+          <li><span class="plus" aria-hidden="true">+</span><span><span class="kind">invoice_send</span><span class="id">invoice-1-send</span></span><span><span class="what">Send catering invoice, no email to anyone</span> <span class="after">after invoice-1</span></span></li>
+          <li><span class="plus" aria-hidden="true">+</span><span><span class="kind">invoice_record_payment</span><span class="id">invoice-1-payment</span></span><span><span class="what">Record external payment of USD 120.00</span> <span class="after">after invoice-1-send</span></span></li>
+        </ol>
+        <p class="totals">5 to create · USD 105.00 charged · USD 120.00 invoiced · 0 disputes</p>
+
+        <dl class="checks" aria-label="Checks this plan passed">
+          <dt>Schema</dt><dd><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>passed</span></dd>
+          <dt>Spend caps</dt><dd><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>within</span><br><span class="mono">USD 345.00 of 2,000.00</span> per run; charges, the invoice and the recorded payment all count<br>largest step <span class="mono">USD 120.00 of 500.00</span> · <span class="mono">5 of 30</span> steps · <span class="mono">0 of 2</span> disputes</dd>
+          <dt>Event target</dt><dd>none declared, so no webhook will be registered</dd>
+          <dt>Purchase bank</dt><dd>not used by this plan</dd>
+        </dl>
+
+        <details class="json">
+          <summary>The exact scenario that will run (JSON, as saved)</summary>
+<pre>{
+  "version": 1,
+  "name": "Tiny Bakery Sandbox Scenario",
+  "profile": {
+    "name": "Tiny Bakery",
+    "description": "A small bakery testing card payments and invoicing",
+    "country": "US"
+  },
+  "currency": "USD",
+  "steps": [
+    { "id": "card-order-1", "needs": [], "label": "Customer buys pastries",
+      "kind": "card_order", "amount": "45.00" },
+    { "id": "card-order-2", "needs": [], "label": "Customer buys custom cake",
+      "kind": "card_order", "amount": "60.00" },
+    { "id": "invoice-1", "needs": [], "label": "Invoice for catering order",
+      "kind": "invoice_create", "amount": "120.00",
+      "itemName": "Catering Order", "dueInDays": 7 },
+    { "id": "invoice-1-send", "needs": ["invoice-1"],
+      "label": "Send catering invoice", "kind": "invoice_send", "from": "invoice-1" },
+    { "id": "invoice-1-payment", "needs": ["invoice-1-send"],
+      "label": "Record external payment for catering invoice",
+      "kind": "invoice_record_payment", "from": "invoice-1", "amount": "120.00" }
+  ]
+}</pre>
+        </details>
+
+        <div class="confirm">
+          <button class="btn btn-primary" type="button">Run this exact plan</button>
+          <span class="digest">plan sha256 a94beac7ab3d50e6f4cef2874bcf09e026b1e98637bd5300af03a4460b34c423</span>
+          <p class="note">The run records this digest, and a resume must present the same one. Creates real records in the PayPal sandbox: 5 writes, each with its own idempotency key.</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="blocked arrive" style="--i:2" aria-labelledby="blocked-h">
+      <div class="head"><h2 id="blocked-h" class="label">Another real plan, as it stands today</h2><span class="mono note">plan-20261024025344-a96635</span></div>
+      <p style="margin-top:8px">From <q>an open dispute waiting for my response</q></p>
+      <ol class="creates" aria-label="What this plan would create">
+        <li><span class="plus" aria-hidden="true">+</span><span><span class="kind">open_dispute</span><span class="id">dispute-1</span></span><span><span class="what">Dispute a banked purchase, reason <span class="mono">MERCHANDISE_OR_SERVICE_NOT_RECEIVED</span></span></span></li>
+      </ol>
+      <div class="why">
+        <span class="mark wait"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg>BLOCKED: needs a banked purchase: run bank:add</span>
+        <span>Needs <span class="mono">1</span>, usable <span class="mono">0</span>. Each banked purchase costs a human approval click, so the plan waits rather than guessing.</span>
+      </div>
+      <button class="btn" type="button" disabled>Run this exact plan</button>
+    </article>
+  </section>
+</main>
+
+<footer>MOCK · REHEARSAL console, surface 2 of 5: scenario builder · plans and digests are real, the description is illustrative</footer>
+</body>
+</html>

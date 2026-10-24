@@ -123,7 +123,7 @@ await runGate({
 
     if (absent.length > 0) {
       ctx.note(
-        "absent scopes are reported, not fatal: PayPal sometimes honours a call whose scope it omits from the token response. The gate that needs it will prove or disprove that.",
+        "absent scopes are reported, not fatal: PayPal sometimes honors a call whose scope it omits from the token response. The gate that needs it will prove or disprove that.",
       );
     }
 

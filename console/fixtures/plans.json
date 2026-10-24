@@ -1,0 +1,100 @@
+{
+  "note": "Real planner outputs saved by the CLI in runs/plans/. sha256, capsTotal and largestStep were computed by the engine (scripts/console-plan-fixtures.mts). Nothing here calls a model.",
+  "caps": {
+    "perStep": "500.00",
+    "perRun": "2000.00",
+    "steps": 30,
+    "disputes": 2
+  },
+  "plans": [
+    {
+      "plan": "plan-20261023193216",
+      "description": null,
+      "sha256": "a94beac7ab3d50e6f4cef2874bcf09e026b1e98637bd5300af03a4460b34c423",
+      "capsTotal": "345.00",
+      "largestStep": "120.00",
+      "violations": 0,
+      "scenario": {
+        "version": 1,
+        "name": "Tiny Bakery Sandbox Scenario",
+        "profile": {
+          "name": "Tiny Bakery",
+          "description": "A small bakery testing card payments and invoicing",
+          "country": "US"
+        },
+        "currency": "USD",
+        "steps": [
+          {
+            "id": "card-order-1",
+            "needs": [],
+            "label": "Customer buys pastries",
+            "kind": "card_order",
+            "amount": "45.00"
+          },
+          {
+            "id": "card-order-2",
+            "needs": [],
+            "label": "Customer buys custom cake",
+            "kind": "card_order",
+            "amount": "60.00"
+          },
+          {
+            "id": "invoice-1",
+            "needs": [],
+            "label": "Invoice for catering order",
+            "kind": "invoice_create",
+            "amount": "120.00",
+            "itemName": "Catering Order",
+            "dueInDays": 7
+          },
+          {
+            "id": "invoice-1-send",
+            "needs": [
+              "invoice-1"
+            ],
+            "label": "Send catering invoice",
+            "kind": "invoice_send",
+            "from": "invoice-1"
+          },
+          {
+            "id": "invoice-1-payment",
+            "needs": [
+              "invoice-1-send"
+            ],
+            "label": "Record external payment for catering invoice",
+            "kind": "invoice_record_payment",
+            "from": "invoice-1",
+            "amount": "120.00"
+          }
+        ]
+      }
+    },
+    {
+      "plan": "plan-20261024025344-a96635",
+      "description": "an open dispute waiting for my response",
+      "sha256": "36f192216e9dc26d5e12b4b4d5b6521f8c7a120c7bfce014c36799c324dd6cf1",
+      "capsTotal": "0.00",
+      "largestStep": "0.00",
+      "violations": 0,
+      "scenario": {
+        "version": 1,
+        "name": "Open Dispute Awaiting Response",
+        "profile": {
+          "name": "Dispute Rehearsal Merchant",
+          "description": "Sandbox merchant with a pending dispute requiring a response",
+          "country": "US"
+        },
+        "currency": "USD",
+        "steps": [
+          {
+            "id": "dispute-1",
+            "needs": [],
+            "label": "Pre-approved purchase disputed, awaiting merchant response",
+            "kind": "open_dispute",
+            "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED"
+          }
+        ]
+      }
+    }
+  ]
+}

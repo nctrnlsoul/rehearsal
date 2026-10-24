@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REHEARSAL trust panel (MOCK)</title>
+<link rel="icon" href="data:,">
+<!-- Mock only: the app self-hosts both faces with next/font/local (R-027). -->
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="mock-base.css">
+<style>
+/* Asymmetric: the fixed-format label on the left, the claim boundary in the open on the right. */
+main { display: grid; grid-template-columns: 460px minmax(0, 1fr); gap: 56px; padding: 36px 24px 40px; max-width: 1240px; }
+
+/* The facts label. A fixed format that cannot be dressed up: same order every
+   time, heavy rules between groups, thin rules between lines. */
+.facts-label { border: 1px solid var(--text-2); padding: 14px 16px 16px; align-self: start; }
+.facts-label h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }
+.facts-label .serving { font-size: 14px; color: var(--text-2); margin-top: 2px; }
+.bar-heavy { height: 8px; background: var(--text-2); margin: 10px 0 6px; }
+.bar-mid { height: 3px; background: var(--text-2); margin: 8px 0 4px; }
+.group-h { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); font-weight: 600; margin: 2px 0 2px; }
+.line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 14.5px; }
+.line:last-child { border-bottom: 0; }
+.line dt { font-weight: 600; }
+.line dt small { display: block; font-weight: 400; color: var(--text-3); font-size: 12.5px; }
+.line dd { margin: 0; text-align: right; font: 500 13.5px var(--font-mono); font-variant-numeric: tabular-nums; }
+.line dd.word { font: 500 14px var(--font-sans); }
+.facts-label dl { margin: 0; }
+.facts-label .foot { margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
+
+/* The open side: the number, the line, and what a pass does not prove. */
+.open .big { font: 500 72px/1 var(--font-mono); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.open .big small { font: 500 22px var(--font-sans); letter-spacing: 0; color: var(--text-2); margin-left: 8px; }
+.open .split { margin-top: 10px; font: 400 13px var(--font-mono); color: var(--text-3); }
+.secline { margin-top: 36px; font-size: clamp(24px, 2.6vw, 34px); line-height: 1.2; font-weight: 600; letter-spacing: -0.01em; max-width: 22ch; text-wrap: balance; }
+.secline-note { margin-top: 8px; }
+.limits { margin-top: 36px; }
+.limits h2 { margin-bottom: 10px; }
+.limits ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; max-width: 64ch; }
+.limits li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--rule); color: var(--text-2); }
+.limits li b { color: var(--text); font-weight: 600; }
+.limits li .mono { font-size: 13px; }
+.limits svg { width: 14px; height: 14px; margin-top: 4px; color: var(--state-wait); }
+.cta { margin-top: 32px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+
+@media (max-width: 960px) {
+  main { grid-template-columns: 1fr; gap: 36px; padding: 24px 16px 32px; }
+  .open .big { font-size: 56px; }
+}
+</style>
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+<a class="skip" href="#facts">Skip to the facts</a>
+
+<div class="mock-banner" role="note">
+  <strong>MOCK</strong>
+  <span>Design mock only. Every fact below is backed by the code or a measurement on 24 Oct 2026; the security line is draft copy. Nothing links anywhere.</span>
+</div>
+
+<div class="topbar">
+  <div><span class="wordmark">REHEARSAL</span> <span class="where">/ <b>What you can trust here</b></span></div>
+  <div class="env"><span class="label">Sandbox only</span> <span class="mono">api-m.sandbox.paypal.com</span></div>
+</div>
+
+<main>
+  <section class="facts-label arrive" style="--i:0" id="facts" aria-labelledby="facts-h">
+    <h1 id="facts-h">REHEARSAL facts</h1>
+    <p class="serving">Per run · the same for every scenario, hosted or local</p>
+    <div class="bar-heavy" aria-hidden="true"></div>
+
+    <p class="group-h">Where it can reach</p>
+    <dl>
+      <div class="line"><dt>PayPal host<small>a literal in code, not a setting</small></dt><dd>api-m.sandbox.paypal.com</dd></div>
+      <div class="line"><dt>Live PayPal reachable</dt><dd class="word">No, by construction</dd></div>
+      <div class="line"><dt>Event targets<small>exact handler URL; the hosted demo allows only the sample store</small></dt><dd class="word">Allowlisted only</dd></div>
+    </dl>
+    <div class="bar-mid" aria-hidden="true"></div>
+
+    <p class="group-h">How much it can move</p>
+    <dl>
+      <div class="line"><dt>Largest single step</dt><dd>USD 500.00</dd></div>
+      <div class="line"><dt>Largest run</dt><dd>USD 2,000.00</dd></div>
+      <div class="line"><dt>Steps per run</dt><dd>30</dd></div>
+      <div class="line"><dt>Disputes per run</dt><dd>2</dd></div>
+    </dl>
+    <div class="bar-mid" aria-hidden="true"></div>
+
+    <p class="group-h">How it proves things</p>
+    <dl>
+      <div class="line"><dt>Writes with an idempotency key<small>refused before sending if one is missing</small></dt><dd>every POST, PUT, PATCH</dd></div>
+      <div class="line"><dt>Webhooks verified<small>PayPal's signature, cert host on an exact list of 4</small></dt><dd class="word">every delivery</dd></div>
+      <div class="line"><dt>Verdicts<small>no evidence reads INCONCLUSIVE, never OK</small></dt><dd class="word">On evidence only</dd></div>
+    </dl>
+    <div class="bar-mid" aria-hidden="true"></div>
+
+    <p class="group-h">The AI planner</p>
+    <dl>
+      <div class="line"><dt>Its plan is re-checked<small>schema, caps and allowlist on every reply</small></dt><dd class="word">Always</dd></div>
+      <div class="line"><dt>Per call</dt><dd>4,000 tokens · 60 s</dd></div>
+      <div class="line"><dt>Description read</dt><dd>4,000 chars max</dd></div>
+    </dl>
+    <div class="bar-heavy" aria-hidden="true"></div>
+    <p class="foot">Keys stay on the server and are never printed, logged or returned. The MCP server is stdio only and runs on your own machine with your own keys.</p>
+  </section>
+
+  <section class="open" aria-labelledby="tests-h">
+    <h2 id="tests-h" class="label">Tests passing</h2>
+    <div class="big arrive" style="--i:1">672<small>tests</small></div>
+    <p class="split">558 engine · 77 sample store · 37 receiver · measured 24 Oct 2026, branch v0.4.1</p>
+
+    <p class="secline arrive" style="--i:2">Sandbox only. Every write keyed and capped. No verdict without evidence.</p>
+    <p class="note secline-note">Draft copy for the security line.</p>
+
+    <div class="limits arrive" style="--i:3">
+      <h2 class="label">What a pass here does not prove</h2>
+      <ul>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg><span><b>Live PayPal.</b> Everything runs against the sandbox. A pass is evidence about your code's handling, not a promise about production.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg><span><b>Timing you can count on.</b> PayPal's sandbox event list once lagged its own delivery by more than <span class="mono">2 min</span>. When evidence does not arrive in time, the verdict is INCONCLUSIVE and you rerun.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg><span><b>Every dispute stage.</b> Disputes open and wait on the merchant. The sandbox refuses require-evidence and adjudicate at the stage a new dispute starts in, so those are out of scope.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg><span><b>Every failure class.</b> Proven on real runs: duplicate-webhook and refund-after-partial. Unclaimed-payout and overdue-invoice exist but are not claimed here. Dispute-on-a-refunded-order cannot be reached in this version and is reported as not tested.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg><span><b>Load.</b> This rehearses business events one at a time. It is not a load or volume test.</span></li>
+      </ul>
+    </div>
+
+    <div class="cta">
+      <button class="btn btn-primary" type="button">Start a rehearsal</button>
+      <span class="note">Opens the scenario builder. Runs need the judge passcode.</span>
+    </div>
+  </section>
+</main>
+
+<footer>MOCK · REHEARSAL console, surface 5 of 5: trust panel · facts backed by code and measured counts; the security line is draft</footer>
+</body>
+</html>

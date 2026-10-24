@@ -16,7 +16,7 @@ console yet. Day-1 capability findings are in [gate/RESULTS.md](gate/RESULTS.md)
 ## Layout
 
 ```
-src/core/        pure, no network, no I/O. All the judgement lives here.
+src/core/        pure, no network, no I/O. All the judgment lives here.
 src/adapters/    thin. Credentials, HTTP transport, JSON file storage.
 src/executor/    scenario execution: handlers, runner, dry run, report.
 src/ai/          planner (plain English to scenario) and the edge-case finder.
@@ -27,6 +27,8 @@ bin/mcp.ts       the MCP server's stdio entry point.
 scenarios/       scenario files. candle-shop.json uses every step kind.
 gate/            the day-1 capability gates that proved each API path.
 receiver/        separate tiny Next.js app: the public webhook endpoint.
+store/           the sample merchant app the edge-case finder tests.
+console/         the web console (Next.js). Stage A: recorded replays and the judge gate.
 tests/           unit tests over src/. None of them opens a socket.
 ```
 
@@ -147,6 +149,44 @@ same Claude Code session, both pointed at the sandbox:
 2. The toolkit's tools work it: `list_disputes`, `get_dispute`,
    `accept_dispute_claim`, `send_invoice_reminder`, `list_transactions`.
 3. REHEARSAL `find_edge_cases` checks how your own app handled the events.
+
+## Web console (`console/`)
+
+**Stage A** (R-035): all five surfaces built from the approved mocks:
+- trust panel;
+- scenario builder;
+- run replays;
+- edge-case finder;
+- judge gate.
+
+They read recorded replays of REHEARSAL's own runs. Every page that shows recorded data says REPLAY. Nothing in Stage A calls PayPal or a model; a test fails if any console source makes an outbound `fetch`.
+
+```
+cd console
+npm install
+npm run dev          # http://localhost:3000
+npm test             # gate, headers, fixtures, Stage A boundaries
+npm run build        # fetches Switzer first (see below)
+```
+
+**Judge gate (R-034):**
+- The passcode is compared server-side, as an scrypt hash, with `timingSafeEqual`.
+- Lockout is keyed by client IP (`x-vercel-forwarded-for`, which Vercel sets and does not take from the client), plus a global ceiling.
+- A passing passcode gets a signed `__Host-` session cookie: httpOnly, Secure, SameSite=Strict, 2 hours.
+- Behind the gate, Stage A only says that live runs arrive in Stage B.
+
+Two environment variables, names only:
+
+| Variable | What |
+|---|---|
+| `CONSOLE_PASSCODE_HASH` | the passcode's hash. Make it with `npm run hash-passcode`, which reads the passcode from stdin, never from the command line |
+| `CONSOLE_SESSION_SECRET` | 32 or more random characters that sign the session cookie |
+
+Without both, the gate stays shut and says so.
+
+**Fonts:**
+- **Switzer** is self-hosted (R-027), but its license (ITF FFL 2.0) forbids putting the font files in a repository. So `npm run build` downloads them from Fontshare first, into a gitignored folder, and refuses any file whose sha256 differs from the pinned one.
+- **DM Mono** is OFL and committed, with its license.
 
 ## Scenario files
 

@@ -11,3 +11,5 @@ gate/runs/
 /bank/
 receiver/node_modules/
 receiver/.next/
+# Browser automation output (screenshots, page snapshots, console logs).
+/.playwright-mcp/

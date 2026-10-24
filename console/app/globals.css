@@ -1,0 +1,124 @@
+/* The console's one token file. Values match design/mock-base.css, the approved mocks. */
+
+/* Tier 1: primitives. Raw values live here and nowhere else. */
+:root {
+  --ink-950: #0B0E12;
+  --ink-900: #12161D;
+  --ink-850: #1A2029;
+  --ink-800: #222936;
+  --ink-700: #2A313D;
+  --fog-100: #E7EDF3;
+  --fog-300: #A6B1BF;
+  --fog-400: #8A96A6;
+  --blossom-500: #4392E6;
+  --green-400: #3ED598;
+  --red-400: #FF5E64;
+  --amber-400: #F2BB4F;
+
+  /* Tier 2: semantic. Contrast on --bg-canvas, computed: text 16.40, text-2
+     8.90, text-3 6.44, accent 5.98, ok 10.29, bug 6.48, wait 11.05. On
+     --bg-card: text-3 5.45, accent 5.06, bug 5.49. Canvas text on an accent
+     fill: 5.98. Rules are lines only, never text. */
+  --bg-canvas: var(--ink-950);
+  --bg-panel: var(--ink-900);
+  --bg-card: var(--ink-850);
+  --bg-card-head: var(--ink-800);
+  --rule: var(--ink-700);
+  --text: var(--fog-100);
+  --text-2: var(--fog-300);
+  --text-3: var(--fog-400);
+  /* Spent once per screen: its one primary action, or the replay's live edge. */
+  --accent: var(--blossom-500);
+  --on-accent: var(--ink-950);
+  --state-ok: var(--green-400);
+  --state-bug: var(--red-400);
+  --state-wait: var(--amber-400);
+
+  --font-sans: var(--font-switzer), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-dm-mono), ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-hover: 160ms;
+  --dur-state: 200ms;
+  --dur-arrive: 520ms;
+
+  /* Tier 3: shared component values. */
+  --card-radius: 6px;
+  --control-radius: 5px;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg-canvas); }
+body {
+  position: relative; min-height: 100vh; margin: 0;
+  background: var(--bg-canvas); color: var(--text);
+  font: 400 15px/1.5 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+/* Grain over the large near-black field, a technical fix for banding, not decoration. */
+.grain {
+  position: absolute; inset: 0; z-index: 40; pointer-events: none; opacity: 0.06;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); font-weight: 500; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-radius: 4px; }
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 16px; top: 8px; background: var(--bg-card); padding: 8px 12px; z-index: 60; color: var(--text); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+a { color: inherit; }
+h1 { margin: 0; font-size: clamp(22px, 2.4vw, 30px); line-height: 1.2; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
+h2, p { margin: 0; }
+
+/* The REPLAY label: amber, like the mocks' MOCK label, so the accent stays spent once. */
+.replay-banner {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  padding: 8px 24px; border-bottom: 1px solid var(--rule);
+  font-size: 13px; color: var(--text-2);
+}
+.replay-banner strong { color: var(--state-wait); letter-spacing: 0.1em; font-weight: 600; }
+
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px 24px; padding: 16px 24px 0; flex-wrap: wrap; }
+.topbar nav { display: flex; gap: 4px 18px; flex-wrap: wrap; align-items: center; }
+.wordmark { font-weight: 600; font-size: 14px; letter-spacing: 0.06em; text-decoration: none; margin-right: 6px; }
+.topbar nav a:not(.wordmark) { font-size: 14px; color: var(--text-2); text-decoration: none; padding: 4px 0; }
+.topbar nav a:not(.wordmark):hover { color: var(--text); }
+.topbar nav a[aria-current="page"] { color: var(--text); text-decoration: underline; text-underline-offset: 6px; text-decoration-color: var(--rule); }
+.env { font-size: 13px; color: var(--text-2); }
+.env .mono { color: var(--text); }
+
+.mark { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; font-size: 13px; }
+.mark svg { width: 14px; height: 14px; flex: none; }
+.mark.ok { color: var(--state-ok); }
+.mark.bug { color: var(--state-bug); }
+.mark.wait { color: var(--state-wait); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 16px; border-radius: var(--control-radius);
+  font: 600 14px var(--font-sans); cursor: pointer; text-decoration: none;
+  transition: filter var(--dur-hover) var(--ease), background-color var(--dur-hover) var(--ease);
+}
+.btn-primary { background: var(--accent); color: var(--on-accent); border: 0; }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-quiet { background: transparent; color: var(--text); border: 1px solid var(--rule); }
+.btn-quiet:hover { background: var(--bg-card); }
+.btn[disabled], .btn[aria-disabled="true"] { cursor: not-allowed; color: var(--text-3); background: transparent; border: 1px dashed var(--rule); }
+
+.note { font-size: 13px; color: var(--text-3); }
+footer.site { padding: 8px 24px 32px; color: var(--text-3); font-size: 13px; }
+
+@keyframes arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.arrive { opacity: 0; animation: arrive var(--dur-arrive) var(--ease) forwards; animation-delay: calc(var(--i, 0) * 90ms); }
+
+/* Reduced motion means reduce, not kill: nothing rises, things still fade. */
+@media (prefers-reduced-motion: reduce) {
+  .arrive { animation: fade 150ms linear forwards; animation-delay: 0ms; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+}
+
+@media (max-width: 860px) {
+  .replay-banner { padding: 8px 16px; }
+  .topbar { padding: 14px 16px 0; }
+  footer.site { padding: 8px 16px 28px; }
+}

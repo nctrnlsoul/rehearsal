@@ -251,7 +251,7 @@ function withTemplate(
 
 const DUPLICATE_WEBHOOK = {
   id: "duplicate-webhook",
-  title: "A redelivered capture event fulfils the order twice",
+  title: "A redelivered capture event fulfills the order twice",
 };
 
 const REFUND_AFTER_PARTIAL = {
@@ -317,7 +317,7 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
       if (e.fulfilled >= 2) {
         return finding(DUPLICATE_WEBHOOK, "bug", {
           event,
-          expected: "one fulfilment for an event id, however many times it is delivered",
+          expected: "one fulfillment for an event id, however many times it is delivered",
           actual: `event ${e.eventId} was delivered ${e.fulfilled + e.duplicatesIgnored + e.other} times and fulfilled ${e.fulfilled} times`,
           likelyFix:
             "treat the webhook event id as an idempotency key: record it and ignore an event already seen before fulfilling",
@@ -326,8 +326,8 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
       if (e.fulfilled === 1 && e.duplicatesIgnored >= 1) {
         return finding(DUPLICATE_WEBHOOK, "ok", {
           event,
-          expected: "one fulfilment for an event id, however many times it is delivered",
-          actual: `event ${e.eventId} was fulfilled once and its ${e.duplicatesIgnored} redelivery(s) recognised and ignored`,
+          expected: "one fulfillment for an event id, however many times it is delivered",
+          actual: `event ${e.eventId} was fulfilled once and its ${e.duplicatesIgnored} redelivery(s) recognized and ignored`,
           likelyFix: "none needed",
         });
       }
@@ -345,7 +345,7 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
         );
       }
       return none(
-        `event ${e.eventId} reached the store ${rows} times but was fulfilled ${e.fulfilled} times, with ${e.other} delivery(s) neither fulfilled nor recognised as duplicates${note}`,
+        `event ${e.eventId} reached the store ${rows} times but was fulfilled ${e.fulfilled} times, with ${e.other} delivery(s) neither fulfilled nor recognized as duplicates${note}`,
         "check the store is verifying signatures: it refuses anything it cannot verify",
       );
     },

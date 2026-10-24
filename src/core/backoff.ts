@@ -92,7 +92,7 @@ export function retryDecision(args: {
     return {
       retry: true,
       delayMs: Math.min(explicit, policy.maxDelayMs),
-      reason: `status ${status}, honouring Retry-After`,
+      reason: `status ${status}, honoring Retry-After`,
     };
   }
 

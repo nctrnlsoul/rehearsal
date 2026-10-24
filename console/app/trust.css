@@ -1,0 +1,31 @@
+/* Trust panel, scoped so client navigation cannot carry these rules elsewhere. */
+.s-trust main { display: grid; grid-template-columns: 460px minmax(0, 1fr); gap: 56px; padding: 36px 24px 40px; max-width: 1240px; }
+.s-trust .facts-label { border: 1px solid var(--text-2); padding: 14px 16px 16px; align-self: start; }
+.s-trust .facts-label h1 { font-size: 30px; }
+.s-trust .serving { font-size: 14px; color: var(--text-2); margin-top: 2px; }
+.s-trust .bar-heavy { height: 8px; background: var(--text-2); margin: 10px 0 6px; }
+.s-trust .bar-mid { height: 3px; background: var(--text-2); margin: 8px 0 4px; }
+.s-trust .group-h { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); font-weight: 600; margin: 2px 0; }
+.s-trust dl { margin: 0; }
+.s-trust .line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 14.5px; }
+.s-trust .line:last-child { border-bottom: 0; }
+.s-trust .line dt { font-weight: 600; }
+.s-trust .line dt small { display: block; font-weight: 400; color: var(--text-3); font-size: 12.5px; }
+.s-trust .line dd { margin: 0; text-align: right; font: 500 13.5px var(--font-mono); font-variant-numeric: tabular-nums; }
+.s-trust .line dd.word { font: 500 14px var(--font-sans); }
+.s-trust .foot { margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
+.s-trust .big { font: 500 72px/1 var(--font-mono); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.s-trust .big small { font: 500 22px var(--font-sans); letter-spacing: 0; color: var(--text-2); margin-left: 8px; }
+.s-trust .split { margin-top: 10px; font: 400 13px var(--font-mono); color: var(--text-3); }
+.s-trust .secline { margin-top: 36px; font-size: clamp(24px, 2.6vw, 34px); line-height: 1.2; font-weight: 600; letter-spacing: -0.01em; max-width: 22ch; text-wrap: balance; }
+.s-trust .limits { margin-top: 36px; }
+.s-trust .limits h2 { margin-bottom: 10px; }
+.s-trust .limits ul { margin: 0; padding: 0; list-style: none; max-width: 64ch; }
+.s-trust .limits li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--rule); color: var(--text-2); }
+.s-trust .limits li b { color: var(--text); font-weight: 600; }
+.s-trust .limits svg { width: 14px; height: 14px; margin-top: 4px; color: var(--state-wait); }
+.s-trust .cta { margin-top: 32px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 960px) {
+  .s-trust main { grid-template-columns: 1fr; gap: 36px; padding: 24px 16px 32px; }
+  .s-trust .big { font-size: 56px; }
+}

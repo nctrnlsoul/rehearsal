@@ -7,7 +7,7 @@
     { "id": "bookshop", "expect": "valid", "description": "An independent bookshop with two card orders, one of which gets a partial refund because a book arrived damaged." },
     { "id": "food-truck", "expect": "valid", "description": "A food truck taking card payments at a festival, then paying two casual staff at the end of the day." },
     { "id": "photographer", "expect": "valid", "description": "A wedding photographer who invoices a couple and records the payment when the bank transfer clears." },
-    { "id": "plant-nursery", "expect": "valid", "description": "A plant nursery. One card order for seed trays, fully refunded when the delivery is cancelled." },
+    { "id": "plant-nursery", "expect": "valid", "description": "A plant nursery. One card order for seed trays, fully refunded when the delivery is canceled." },
     { "id": "ceramics-studio", "expect": "valid", "description": "A ceramics studio that raises a wholesale invoice to a gallery and then cancels it when the gallery pulls out." },
     { "id": "vinyl-store", "expect": "valid", "description": "A vinyl record shop. One card order, and we want to see what happens if the payment notification is delivered twice." },
     { "id": "bakery-payouts", "expect": "valid", "description": "A bakery paying three suppliers at the end of the month. One supplier has not set up their account yet." },

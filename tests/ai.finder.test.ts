@@ -357,7 +357,7 @@ describe("runFinder with templates", () => {
       expect(h.sleeps).toEqual([EVIDENCE_POLL_MS, EVIDENCE_POLL_MS]);
     });
 
-    it("is ok once the second delivery shows up recognised as a duplicate", async () => {
+    it("is ok once the second delivery shows up recognized as a duplicate", async () => {
       const h = harness(okPlan(), { store: [snapshot(1), snapshot(1, 1)] });
       const results = await findDup(h);
       expect(results[0]!.finding.verdict).toBe("ok");

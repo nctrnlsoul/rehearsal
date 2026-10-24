@@ -283,6 +283,10 @@ describe("invoice handlers", () => {
     const good = fakePaypal([{ status: 204 }, { status: 200, body: { status: "CANCELLED" } }]);
     const a = makeContext({ scenario, stepId: "c1", seller: good.client, outputs });
     expect((await invoiceCancelHandler(a.ctx)).kind).toBe("success");
+    // The note is sent to PayPal and shown there, so it is in US spelling (R-033).
+    const sent = good.calls[0]!.body as Record<string, string>;
+    expect(sent["subject"]).toBe("REHEARSAL canceled this invoice");
+    expect(sent["note"]).toBe("Canceled by REHEARSAL step c1.");
 
     const bad = fakePaypal([{ status: 204 }, { status: 200, body: { status: "SENT" } }]);
     const b = makeContext({ scenario, stepId: "c1", seller: bad.client, outputs });
