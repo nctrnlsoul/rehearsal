@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REHEARSAL judge gate (MOCK)</title>
+<link rel="icon" href="data:,">
+<!-- Mock only: the app self-hosts both faces with next/font/local (R-027). -->
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="mock-base.css">
+<style>
+/* Asymmetric: what is behind the gate takes the wide column, the one control sits narrow. */
+main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); grid-template-areas: "head control" "inside control"; gap: 0 56px; padding: 48px 24px 40px; max-width: 1180px; }
+.behind { grid-area: head; }
+.inside { grid-area: inside; }
+.control { grid-area: control; }
+
+.behind h1 { max-width: 22ch; }
+.behind .lede { margin-top: 14px; max-width: 54ch; color: var(--text-2); font-size: 16px; }
+.inside { margin-top: 32px; display: grid; grid-template-columns: auto 1fr; gap: 10px 20px; align-items: baseline; }
+.inside dt { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); font-weight: 500; white-space: nowrap; }
+.inside dd { margin: 0; color: var(--text); }
+.inside dd .mono { font-size: 13.5px; }
+.inside dd small { display: block; color: var(--text-3); font-size: 13px; }
+
+/* The control: one field, one action, labeled like a hardware panel. */
+.control { align-self: start; background: var(--bg-card); border: 1px solid var(--rule); border-radius: var(--card-radius); }
+.control .plate { display: flex; justify-content: space-between; padding: 10px 16px; background: var(--bg-card-head); border-radius: var(--card-radius) var(--card-radius) 0 0; }
+.control form { padding: 20px 16px 18px; display: grid; gap: 10px; }
+.control label { font-weight: 500; font-size: 14px; }
+.field {
+  height: 44px; width: 100%; padding: 0 12px; border-radius: var(--control-radius);
+  background: var(--bg-canvas); border: 1px solid var(--rule); color: var(--text);
+  font: 500 16px var(--font-mono); letter-spacing: 0.2em;
+  transition: border-color var(--dur-state) var(--ease);
+}
+.field:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-color: var(--text-2); }
+.help { font-size: 13px; color: var(--text-3); }
+.control .btn { width: 100%; margin-top: 4px; }
+.control .after { padding: 12px 16px 14px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--text-3); }
+
+/* The other states the gate can be in. Each one says what happened and what still works. */
+.states { padding: 0 24px 40px; max-width: 1180px; }
+.states h2 { margin-bottom: 12px; }
+.state-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.state { border: 1px solid var(--rule); border-radius: var(--card-radius); padding: 14px 16px; }
+.state .field-sm { margin-top: 8px; height: 36px; border-radius: var(--control-radius); border: 1px solid var(--rule); display: flex; align-items: center; padding: 0 10px; font: 500 14px var(--font-mono); color: var(--text-2); }
+/* Tracking only for masked dots; it would space out words. */
+.state .field-sm.dots { letter-spacing: 0.2em; }
+.state.bad .field-sm { border-color: var(--state-bug); }
+.state .msg { margin-top: 8px; font-size: 13px; }
+.state .msg .mark { font-size: 13px; }
+.state .msg p { margin-top: 4px; color: var(--text-2); }
+
+@media (max-width: 860px) {
+  /* The one control comes right after the headline on a phone, before the details. */
+  main { grid-template-columns: 1fr; grid-template-areas: "head" "control" "inside"; gap: 24px; padding: 28px 16px 28px; }
+  .inside { grid-template-columns: 1fr; gap: 2px; margin-top: 4px; }
+  .inside dd { margin-bottom: 10px; }
+  .states { padding: 0 16px 28px; }
+  .state-row { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+<a class="skip" href="#gate">Skip to the passcode</a>
+
+<div class="mock-banner" role="note">
+  <strong>MOCK</strong>
+  <span>Design mock only. Counts marked MOCK are invented. Nothing here checks a passcode, and nothing links anywhere.</span>
+</div>
+
+<div class="topbar">
+  <div><span class="wordmark">REHEARSAL</span> <span class="where">/ <b>Judge gate</b></span></div>
+  <div class="env"><span class="label">Sandbox only</span> <span class="mono">api-m.sandbox.paypal.com</span></div>
+</div>
+
+<main>
+  <section class="behind arrive" style="--i:0" aria-labelledby="behind-h">
+    <h1 id="behind-h">Behind this gate, a real PayPal sandbox account runs your scenario.</h1>
+    <p class="lede">Every order, refund and webhook you start is created for real in PayPal's sandbox and checked against our sample store. Nothing touches live PayPal or real money.</p>
+  </section>
+    <dl class="inside arrive" style="--i:1" aria-label="What is behind the gate">
+      <dt>PayPal host</dt><dd><span class="mono">api-m.sandbox.paypal.com</span><small>pinned in code; no setting can point it at live PayPal</small></dd>
+      <dt>Runs left today</dt><dd><span class="mono">8 of 10</span> <span class="note">MOCK</span><small>shared by every judge, reset at 00:00 UTC</small></dd>
+      <dt>Per run</dt><dd><span class="mono">USD 2,000.00</span> at most, <span class="mono">USD 500.00</span> per step</dd>
+      <dt>Disputes</dt><dd><span class="mono">0</span> banked purchases ready <span class="note">MOCK</span><small>each one needs a human approval click, so dispute scenarios may be refused</small></dd>
+      <dt>Without a passcode</dt><dd>Recorded runs replay, clearly marked as replays</dd>
+    </dl>
+
+  <section class="control arrive" style="--i:1" id="gate" aria-labelledby="gate-h">
+    <div class="plate"><h2 id="gate-h" class="label">Unlock runs</h2><span class="label mono">01</span></div>
+    <form onsubmit="return false">
+      <label for="pass">Judge passcode</label>
+      <input class="field" id="pass" type="password" autocomplete="off" aria-describedby="pass-help">
+      <p class="help" id="pass-help">It is in the private Devpost testing notes. It unlocks runs for 2 hours on this browser.</p>
+      <button class="btn btn-primary" type="submit">Unlock</button>
+    </form>
+    <p class="after">Checked on the server. Your passcode is never stored in this page, and 5 wrong tries lock this browser out for an hour.</p>
+  </section>
+</main>
+
+<section class="states" aria-labelledby="states-h">
+  <h2 id="states-h" class="label">The other states this gate can be in</h2>
+  <div class="state-row">
+    <div class="state bad arrive" style="--i:2">
+      <div class="label">Wrong passcode</div>
+      <div class="field-sm dots" aria-hidden="true">·········</div>
+      <div class="msg">
+        <span class="mark bug"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2"/></svg>That passcode did not match</span>
+        <p>4 tries left this hour.</p>
+      </div>
+    </div>
+    <div class="state arrive" style="--i:3">
+      <div class="label">Locked</div>
+      <div class="field-sm" aria-hidden="true">locked 41:12</div>
+      <div class="msg">
+        <span class="mark wait"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 4.5V8l2.5 1.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>Locked after 5 wrong tries</span>
+        <p>Recorded replays still work while you wait.</p>
+      </div>
+    </div>
+    <div class="state arrive" style="--i:4">
+      <div class="label">Out of runs today</div>
+      <div class="field-sm" aria-hidden="true">0 of 10 left</div>
+      <div class="msg">
+        <span class="mark wait"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg>Today's runs are used up</span>
+        <p>They reset at 00:00 UTC. Replays and every past report stay open.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>MOCK · REHEARSAL console, surface 1 of 5: judge gate · counts marked MOCK are invented</footer>
+</body>
+</html>
