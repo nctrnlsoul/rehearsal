@@ -232,47 +232,140 @@ describe("duplicate-webhook", () => {
 
 describe("refund-after-partial", () => {
   const two: StepSpec[] = [
-    { id: "r1", kind: "refund", status: "succeeded" },
-    { id: "r2", kind: "refund", status: "succeeded" },
+    { id: "r1", kind: "refund", status: "succeeded", ids: { refund_id: "RF-1" } },
+    { id: "r2", kind: "refund", status: "succeeded", ids: { refund_id: "RF-2" } },
   ];
+  // The store files a refund event under the refund id, its resource id.
+  const refundRow = (refundId: string, refundCount: unknown) =>
+    order({ captureId: refundId, fulfilmentCount: 0, refundCount: refundCount as number });
+  const recorded = (...rows: ReturnType<typeof order>[]) => store({ orders: rows });
+  const cls = () => classById("refund-after-partial")!;
 
-  it("flags the store recording more refunds than happened", () => {
+  it("is a bug when one accepted refund was recorded twice", () => {
     const f = check(
       "refund-after-partial",
-      store({ orders: [order({ refundCount: 3 })] }),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", 2)),
       runWith(two),
     );
     expect(f.verdict).toBe("bug");
+    expect(f.actual).toBe("refund RF-2 was recorded 2 times");
     expect(f.likelyFix).toMatch(/dedupe refund events/i);
   });
 
-  it("flags a refund that never reached the store", () => {
+  it("is ok when each accepted refund was recorded exactly once", () => {
     const f = check(
       "refund-after-partial",
-      store({ orders: [order({ refundCount: 1 })] }),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", 1)),
       runWith(two),
     );
-    expect(f.verdict).toBe("bug");
-    expect(f.actual).toMatch(/never reached it/i);
+    expect(f.verdict).toBe("ok");
+    expect(f.actual).toBe("2 refund(s) accepted and each recorded once");
   });
 
-  it("passes when the ledger matches what PayPal accepted", () => {
+  it("is ok when PayPal refused the second refund and the first was recorded once", () => {
     const f = check(
       "refund-after-partial",
-      store({ orders: [order({ refundCount: 1 })] }),
+      recorded(refundRow("RF-1", 1)),
       runWith([
-        { id: "r1", kind: "refund", status: "succeeded" },
+        { id: "r1", kind: "refund", status: "succeeded", ids: { refund_id: "RF-1" } },
         { id: "r2", kind: "refund", status: "failed", detail: "http 422" },
       ]),
     );
     expect(f.verdict).toBe("ok");
-    expect(f.actual).toMatch(/refused any over-refund/i);
+    expect(f.actual).toMatch(/PayPal refused the other 1 itself/);
+  });
+
+  // The false bug this replaces: a refund event still in flight was read as
+  // one the store never got.
+  it("is inconclusive, never ok or bug, when a refund has not reached the store", () => {
+    const f = check("refund-after-partial", recorded(refundRow("RF-1", 1)), runWith(two));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/^1 of 2 accepted refund\(s\) had reached the store.*missing: RF-2/);
+  });
+
+  it("is inconclusive when the store recorded none of them", () => {
+    expect(check("refund-after-partial", store(), runWith(two)).verdict).toBe("inconclusive");
+  });
+
+  // The false pass this replaces: NaN compared false both ways and fell through to ok.
+  it("treats a missing or non-numeric count as no evidence", () => {
+    const bad = [
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", Number.NaN)),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", "1")),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", undefined)),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", -1)),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", 1.5)),
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", 1), refundRow("RF-2", 1)),
+    ];
+    for (const s of bad) {
+      const f = check("refund-after-partial", s, runWith(two));
+      expect(f.verdict).toBe("inconclusive");
+      expect(f.actual).toMatch(/refund RF-2 is malformed/);
+    }
+  });
+
+  it("counts only this run's refund ids, not other refunds in the window", () => {
+    const f = check(
+      "refund-after-partial",
+      recorded(refundRow("RF-1", 1), refundRow("RF-2", 1), refundRow("RF-OTHER", 5)),
+      runWith(two),
+    );
+    expect(f.verdict).toBe("ok");
+  });
+
+  it("is inconclusive when a refund ended unknown, since the count to expect is unknown", () => {
+    const f = check(
+      "refund-after-partial",
+      recorded(refundRow("RF-1", 1)),
+      runWith([
+        { id: "r1", kind: "refund", status: "succeeded", ids: { refund_id: "RF-1" } },
+        { id: "r2", kind: "refund", status: "unknown" },
+      ]),
+    );
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/r2 ended unknown/);
+  });
+
+  it("is inconclusive when an accepted refund recorded no refund id", () => {
+    const f = check(
+      "refund-after-partial",
+      recorded(refundRow("RF-1", 1)),
+      runWith([
+        { id: "r1", kind: "refund", status: "succeeded", ids: { refund_id: "RF-1" } },
+        { id: "r2", kind: "refund", status: "succeeded" },
+      ]),
+    );
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/r2 recorded no refund id/);
+  });
+
+  it("is inconclusive when PayPal accepted no refund at all", () => {
+    const f = check(
+      "refund-after-partial",
+      store(),
+      runWith([
+        { id: "r1", kind: "refund", status: "failed" },
+        { id: "r2", kind: "refund", status: "failed" },
+      ]),
+    );
+    expect(f.verdict).toBe("inconclusive");
   });
 
   it("is inconclusive with fewer than two refunds planned", () => {
     expect(
       check("refund-after-partial", store(), runWith([{ id: "r1", kind: "refund" }])).verdict,
     ).toBe("inconclusive");
+  });
+
+  it("keeps the finder waiting only while a missing refund could still arrive", () => {
+    const run = runWith(two);
+    expect(cls().settled!(store(), run)).toBe(false);
+    expect(cls().settled!(recorded(refundRow("RF-1", 1)), run)).toBe(false);
+    expect(cls().settled!(recorded(refundRow("RF-1", 1), refundRow("RF-2", 1)), run)).toBe(true);
+    expect(cls().settled!(recorded(refundRow("RF-2", 2)), run)).toBe(true);
+    // Waiting cannot fix these, so it does not wait for them.
+    expect(cls().settled!(recorded(refundRow("RF-1", 1), refundRow("RF-2", Number.NaN)), run)).toBe(true);
+    expect(cls().settled!(store(), runWith([]))).toBe(true);
   });
 });
 
