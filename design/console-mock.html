@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REHEARSAL run timeline (MOCK)</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Tier 1: primitives. Raw values live here and nowhere else. */
+:root {
+  --ink-950: #0B0E12;
+  --ink-900: #12161D;
+  --ink-850: #1A2029;
+  --ink-700: #2A313D;
+  --fog-100: #E7EDF3;
+  --fog-300: #A6B1BF;
+  --fog-400: #8A96A6;
+  --blossom-500: #4392E6;
+  --green-400: #3ED598;
+  --red-400: #FF5E64;
+  --amber-400: #F2BB4F;
+
+  /* Tier 2: semantic. Components read only these. Contrast computed against
+     --bg-canvas: text 16.40, text-2 8.90, text-3 6.44, accent 5.98,
+     ok 10.29, bug 6.48, wait 11.05. Rule 1.48 is a line, never text. */
+  --bg-canvas: var(--ink-950);
+  --bg-panel: var(--ink-900);
+  --bg-raised: var(--ink-850);
+  --rule: var(--ink-700);
+  --text: var(--fog-100);
+  --text-2: var(--fog-300);
+  --text-3: var(--fog-400);
+  /* The accent is spent once: the live edge of the run (now line and the waiting counter). */
+  --accent: var(--blossom-500);
+  --state-ok: var(--green-400);
+  --state-bug: var(--red-400);
+  --state-wait: var(--amber-400);
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-press: 120ms;
+  --dur-state: 180ms;
+  --dur-arrive: 240ms;
+  --dur-travel: 360ms;
+  --dur-draw: 600ms;
+
+  /* Tier 3: component overrides. */
+  --card-bg: var(--bg-panel);
+  --px-per-s: 8px;
+  --lane-w: 168px;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg-canvas); }
+body {
+  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--text);
+  font: 400 15px/1.5 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-weight: 500;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-radius: 4px; }
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 16px; top: 8px; background: var(--bg-raised); padding: 8px 12px; z-index: 10; }
+
+/* MOCK banner: amber, not the accent, so the accent stays spent once. */
+.mock-banner {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  padding: 8px 24px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px; color: var(--text-2);
+}
+.mock-banner strong { color: var(--state-wait); letter-spacing: 0.1em; font-weight: 600; }
+
+header.top {
+  display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: end;
+  padding: 24px 24px 16px;
+}
+.wordmark { font-weight: 600; font-size: 15px; letter-spacing: 0.04em; }
+h1 { margin: 8px 0 4px; font-size: clamp(20px, 2.2vw, 26px); line-height: 1.25; font-weight: 600; max-width: 62ch; }
+.runline { color: var(--text-2); font-size: 14px; }
+.env {
+  text-align: right; font-size: 13px; color: var(--text-2);
+}
+.env .mono { color: var(--text); }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 32px; padding: 8px 24px 48px; }
+
+/* The timeline: calls on the left, PayPal's deliveries on the right, time running down.
+   A connector's slope is how long PayPal took. That slope is the signature. */
+.timeline { position: relative; }
+.lanes-head {
+  display: grid; grid-template-columns: minmax(0,1fr) var(--lane-w) minmax(0,1fr);
+  gap: 0; margin-bottom: 12px;
+}
+.lanes-head .label:last-child { text-align: left; padding-left: 16px; }
+.lanes-head .label:first-child { text-align: right; padding-right: 16px; }
+.lanes-head .mid { text-align: center; }
+
+.board {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0,1fr) var(--lane-w) minmax(0,1fr);
+  height: calc(175 * var(--px-per-s) + 40px);
+}
+.side { position: relative; }
+.event {
+  position: absolute; left: 0; right: 0;
+  top: calc(var(--t) * var(--px-per-s) - 14px);
+  background: var(--card-bg);
+  border-radius: 10px;
+  padding: 10px 14px 12px;
+  opacity: 0; transform: translateY(8px);
+  animation: arrive var(--dur-arrive) var(--ease) forwards;
+  animation-delay: calc(var(--t) * 9ms);
+}
+.side.calls .event { margin-right: 16px; }
+.side.deliveries .event { margin-left: 16px; }
+.event .head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.event .what { font-weight: 500; font-size: 14px; }
+.event .when { font-size: 12px; color: var(--text-3); }
+.event .ids { margin-top: 6px; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12.5px; }
+.event .ids dt { color: var(--text-3); }
+.event .ids dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.event .foot { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13px; color: var(--text-2); }
+
+/* State marks: glyph plus word, never color alone. */
+.mark { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; font-size: 13px; }
+.mark svg { width: 14px; height: 14px; flex: none; }
+.mark.ok { color: var(--state-ok); }
+.mark.bug { color: var(--state-bug); }
+.mark.wait { color: var(--state-wait); }
+.cert { color: var(--text-3); font-size: 12px; }
+
+.event.waiting { background: var(--bg-raised); }
+.event.waiting .counter { color: var(--accent); font-weight: 500; }
+
+/* Center lanes. */
+.lanes { position: relative; }
+.lanes svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.spine { stroke: var(--rule); stroke-width: 1; }
+/* A halo in the canvas color, so a label stays readable where a connector crosses it. */
+.tick-label { fill: var(--text-3); font: 500 11px var(--font-mono);
+  paint-order: stroke; stroke: var(--bg-canvas); stroke-width: 5px; stroke-linejoin: round; }
+/* pathLength="1" on each connector, so the draw does not depend on a measured length. */
+.link { stroke: var(--text-2); stroke-width: 1.25; fill: none;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: draw var(--dur-draw) var(--ease) forwards; animation-delay: calc(var(--d) * 1ms); }
+.link.open { stroke-dasharray: 3 4; stroke-dashoffset: 0; animation: none; stroke: var(--text-3); }
+.dot { fill: var(--bg-canvas); stroke: var(--text-2); stroke-width: 1.5; }
+.dot.ok { stroke: var(--state-ok); }
+.lat { fill: var(--text-2); font: 500 11px var(--font-mono); }
+.lat-bg { fill: var(--bg-canvas); }
+
+/* The now line: the one place the accent appears on the board. */
+.now { position: absolute; left: 0; right: 0; top: calc(var(--t) * var(--px-per-s)); height: 0;
+  border-top: 1px solid var(--accent); pointer-events: none; }
+.now span { position: absolute; left: calc(50% - 40px); top: -10px; width: 80px; text-align: center;
+  background: var(--bg-canvas); color: var(--accent); font: 500 12px var(--font-mono); }
+
+/* Side panel. */
+aside { display: grid; gap: 16px; align-content: start; }
+.panel { background: var(--bg-panel); border-radius: 12px; padding: 16px; }
+.panel h2 { margin: 0 0 12px; }
+.facts { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; font-size: 14px; }
+.facts dt { color: var(--text-2); }
+.facts dd { margin: 0; text-align: right; }
+.check { display: grid; gap: 8px; font-size: 14px; color: var(--text-2); }
+.check .row { display: flex; justify-content: space-between; gap: 12px; }
+.check .row span:last-child { color: var(--text); }
+.note { font-size: 13px; color: var(--text-3); margin: 12px 0 0; }
+
+footer { padding: 0 24px 32px; color: var(--text-3); font-size: 13px; }
+
+@keyframes arrive { to { opacity: 1; transform: none; } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* Reduced motion means reduce, not kill: nothing travels, things still fade. */
+@media (prefers-reduced-motion: reduce) {
+  .event { transform: none; animation: fade var(--dur-press) linear forwards; animation-delay: 0ms; }
+  .link { stroke-dasharray: none; stroke-dashoffset: 0; animation: fade var(--dur-press) linear both; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+}
+
+/* 375px first in spirit: below 860px the board becomes one chronological list
+   and every card already states its own latency in words. */
+@media (max-width: 1100px) {
+  main { grid-template-columns: 1fr; }
+}
+@media (max-width: 860px) {
+  header.top { grid-template-columns: 1fr; }
+  .env { text-align: left; }
+  .lanes-head { display: none; }
+  .board { display: flex; flex-direction: column; height: auto; gap: 12px; }
+  .lanes { display: none; }
+  .side { display: contents; }
+  .event { position: static; margin: 0 !important; order: var(--o); }
+  .now { position: static; order: 99; border-top: 0; }
+  .now span { position: static; display: block; width: auto; text-align: left; }
+  main, header.top, footer { padding-left: 16px; padding-right: 16px; }
+  .mock-banner { padding: 8px 16px; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#timeline">Skip to the run timeline</a>
+
+<div class="mock-banner" role="note">
+  <strong>MOCK</strong>
+  <span>Design mock only. Every id, time and amount below is invented to look like sandbox data. Nothing here ran, and nothing links anywhere.</span>
+</div>
+
+<header class="top">
+  <div>
+    <div class="wordmark">REHEARSAL</div>
+    <h1>Candle shop: one card order, a partial refund, and a redelivered capture event</h1>
+    <div class="runline">Run <span class="mono">20261024031122-a41c09</span> · started <span class="mono">03:11:22 UTC</span> · 4 steps · 3 done, 1 waiting on PayPal</div>
+  </div>
+  <div class="env">
+    <div class="label">Sandbox only</div>
+    <div class="mono">api-m.sandbox.paypal.com</div>
+  </div>
+</header>
+
+<main>
+  <section class="timeline" id="timeline" aria-labelledby="tl-h">
+    <h2 id="tl-h" class="label" style="margin:0 0 12px">Run timeline, time runs down</h2>
+    <div class="lanes-head" aria-hidden="true">
+      <span class="label">REHEARSAL calls PayPal</span>
+      <span class="label mid">Latency</span>
+      <span class="label">PayPal delivers to the store</span>
+    </div>
+
+    <div class="board">
+      <!-- Calls: what REHEARSAL sent, at the time it sent it. -->
+      <div class="side calls">
+        <article class="event" style="--t:0; --o:1" aria-label="Step 1, card order, at 0.0 seconds">
+          <div class="head"><span class="what">order · card order USD 40.00</span><span class="when mono">+0:00.0</span></div>
+          <dl class="ids mono">
+            <dt>order</dt><dd>5RT93841FJ227004X</dd>
+            <dt>capture</dt><dd>2JX44610VB518382Y</dd>
+            <dt>key</dt><dd>run:20261024031122-a41c09:step:order</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>201 captured</span></div>
+        </article>
+
+        <article class="event" style="--t:22.4; --o:2" aria-label="Step 2, partial refund, at 22.4 seconds">
+          <div class="head"><span class="what">refund-half · partial refund USD 20.00</span><span class="when mono">+0:22.4</span></div>
+          <dl class="ids mono">
+            <dt>refund</dt><dd>8YB12039KC4417156</dd>
+            <dt>of</dt><dd>2JX44610VB518382Y</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>201 PARTIALLY_REFUNDED</span></div>
+        </article>
+
+        <article class="event" style="--t:58; --o:4" aria-label="Step 3, resend webhook, at 58 seconds">
+          <div class="head"><span class="what">resend-capture · ask PayPal to redeliver</span><span class="when mono">+0:58.0</span></div>
+          <dl class="ids mono">
+            <dt>event</dt><dd>WH-4MD20941KV7713526-8TC33910AA4428431</dd>
+            <dt>to</dt><dd>webhook 4DE52141J0303334X only</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>202 on try 2</span><span>try 1: 404, the event was not resendable yet</span></div>
+        </article>
+
+        <article class="event" style="--t:80.1; --o:6" aria-label="Step 4, full refund, at 80.1 seconds">
+          <div class="head"><span class="what">refund-rest · refund the remaining USD 20.00</span><span class="when mono">+1:20.1</span></div>
+          <dl class="ids mono">
+            <dt>refund</dt><dd>3LQ70882RT5590213</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>201 REFUNDED</span></div>
+        </article>
+      </div>
+
+      <!-- Lanes: each connector runs from a call to the delivery it caused. -->
+      <div class="lanes" aria-hidden="true">
+        <svg viewBox="0 0 168 1440" preserveAspectRatio="none">
+          <line class="spine" x1="10" y1="0" x2="10" y2="1440"/>
+          <line class="spine" x1="158" y1="0" x2="158" y2="1440"/>
+          <text class="tick-label" x="84" y="4" text-anchor="middle">0:00</text>
+          <text class="tick-label" x="84" y="244" text-anchor="middle">0:30</text>
+          <text class="tick-label" x="84" y="484" text-anchor="middle">1:00</text>
+          <text class="tick-label" x="84" y="724" text-anchor="middle">1:30</text>
+          <text class="tick-label" x="84" y="964" text-anchor="middle">2:00</text>
+
+          <path class="link" pathLength="1" style="--d:120" d="M10 0 L158 334.4"/>
+          <path class="link" pathLength="1" style="--d:320" d="M10 179.2 L158 592"/>
+          <path class="link" pathLength="1" style="--d:560" d="M10 464 L158 772.0"/>
+          <path class="link open" d="M10 640.8 L158 992"/>
+
+          <circle class="dot" cx="10" cy="0" r="4"/>
+          <circle class="dot" cx="10" cy="179.2" r="4"/>
+          <circle class="dot" cx="10" cy="464" r="4"/>
+          <circle class="dot" cx="10" cy="640.8" r="4"/>
+          <circle class="dot ok" cx="158" cy="334.4" r="4"/>
+          <circle class="dot ok" cx="158" cy="592" r="4"/>
+          <circle class="dot ok" cx="158" cy="772.0" r="4"/>
+
+          <rect class="lat-bg" x="64" y="155.2" width="40" height="16" rx="3"/><text class="lat" x="84" y="167.2" text-anchor="middle">41.8s</text>
+          <rect class="lat-bg" x="64" y="373.6" width="40" height="16" rx="3"/><text class="lat" x="84" y="385.6" text-anchor="middle">51.6s</text>
+          <rect class="lat-bg" x="64" y="606.0" width="40" height="16" rx="3"/><text class="lat" x="84" y="618.0" text-anchor="middle">38.5s</text>
+        </svg>
+      </div>
+
+      <!-- Deliveries: what the store received and proved came from PayPal. -->
+      <div class="side deliveries">
+        <article class="event" style="--t:41.8; --o:3" aria-label="Delivery at 41.8 seconds, capture completed, verified">
+          <div class="head"><span class="what">PAYMENT.CAPTURE.COMPLETED</span><span class="when mono">+0:41.8</span></div>
+          <dl class="ids mono">
+            <dt>event</dt><dd>WH-4MD20941KV7713526-8TC33910AA4428431</dd>
+            <dt>store</dt><dd>fulfilled 1</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>verified</span><span class="cert mono">cert host api.sandbox.paypal.com</span><span>PayPal took 41.8s after the capture</span></div>
+        </article>
+
+        <article class="event" style="--t:74; --o:5" aria-label="Delivery at 74 seconds, capture refunded, verified">
+          <div class="head"><span class="what">PAYMENT.CAPTURE.REFUNDED</span><span class="when mono">+1:14.0</span></div>
+          <dl class="ids mono">
+            <dt>event</dt><dd>WH-9PL11847TN2280741-1HG55302DD6619084</dd>
+            <dt>filed as</dt><dd>refund 8YB12039KC4417156</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>verified</span><span class="cert mono">cert host api.sandbox.paypal.com</span><span>PayPal took 51.6s after the refund</span></div>
+        </article>
+
+        <article class="event" style="--t:96.5; --o:7" aria-label="Redelivery at 96.5 seconds, same event, duplicate ignored, verified">
+          <div class="head"><span class="what">Same event, 2nd delivery</span><span class="when mono">+1:36.5</span></div>
+          <dl class="ids mono">
+            <dt>event</dt><dd>WH-4MD20941KV7713526-8TC33910AA4428431</dd>
+            <dt>store</dt><dd>duplicate_ignored, still fulfilled 1</dd>
+          </dl>
+          <div class="foot"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>verified</span><span class="cert mono">cert host api.sandbox.paypal.com</span><span>PayPal took 38.5s after the resend</span></div>
+        </article>
+
+        <article class="event waiting" style="--t:124; --o:8" aria-label="Waiting on PayPal for the refund event" aria-live="polite">
+          <div class="head"><span class="what">PAYMENT.CAPTURE.REFUNDED for 3LQ70882RT5590213</span></div>
+          <div class="foot">
+            <span class="mark wait"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 4.5V8l2.5 1.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>waiting on PayPal</span>
+            <span class="counter mono" id="waited">0:43.9</span><span>so far</span>
+          </div>
+          <p class="note" style="margin-top:6px">Nothing is wrong yet. In our runs PayPal has taken from a few seconds to over two minutes to deliver. The store is read every 5 seconds; this stops at 1:30 and says so.</p>
+        </article>
+      </div>
+
+      <div class="now" style="--t:124"><span id="now">now 2:04</span></div>
+    </div>
+  </section>
+
+  <aside aria-label="Run facts">
+    <section class="panel">
+      <h2 class="label">This run</h2>
+      <dl class="facts">
+        <dt>Charged</dt><dd class="mono">USD 40.00</dd>
+        <dt>Refunded</dt><dd class="mono">USD 40.00</dd>
+        <dt>Writes keyed</dt><dd class="mono">4 of 4</dd>
+        <dt>Deliveries verified</dt><dd class="mono">3 of 3</dd>
+        <dt>Event target</dt><dd>sample store only</dd>
+      </dl>
+    </section>
+    <section class="panel">
+      <h2 class="label">Caps this run is held to</h2>
+      <dl class="facts">
+        <dt>Per step</dt><dd class="mono">USD 500.00</dd>
+        <dt>Per run</dt><dd class="mono">USD 2,000.00</dd>
+        <dt>Steps</dt><dd class="mono">4 of 30</dd>
+        <dt>Disputes</dt><dd class="mono">0 of 2</dd>
+      </dl>
+    </section>
+    <section class="panel">
+      <h2 class="label">Duplicate delivery check</h2>
+      <div class="check">
+        <div class="row"><span>Fulfilments of the event</span><span class="mono">1</span></div>
+        <div class="row"><span>Redeliveries ignored</span><span class="mono">1</span></div>
+        <div class="row"><span>Verdict</span><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>OK, on evidence</span></div>
+      </div>
+      <p class="note">OK only because the redelivery reached the store and was ignored. No second delivery would read INCONCLUSIVE, never OK.</p>
+    </section>
+  </aside>
+</main>
+
+<footer>MOCK · REHEARSAL console design direction, v0.5.0 step 1 · data invented for layout only</footer>
+
+<script>
+  // The waiting counter is information, not decoration, so it ticks under reduced motion too.
+  const waited = document.getElementById("waited");
+  const now = document.getElementById("now");
+  let s = 43.9;
+  const fmt = (x) => `${Math.floor(x / 60)}:${(x % 60).toFixed(1).padStart(4, "0")}`;
+  // A wait that cannot end reads as broken, so it ends: at 1:30 the card says
+  // what it knows (no delivery) and what that means (inconclusive), and stops.
+  const card = waited.closest(".event");
+  const timer = setInterval(() => {
+    s = Math.min(90, s + 0.1);
+    waited.textContent = fmt(s);
+    now.textContent = `now ${fmt(80.1 + s).replace(/\.\d$/, "")}`;
+    now.parentElement.style.setProperty("--t", (80.1 + s).toFixed(1));
+    if (s >= 90) {
+      clearInterval(timer);
+      card.querySelector(".foot").innerHTML =
+        '<span class="mark wait"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg>stopped waiting at 1:30</span><span>No delivery, so INCONCLUSIVE, not a pass. Rerun or check the store.</span>';
+    }
+  }, 100);
+</script>
+</body>
+</html>
