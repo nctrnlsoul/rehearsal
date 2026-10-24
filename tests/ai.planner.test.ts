@@ -5,6 +5,8 @@ import {
   MAX_MODEL_NAME_CHARS,
   MAX_MODEL_REFUSAL_CHARS,
   MAX_PLAN_ERRORS,
+  PLANNER_TIMEOUT_MS,
+  anthropicGenerator,
   cleanModelText,
   extractJsonObject,
   planScenario,
@@ -294,6 +296,46 @@ describe("model-written names are cleaned before anything prints them", () => {
     expect(out.scenario.name).toBe("unnamed scenario");
     expect(out.scenario.profile.name).toBe("unnamed business");
     expect(out.scenario.profile).not.toHaveProperty("description");
+  });
+});
+
+describe("the real generator is bounded", () => {
+  type Args = { maxOutputTokens?: number; maxRetries?: number; abortSignal?: AbortSignal };
+  const fakeSdk = (impl: (args: Args) => Promise<unknown>) => {
+    const seen: Args[] = [];
+    const fn = (async (args: Args) => {
+      seen.push(args);
+      return impl(args);
+    }) as never;
+    return { fn, seen };
+  };
+  const reply = { text: "{}", usage: { inputTokens: 1, outputTokens: 1 } };
+
+  it("passes the output cap, one retry, and a timeout on every call", async () => {
+    const sdk = fakeSdk(async () => reply);
+    const gen = anthropicGenerator({ apiKey: "test-only", model: "m" }, { generateText: sdk.fn });
+    await gen({ system: "s", prompt: "p", maxOutputTokens: 123 });
+    expect(sdk.seen[0]!.maxOutputTokens).toBe(123);
+    expect(sdk.seen[0]!.maxRetries).toBe(1);
+    expect(sdk.seen[0]!.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(PLANNER_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("gives up on a call that hangs, rather than hanging the run", async () => {
+    // Settles only when aborted, as the SDK does.
+    const sdk = fakeSdk(
+      (args) =>
+        new Promise((_, reject) => {
+          args.abortSignal!.addEventListener("abort", () => reject(args.abortSignal!.reason));
+        }),
+    );
+    const gen = anthropicGenerator(
+      { apiKey: "test-only", model: "m", timeoutMs: 20 },
+      { generateText: sdk.fn },
+    );
+    await expect(gen({ system: "s", prompt: "p", maxOutputTokens: 1 })).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
   });
 });
 

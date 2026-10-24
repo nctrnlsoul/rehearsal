@@ -306,6 +306,29 @@ describe("runFinder with templates", () => {
     expect(results[0]!.finding.verdict).toBe("inconclusive");
   });
 
+  it("turns a planner call that throws into an inconclusive class, and keeps going", async () => {
+    const h = harness(okPlan());
+    let calls = 0;
+    const throwing = {
+      ...h.deps,
+      plan: async () => {
+        calls += 1;
+        const e = new Error("The operation was aborted due to timeout");
+        e.name = "TimeoutError";
+        throw e;
+      },
+    };
+    const results = await runFinder({ description: "a shop", webhookTarget: TARGET }, throwing);
+    expect(calls).toBe(4);
+    expect(h.ran).toEqual([]);
+    const ran = results.filter((r) => r.skipped === "planner call failed");
+    expect(ran).toHaveLength(4);
+    for (const r of ran) {
+      expect(r.finding.verdict).toBe("inconclusive");
+      expect(r.finding.actual).toBe("the planner call failed: TimeoutError: The operation was aborted due to timeout");
+    }
+  });
+
   // The planner strips its own output; this proves the sinks do too, whatever reaches them.
   it("strips control characters from every log line and report line", async () => {
     const nasty = "\u001b[2J\u001b]0;pwned\u0007‮";

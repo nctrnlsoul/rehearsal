@@ -7,7 +7,7 @@ import {
   type ScenarioTemplate,
   type StoreSnapshot,
 } from "./failureClasses";
-import { type PlanOutcome, printable } from "./planner";
+import { type PlanOutcome, cleanModelText, printable } from "./planner";
 
 /**
  * The edge-case finder: plan a scenario per known failure class, run it, read
@@ -265,7 +265,24 @@ export async function runFinder(
       continue;
     }
 
-    const outcome = await deps.plan(cls, args.description);
+    let outcome: PlanOutcome;
+    try {
+      outcome = await deps.plan(cls, args.description);
+    } catch (e) {
+      // A timeout or a spent budget ends this class, not the whole report.
+      const why = cleanModelText(`${(e as Error).name}: ${(e as Error).message}`, 200);
+      log(`  planner call failed: ${why}`);
+      results.push({
+        classId: cls.id,
+        title: cls.title,
+        finding: inconclusive(cls, `the planner call failed: ${why}`, "re-run once the model is reachable"),
+        skipped: "planner call failed",
+        scenarioName: null,
+        runId: null,
+        ignored: [],
+      });
+      continue;
+    }
     if (!outcome.ok) {
       const detail =
         outcome.reason === "schema-invalid"

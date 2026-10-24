@@ -218,14 +218,25 @@ export async function planScenario(
   return { ok: true, scenario: cleanNames(validated.scenario), raw };
 }
 
-export function anthropicGenerator(opts: { apiKey: string; model: string }): GenerateFn {
+/**
+ * Wall-clock cap on one planner call, retry included: a stalled connection
+ * would otherwise hang the run with a call already reserved against the budget.
+ */
+export const PLANNER_TIMEOUT_MS = 60_000;
+
+export function anthropicGenerator(
+  opts: { apiKey: string; model: string; timeoutMs?: number },
+  deps: { generateText?: typeof generateText } = {},
+): GenerateFn {
   const provider = createAnthropic({ apiKey: opts.apiKey });
+  const generate = deps.generateText ?? generateText;
   return async ({ system, prompt, maxOutputTokens }) => {
-    const res = await generateText({
+    const res = await generate({
       model: provider(opts.model),
       system,
       prompt,
       maxOutputTokens,
+      abortSignal: AbortSignal.timeout(opts.timeoutMs ?? PLANNER_TIMEOUT_MS),
       // No temperature: claude-sonnet-5 does not support it and the SDK warns
       // that it is ignored. Planning is therefore NOT deterministic, which is
       // why nothing runs without --yes and why the schema and caps re-check
