@@ -9,9 +9,9 @@ Simulator sends events that, per PayPal's documentation, cannot be verified,
 resent, or looked up, so an app that correctly verifies signatures rejects them.
 REHEARSAL creates real records and fires real events that do verify.
 
-**Status: v0.1.0 core.** Scenario schema, executor, step handlers, purchase bank
-and CLI. No web console and no MCP server yet. Day-1 capability findings are in
-[gate/RESULTS.md](gate/RESULTS.md); the latest demo run is in `runs/`.
+**Status: v0.4.0.** Scenario schema, executor, step handlers, purchase bank,
+CLI, AI planner, edge-case finder, and a stdio MCP server for Claude Code. No web
+console yet. Day-1 capability findings are in [gate/RESULTS.md](gate/RESULTS.md).
 
 ## Layout
 
@@ -19,18 +19,22 @@ and CLI. No web console and no MCP server yet. Day-1 capability findings are in
 src/core/        pure, no network, no I/O. All the judgement lives here.
 src/adapters/    thin. Credentials, HTTP transport, JSON file storage.
 src/executor/    scenario execution: handlers, runner, dry run, report.
+src/ai/          planner (plain English to scenario) and the edge-case finder.
+src/app/         wiring shared by the CLI and the MCP server.
+src/mcp/         the MCP server: six tools and the output guard.
 bin/rehearsal.ts the command line. Thin glue over tested modules.
+bin/mcp.ts       the MCP server's stdio entry point.
 scenarios/       scenario files. candle-shop.json uses every step kind.
 gate/            the day-1 capability gates that proved each API path.
 receiver/        separate tiny Next.js app: the public webhook endpoint.
-tests/           275 unit tests over src/. None of them opens a socket.
+tests/           unit tests over src/. None of them opens a socket.
 ```
 
 ## Use it
 
 ```
 npm install
-npm test                 # 275 tests
+npm test
 npm run typecheck
 
 npm run dry-run scenarios/candle-shop.json      # prints the plan, zero network calls
@@ -67,12 +71,82 @@ page and supply it:
 npm run bank:set-txn -- --order <orderId> --txn <buyerTransactionId>
 ```
 
+## Use with Claude Code
+
+REHEARSAL runs as a local MCP server over stdio. There is no HTTP transport and
+nothing listens on a port. Claude Code starts it as a child process, and it
+inherits Claude Code's environment, so the keys stay in your OS environment
+variables and never go in a config file.
+
+Register it once (use your own path to the repo):
+
+```
+claude mcp add rehearsal --scope user -- node C:/path/to/rehearsal/node_modules/tsx/dist/cli.mjs C:/path/to/rehearsal/bin/mcp.ts
+```
+
+No `-e` flags and no `env` block: the server reads the same variables the CLI
+does, by name, from the environment Claude Code was started in.
+
+| Variable | Needed by |
+|---|---|
+| `PAYPAL_SELLER_CLIENT_ID`, `PAYPAL_SELLER_CLIENT_SECRET` | `run_scenario`, `find_edge_cases` |
+| `PAYPAL_BUYER_CLIENT_ID`, `PAYPAL_BUYER_CLIENT_SECRET` | `run_scenario`, `find_edge_cases` |
+| `ANTHROPIC_API_KEY` | `plan_scenario`, `find_edge_cases` |
+| `REHEARSAL_STORE_ORIGIN`, `REHEARSAL_STORE_TOKEN` | `find_edge_cases` |
+| `REHEARSAL_RECEIVER_ORIGIN`, `REHEARSAL_EVENT_ORIGINS` | optional, more allowed event targets |
+
+The tools:
+
+| Tool | What it does | Writes to the sandbox |
+|---|---|---|
+| `plan_scenario` | plain English in, validated scenario out (one model call) | no |
+| `dry_run` | schema, caps, event-target allowlist and purchase bank check, plus the plan | no |
+| `run_scenario` | executes, only with `confirm: true`; otherwise returns the dry run | yes |
+| `run_status` | progress and step outcomes for a run id | no |
+| `bank_status` | how many banked purchases a dispute can use (counts, no ids) | no |
+| `find_edge_cases` | the edge-case finder against the sample store, only with `confirm: true` | yes |
+
+Try: *"Plan an open dispute waiting for my response."* The plan is one
+`open_dispute` step that draws a banked purchase. If the bank has none, every
+tool says `needs a banked purchase: run bank:add` instead of guessing.
+
+What the server holds to, in code:
+
+- The same schema, spend caps, event-target allowlist, sandbox host pin,
+  idempotency keys and resumable run state as the CLI. It calls the same modules.
+- Nothing writes to PayPal without `confirm: true`. Leave `run_scenario` and
+  `find_edge_cases` on "ask" in Claude Code's permissions, so you approve each
+  call and see its arguments.
+- A halted run is not retried over MCP. Retrying a step that may already have
+  written is a CLI action, after you check: `--resume <runId> --retry <stepId>`.
+- One execution at a time, and per-session ceilings: 20 model calls
+  (`REHEARSAL_MCP_MAX_MODEL_CALLS`) and 10 executions (`REHEARSAL_MCP_MAX_RUNS`).
+  Restart the server to reset them.
+- Every input is size-capped. Every output has control characters stripped,
+  error text is generic, and no environment value is ever returned.
+- The finder reuses the store's registered webhook and never registers one.
+
+### Alongside PayPal's AI Toolkit
+
+PayPal's own MCP server acts on one record at a time: get an order, list
+disputes, accept a claim, send an invoice reminder. It cannot open a dispute,
+send a payout or produce a webhook redelivery (R-002), so on its own it has
+little realistic state to act on. REHEARSAL builds that state. Run both in the
+same Claude Code session, both pointed at the sandbox:
+
+1. REHEARSAL `plan_scenario` and `run_scenario` build the situation: a dispute
+   waiting on the merchant, an overdue invoice, an unclaimed payout, a refunded
+   capture.
+2. The toolkit's tools work it: `list_disputes`, `get_dispute`,
+   `accept_dispute_claim`, `send_invoice_reminder`, `list_transactions`.
+3. REHEARSAL `find_edge_cases` checks how your own app handled the events.
+
 ## Scenario files
 
 A scenario is a business profile plus typed steps with ids, dependencies and
 decimal-string amounts. Step kinds: `card_order`, `refund`, `payout_batch`,
 `invoice_create`, `invoice_send`, `invoice_record_payment`, `invoice_cancel`,
-`open_dispute`.
+`open_dispute`, `resend_webhook`.
 
 Nothing runs unless the file passes the schema, which rejects unknown step
 kinds, numeric amounts, amounts with more decimal places than the currency
