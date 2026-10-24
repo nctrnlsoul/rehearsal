@@ -102,3 +102,38 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: store
+
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: console
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: console
+
+      # The gate takes its environment, clock and attempt store by injection, and
+      # the replays read committed fixtures, so these tests need no secrets.
+      - name: Unit tests
+        run: npm test
+        working-directory: console
+
+      # prebuild downloads Switzer from Fontshare and checks each file against its
+      # pinned sha256; its license forbids committing the files. No secrets needed.
+      - name: Build
+        run: npm run build
+        working-directory: console
