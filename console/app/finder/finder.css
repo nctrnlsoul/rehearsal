@@ -1,0 +1,70 @@
+/* Edge-case finder, scoped to its own root. */
+.s-finder header.page { padding: 28px 24px 0; }
+.s-finder header.page p { margin-top: 8px; color: var(--text-2); max-width: 66ch; }
+.s-finder .verdicts { display: grid; grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr); align-items: center; padding: 28px 24px 8px; max-width: 980px; }
+.s-finder .num { font: 500 64px/1 var(--font-mono); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.s-finder .num small { font: 500 20px var(--font-sans); letter-spacing: 0; color: var(--text-2); margin-left: 6px; }
+.s-finder .bug .num { color: var(--state-bug); }
+.s-finder .ok .num { color: var(--state-ok); }
+.s-finder .when { margin-top: 8px; font: 400 12.5px var(--font-mono); color: var(--text-3); }
+.s-finder .when a { color: var(--text-2); }
+.s-finder .arrow { justify-self: center; color: var(--text-3); }
+.s-finder .arrow svg { width: 40px; height: 16px; }
+
+.s-finder .report { padding: 16px 24px 8px; }
+.s-finder .cls { font-size: 17px; font-weight: 600; margin-top: 4px; }
+.s-finder .cls .mono { font-size: 13px; color: var(--text-3); font-weight: 400; margin-left: 8px; }
+.s-finder table.lab { width: 100%; max-width: 1180px; margin-top: 14px; border-collapse: collapse; font-size: 14px; }
+.s-finder .lab th { text-align: left; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); font-weight: 500; padding: 0 12px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+.s-finder .lab th .mono { text-transform: none; letter-spacing: 0; font-size: 12px; display: block; color: var(--text-2); }
+.s-finder .lab td { padding: 11px 12px 11px 0; border-bottom: 1px dashed var(--rule); vertical-align: top; }
+.s-finder .lab td.obs { font: 500 15px var(--font-mono); font-variant-numeric: tabular-nums; }
+.s-finder .lab td.exp { color: var(--text-2); }
+.s-finder .lab td.out { color: var(--state-bug); }
+.s-finder .flag { font: 500 11px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.s-finder .flag.out { color: var(--state-bug); }
+
+.s-finder .evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding: 24px 24px 8px; max-width: 1228px; }
+.s-finder .run { background: var(--bg-card); border: 1px solid var(--rule); border-radius: var(--card-radius); }
+.s-finder .run .plate { display: flex; justify-content: space-between; gap: 10px; padding: 9px 14px; background: var(--bg-card-head); border-radius: var(--card-radius) var(--card-radius) 0 0; font: 500 12.5px var(--font-mono); flex-wrap: wrap; }
+.s-finder .run .tag { font: 500 12px var(--font-sans); }
+.s-finder .run .tag.bug { color: var(--state-bug); }
+.s-finder .run .tag.ok { color: var(--state-ok); }
+.s-finder .run .body { padding: 12px 14px 14px; }
+.s-finder .run dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font: 400 12.5px var(--font-mono); }
+.s-finder .run dt { color: var(--text-3); }
+.s-finder .run dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.s-finder .rows { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+.s-finder .rows li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 0 12px; padding: 8px 0; border-bottom: 1px dashed var(--rule); font-size: 13.5px; }
+.s-finder .rows li:last-child { border-bottom: 0; }
+.s-finder .rows .t { font: 400 12.5px var(--font-mono); color: var(--text-3); padding-top: 1px; }
+.s-finder .rows .act { font: 500 13px var(--font-mono); }
+.s-finder .rows .act.twice { color: var(--state-bug); }
+.s-finder .rows .proof { color: var(--text-3); font-size: 12.5px; }
+
+.s-finder .fix { padding: 24px 24px 8px; max-width: 1228px; }
+.s-finder .diff { margin-top: 10px; background: var(--bg-panel); border: 1px solid var(--rule); border-radius: var(--control-radius); font: 400 13px/1.7 var(--font-mono); padding: 10px 14px; overflow-x: auto; }
+.s-finder .diff .file { color: var(--text-3); }
+.s-finder .diff .del { color: var(--state-bug); }
+.s-finder .diff .add { color: var(--state-ok); }
+.s-finder .meta { margin-top: 8px; font: 400 12.5px var(--font-mono); color: var(--text-3); }
+.s-finder .rule { padding: 24px 24px 8px; max-width: 980px; }
+.s-finder .rule ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 4px; color: var(--text-2); }
+.s-finder .rule b { color: var(--text); font-weight: 600; }
+.s-finder .actions { padding: 20px 24px 40px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+@media (max-width: 960px) {
+  .s-finder header.page { padding: 24px 16px 0; }
+  .s-finder .verdicts { grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr); padding: 22px 16px 4px; }
+  .s-finder .num { font-size: 44px; }
+  .s-finder .num small { display: block; margin: 6px 0 0; font-size: 15px; }
+  .s-finder .report, .s-finder .evidence, .s-finder .fix, .s-finder .rule, .s-finder .actions { padding-left: 16px; padding-right: 16px; }
+  .s-finder .evidence { grid-template-columns: 1fr; }
+  .s-finder table.lab, .s-finder .lab tbody, .s-finder .lab tr, .s-finder .lab td { display: block; width: 100%; }
+  .s-finder .lab thead { display: none; }
+  .s-finder .lab tr { padding: 10px 0; border-bottom: 1px solid var(--rule); }
+  .s-finder .lab td { border: 0; padding: 3px 0; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; }
+  .s-finder .lab td::before { content: attr(data-l); font: 500 11px var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); padding-top: 3px; }
+  .s-finder .lab td.check { font-weight: 600; display: block; }
+  .s-finder .lab td.check::before { content: none; }
+}

@@ -1,0 +1,6 @@
+{
+  "note": "Measured by running each package's test suite. Updated by hand when the counts change; tests/replays.test.ts checks the total adds up.",
+  "measuredOn": "2026-10-24",
+  "branch": "v0.5.0",
+  "tests": { "engine": 559, "store": 77, "receiver": 37, "console": 51, "total": 724 }
+}

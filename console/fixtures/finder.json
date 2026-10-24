@@ -1,0 +1,17 @@
+{
+  "note": "A recorded finder pass, before and after the store fix. Counts from runs/finder-20261023231753.md and runs/finder-20261024011922.md; store rows from the run fixtures; the fix from git (commit d6b8ff6). Nothing here is live.",
+  "classId": "duplicate-webhook",
+  "title": "A redelivered capture event fulfills the order twice",
+  "eventType": "PAYMENT.CAPTURE.COMPLETED",
+  "before": { "runId": "20261023231552-60ea96", "report": "runs/finder-20261023231753.md", "verdict": "bug", "deliveries": 2, "fulfilled": 2, "ignored": 0, "verified": 2 },
+  "after": { "runId": "20261024011812-208f4e", "report": "runs/finder-20261024011922.md", "verdict": "ok", "deliveries": 2, "fulfilled": 1, "ignored": 1, "verified": 2 },
+  "fix": {
+    "file": "store/lib/merchant.ts",
+    "line": 18,
+    "removed": "export const DEDUPE_BY_EVENT_ID = false;",
+    "added": "export const DEDUPE_BY_EVENT_ID = true;",
+    "commit": "d6b8ff6",
+    "subject": "fix(store): dedupe webhook events by event id",
+    "pr": 6
+  }
+}
