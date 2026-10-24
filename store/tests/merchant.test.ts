@@ -124,12 +124,15 @@ describe("the planted bug", () => {
     expect(state.orders.every((o) => o.fulfilmentCount === 1)).toBe(true);
   });
 
-  it("defaults to the setting the app ships with, so the route follows it", async () => {
-    const { db } = fakeDb();
+  // Pinned, not conditional: a test that passes on either value of the flag
+  // would not notice the fix being reverted.
+  it("ships with deduping on, and the route's default follows it", async () => {
+    expect(DEDUPE_BY_EVENT_ID).toBe(true);
+    const { db, inserted } = fakeDb();
     const event = captureEvent("WH-DEFAULT");
-    await handleEvent(db, event, { verified: true });
-    const second = await handleEvent(db, event, { verified: true });
-    expect(second).toBe(DEDUPE_BY_EVENT_ID ? "duplicate_ignored" : "fulfilled");
+    expect(await handleEvent(db, event, { verified: true })).toBe("fulfilled");
+    expect(await handleEvent(db, event, { verified: true })).toBe("duplicate_ignored");
+    expect(inserted.map((r) => r.action)).toEqual(["fulfilled", "duplicate_ignored"]);
   });
 });
 

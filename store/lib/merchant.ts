@@ -4,16 +4,18 @@ import type { Db, StoreAction, StoreRow } from "./db";
  * The merchant app's own logic: what a typical small shop does when PayPal
  * tells it something happened.
  *
- * ============================= PLANTED BUG =============================
+ * ======================== PLANTED BUG, NOW FIXED ========================
  * PayPal REDELIVERS webhook events, and an event can also be resent on
  * demand. A merchant app must therefore treat the event id as an
- * idempotency key. This one does not, so a second delivery of the same
- * PAYMENT.CAPTURE.COMPLETED fulfils the order a second time.
+ * idempotency key. With this constant false, a second delivery of the same
+ * PAYMENT.CAPTURE.COMPLETED fulfils the order a second time; the finder
+ * caught exactly that (run 20261023231552-60ea96).
  *
- * THE ONE-LINE FIX: change this constant to true.
+ * THE ONE-LINE FIX, applied: this constant is true. Set it back to false
+ * to replay the "before" state of the demo.
  * =======================================================================
  */
-export const DEDUPE_BY_EVENT_ID = false;
+export const DEDUPE_BY_EVENT_ID = true;
 
 export type ParsedEvent = {
   eventId: string | null;
