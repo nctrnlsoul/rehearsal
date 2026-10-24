@@ -26,6 +26,38 @@ const cachedWebhookIds = new Map<string, string>();
 
 export type WebhookIdResult = { id: string } | { id: null; detail: string };
 
+/**
+ * The only hosts a paypal-cert-url may name. Exact, never a suffix: any
+ * *.paypal.com host is wider than PayPal's API, and the URL is forwarded to
+ * PayPal, which fetches it.
+ */
+export const PAYPAL_CERT_HOSTS: ReadonlySet<string> = new Set([
+  "api.paypal.com",
+  "api-m.paypal.com",
+  "api.sandbox.paypal.com",
+  "api-m.sandbox.paypal.com",
+]);
+
+/** The cert URL's own checks, local and pure, so they run before any network call. */
+export function checkCertUrl(raw: string): { ok: true } | { ok: false; detail: string } {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { ok: false, detail: "paypal-cert-url is not a URL" };
+  }
+  if (url.protocol !== "https:") return { ok: false, detail: "paypal-cert-url is not https" };
+  if (url.username !== "" || url.password !== "") {
+    return { ok: false, detail: "paypal-cert-url carries credentials" };
+  }
+  if (url.port !== "") return { ok: false, detail: "paypal-cert-url names a port" };
+  if (!PAYPAL_CERT_HOSTS.has(url.hostname)) {
+    const host = url.hostname.length <= 253 ? url.hostname : "an overlong host";
+    return { ok: false, detail: `paypal-cert-url host ${host} is not a PayPal API host` };
+  }
+  return { ok: true };
+}
+
 /** Every PayPal delivery carries these. Lacking any one, it is not a delivery. */
 const REQUIRED_HEADERS = [
   "paypal-transmission-id",
@@ -143,16 +175,9 @@ export async function verifySignature(
 
   const certUrl = headers.get("paypal-cert-url") ?? "";
   // cert_url arrives from the request and PayPal will fetch it. We do not fetch
-  // it, but we refuse to forward a host that is not PayPal's.
-  let certHost = "";
-  try {
-    certHost = new URL(certUrl).hostname;
-  } catch {
-    return { verified: false, detail: "paypal-cert-url is not a URL" };
-  }
-  if (certHost !== "api.paypal.com" && !certHost.endsWith(".paypal.com")) {
-    return { verified: false, detail: `paypal-cert-url host ${certHost} is not paypal.com` };
-  }
+  // it, but we refuse to forward anything but a PayPal API URL.
+  const cert = checkCertUrl(certUrl);
+  if (!cert.ok) return { verified: false, detail: cert.detail };
 
   const resolved = await resolveWebhookId(env, selfOrigin, fetchImpl);
   if (resolved.id === null) return { verified: null, detail: resolved.detail };

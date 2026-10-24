@@ -1,3 +1,4 @@
+import { checkCertUrl } from "../../../../lib/certUrl";
 import { createLedger, readConfig } from "../../../../lib/ledger";
 
 /**
@@ -39,16 +40,9 @@ async function verify(
 
   const certUrl = headers.get("paypal-cert-url") ?? "";
   // cert_url arrives from the request and PayPal will fetch it. We do not fetch
-  // it, but we refuse to forward a host that is not PayPal's.
-  let certHost = "";
-  try {
-    certHost = new URL(certUrl).hostname;
-  } catch {
-    return { verified: false, detail: "paypal-cert-url is not a URL" };
-  }
-  if (certHost !== "api.paypal.com" && !certHost.endsWith(".paypal.com")) {
-    return { verified: false, detail: `paypal-cert-url host ${certHost} is not paypal.com` };
-  }
+  // it, but we refuse to forward anything but a PayPal API URL.
+  const cert = checkCertUrl(certUrl);
+  if (!cert.ok) return { verified: false, detail: cert.detail };
 
   try {
     const basic = Buffer.from(`${clientId}:${clientSecret}`, "utf8").toString("base64");

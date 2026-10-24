@@ -81,7 +81,7 @@ describe("every refusal leaves a row with its reason", () => {
     );
     expect(res.status).toBe(401);
     expect(inserts[0]).toMatchObject({ action: "refused", verified: false });
-    expect(inserts[0]!["reason"]).toBe("paypal-cert-url host certs.evil.test is not paypal.com");
+    expect(inserts[0]!["reason"]).toBe("paypal-cert-url host certs.evil.test is not a PayPal API host");
     // What the refused request claimed is kept, for comparison with real deliveries.
     expect(inserts[0]!["cert_host"]).toBe("certs.evil.test");
     expect(paypalCalls).toEqual([]);
