@@ -306,6 +306,16 @@ describe("runFinder with templates", () => {
     expect(results[0]!.finding.verdict).toBe("inconclusive");
   });
 
+  // The planner strips its own output; this proves the sinks do too, whatever reaches them.
+  it("strips control characters from every log line and report line", async () => {
+    const nasty = "\u001b[2J\u001b]0;pwned\u0007‮";
+    const h = harness({ ok: false, reason: "schema-invalid", errors: [`bad ${nasty}`], raw: "" });
+    const results = await findDup(h);
+    const report = finderReportLines(results);
+    expect(h.logs.join("\n")).toContain("[2J ]0;pwned");
+    for (const line of [...h.logs, ...report]) expect(line).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+  });
+
   it("does not run a filled template that fails validation", async () => {
     const h = harness(okPlan(), { validate: () => ({ ok: false, errors: ["over the caps"] }) });
     const results = await findDup(h);

@@ -7,7 +7,7 @@ import {
   type ScenarioTemplate,
   type StoreSnapshot,
 } from "./failureClasses";
-import type { PlanOutcome } from "./planner";
+import { type PlanOutcome, printable } from "./planner";
 
 /**
  * The edge-case finder: plan a scenario per known failure class, run it, read
@@ -197,13 +197,15 @@ export async function runFinder(
   }
 
   const results: ClassResult[] = [];
+  // Every line reaches a terminal, and many carry model, store or PayPal text.
+  const log = (line: string) => deps.log(printable(line));
 
   for (const cls of classes) {
-    deps.log("");
-    deps.log(`=== ${cls.id}: ${cls.title} ===`);
+    log("");
+    log(`=== ${cls.id}: ${cls.title} ===`);
 
     if (!cls.supported) {
-      deps.log(`  not reachable in this version: ${cls.unsupportedReason ?? "no reason recorded"}`);
+      log(`  not reachable in this version: ${cls.unsupportedReason ?? "no reason recorded"}`);
       results.push({
         classId: cls.id,
         title: cls.title,
@@ -230,7 +232,7 @@ export async function runFinder(
 
     if (cls.needsBankedPurchase && deps.bankAvailable() < 1) {
       const why = "no banked purchase is available, and each one needs a human approval click";
-      deps.log(`  skipped: ${why}`);
+      log(`  skipped: ${why}`);
       results.push({
         classId: cls.id,
         title: cls.title,
@@ -250,7 +252,7 @@ export async function runFinder(
         template === null
           ? "this class has no fixed scenario, so there is nothing safe to run"
           : "this class resends to the store's webhook, and no store webhook URL is configured";
-      deps.log(`  skipped: ${why}`);
+      log(`  skipped: ${why}`);
       results.push({
         classId: cls.id,
         title: cls.title,
@@ -271,7 +273,7 @@ export async function runFinder(
           : outcome.reason === "over-caps"
             ? outcome.violations.map((v) => v.message).join("; ")
             : outcome.detail;
-      deps.log(`  no runnable plan (${outcome.reason}): ${detail}`);
+      log(`  no runnable plan (${outcome.reason}): ${detail}`);
       results.push({
         classId: cls.id,
         title: cls.title,
@@ -289,12 +291,12 @@ export async function runFinder(
     }
 
     const applied = applyTemplate(template, outcome.scenario, args.webhookTarget);
-    for (const what of applied.ignored) deps.log(`  ignored from the plan: ${what}`);
+    for (const what of applied.ignored) log(`  ignored from the plan: ${what}`);
 
     const checked = deps.validate(applied.candidate);
     if (!checked.ok) {
       const detail = checked.errors.join("; ");
-      deps.log(`  the filled template did not validate: ${detail}`);
+      log(`  the filled template did not validate: ${detail}`);
       results.push({
         classId: cls.id,
         title: cls.title,
@@ -314,12 +316,12 @@ export async function runFinder(
 
     // Scoped a minute back, so the store read sees this run and not a backlog.
     const since = new Date(deps.now().getTime() - 60_000).toISOString();
-    deps.log(`  running ${scenario.steps.length} step(s): ${scenario.name}`);
+    log(`  running ${scenario.steps.length} step(s): ${scenario.name}`);
     const state = await deps.run(scenario, { webhookMode: "reuse-only" });
 
     const first = await readStoreSafely(deps, since);
     if (!first.ok) {
-      deps.log(`  store read failed: ${first.error}`);
+      log(`  store read failed: ${first.error}`);
       results.push({
         classId: cls.id,
         title: cls.title,
@@ -346,7 +348,7 @@ export async function runFinder(
         deps.now().getTime() - started < EVIDENCE_TIMEOUT_MS;
         poll += 1
       ) {
-        deps.log(`  the store does not show enough yet, reading again in ${EVIDENCE_POLL_MS / 1000}s`);
+        log(`  the store does not show enough yet, reading again in ${EVIDENCE_POLL_MS / 1000}s`);
         await deps.sleep(EVIDENCE_POLL_MS);
         const next = await readStoreSafely(deps, since);
         if (next.ok) {
@@ -355,11 +357,11 @@ export async function runFinder(
           // The previous snapshot stands. It was not decisive, so a failed
           // re-read can only leave the verdict inconclusive, never invent one.
           failedReads += 1;
-          deps.log(`  store re-read failed: ${next.error}`);
+          log(`  store re-read failed: ${next.error}`);
         }
       }
       if (!cls.settled(store, state)) {
-        deps.log(`  stopped waiting after ${Math.round((deps.now().getTime() - started) / 1000)}s`);
+        log(`  stopped waiting after ${Math.round((deps.now().getTime() - started) / 1000)}s`);
       }
     }
     let finding = cls.check(store, state);
@@ -370,7 +372,7 @@ export async function runFinder(
         actual: `${finding.actual} (${failedReads} store re-read(s) failed while waiting)`,
       };
     }
-    deps.log(`  ${finding.verdict.toUpperCase()}: ${finding.actual}`);
+    log(`  ${finding.verdict.toUpperCase()}: ${finding.actual}`);
 
     results.push({
       classId: cls.id,
@@ -420,5 +422,6 @@ export function finderReportLines(results: readonly ClassResult[]): string[] {
       : `Found ${bugs.length} bug(s): ${bugs.map((b) => b.classId).join(", ")}.`,
   );
 
-  return lines;
+  // The report is read in a terminal and a viewer, so nothing in it may rewrite the display.
+  return lines.map(printable);
 }
