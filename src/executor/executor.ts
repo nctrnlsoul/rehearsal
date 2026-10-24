@@ -46,12 +46,16 @@ export type ExecutorDeps = {
  */
 export type WebhookMode = "register" | "reuse-only";
 
+export const SCENARIO_DIGEST_KEY = "scenario_sha256";
+
 export async function executeScenario(
   args: {
     scenario: Scenario;
     runId: string;
     resume?: RunState | null;
     webhookMode?: WebhookMode;
+    /** Digest of the gated scenario, recorded at start and required to match on resume. */
+    scenarioDigest?: string;
   },
   deps: ExecutorDeps,
 ): Promise<RunState> {
@@ -81,6 +85,14 @@ export async function executeScenario(
         `run ${args.resume.runId} does not match this scenario's steps, so it cannot be resumed`,
       );
     }
+    // Matching ids are not enough: the same ids with bigger amounts would let
+    // the two halves of a run together move more than the caps allow.
+    const recorded = args.resume.meta[SCENARIO_DIGEST_KEY];
+    if (args.scenarioDigest !== undefined && recorded !== undefined && recorded !== args.scenarioDigest) {
+      throw new Error(
+        `run ${args.resume.runId} was started from a different scenario, so it cannot be resumed`,
+      );
+    }
     state = args.resume;
     deps.log(`resuming run ${state.runId} from ${state.updatedAt}`);
   } else {
@@ -92,6 +104,9 @@ export async function executeScenario(
       order: plan.order,
       nowIso: iso(),
     });
+    if (args.scenarioDigest !== undefined) {
+      state = recordMeta(state, SCENARIO_DIGEST_KEY, args.scenarioDigest, iso());
+    }
     deps.persist(state);
   }
 

@@ -13,8 +13,10 @@ import {
   newRunId,
   pathsUnder,
   runStateStore,
+  scenarioDigest,
   storeStateReader,
 } from "../src/app/runtime";
+import { SCENARIO_DIGEST_KEY } from "../src/executor/executor";
 import { DEFAULT_CAPS } from "../src/core/caps";
 import { type Bank, emptyBank } from "../src/core/purchaseBank";
 import { initRunState, haltRun } from "../src/core/runState";
@@ -207,6 +209,44 @@ describe("executeWithPersistence", () => {
     expect(JSON.parse(bankAtDisputeCall!).purchases[0].status).toBe("used");
     expect(existsSync(join(paths.runsDir, `${runId}.json`))).toBe(true);
     expect(state.halted).toBe(true);
+  });
+});
+
+describe("scenario digest on resume", () => {
+  const deps = (paths: ReturnType<typeof pathsUnder>) => {
+    const seller = fakePaypal([], "seller");
+    const buyer = fakePaypal([], "buyer");
+    return {
+      paths,
+      seller: seller.client,
+      buyer: buyer.client,
+      now: () => new Date("2026-10-23T12:00:00.000Z"),
+      sleep: async () => {},
+      log: () => {},
+      env: {},
+    };
+  };
+
+  it("hashes the same scenario the same way whatever its key order", () => {
+    const a = scenarioWith([{ id: "order", kind: "card_order", amount: "25.00" }]);
+    const b = JSON.parse(JSON.stringify({ steps: a.steps, currency: a.currency, profile: a.profile, name: a.name, version: a.version }));
+    expect(scenarioDigest(b)).toBe(scenarioDigest(a));
+    expect(scenarioDigest(scenarioWith([{ id: "order", kind: "card_order", amount: "25.01" }]))).not.toBe(scenarioDigest(a));
+  });
+
+  it("records the digest at start, and the CLI path refuses a resume from a changed scenario", async () => {
+    const paths = pathsUnder(root);
+    const runId = "20261023231552-d16e57";
+    // An empty scenario run: the card order step fails fast against an empty fake queue.
+    const first = scenarioWith([{ id: "order", kind: "card_order", amount: "1.00" }]);
+    const state = await executeWithPersistence({ scenario: first, runId, resume: null }, deps(paths));
+    expect(state.meta[SCENARIO_DIGEST_KEY]).toBe(scenarioDigest(first));
+
+    const interrupted = { ...state, halted: false, haltReason: null };
+    const bigger = scenarioWith([{ id: "order", kind: "card_order", amount: "450.00" }]);
+    await expect(
+      executeWithPersistence({ scenario: bigger, runId, resume: interrupted }, deps(paths)),
+    ).rejects.toThrow(/started from a different scenario/);
   });
 });
 

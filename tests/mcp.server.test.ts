@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { GenerateFn } from "../src/ai/planner";
 import { credentialsFor } from "../src/adapters/env";
 import { PaypalClient } from "../src/adapters/paypal";
-import { pathsUnder, runStateStore } from "../src/app/runtime";
-import { initRunState, haltRun } from "../src/core/runState";
+import { pathsUnder, runStateStore, scenarioDigest } from "../src/app/runtime";
+import { initRunState, haltRun, recordMeta } from "../src/core/runState";
+import { validateScenario } from "../src/core/scenario";
+import { SCENARIO_DIGEST_KEY } from "../src/executor/executor";
 import { SANDBOX_HOST } from "../src/core/host";
 import { MAX_DESCRIPTION_CHARS, MAX_SCENARIO_JSON_CHARS, type ServerDeps, startServer } from "../src/mcp/server";
 import { makePurchase } from "./helpers/fakePaypal";
@@ -484,8 +486,11 @@ describe("run_scenario", () => {
   });
 
   describe("resume", () => {
-    const seed = (h: Harness, halted: boolean, stepIds = ["order"]) => {
+    // A run started from `from`, as the server records it: with the gated scenario's digest.
+    const seed = (h: Harness, halted: boolean, stepIds = ["order"], from: Record<string, unknown> = cardScenario()) => {
       const id = "20261023120000-abc123";
+      const gated = validateScenario(from, { allowedEventOrigins: [] });
+      if (!gated.ok) throw new Error("seed scenario is invalid");
       let state = initRunState({
         runId: id,
         scenarioName: "one card",
@@ -494,6 +499,7 @@ describe("run_scenario", () => {
         order: stepIds,
         nowIso: "2026-10-23T12:00:00.000Z",
       });
+      state = recordMeta(state, SCENARIO_DIGEST_KEY, scenarioDigest(gated.scenario), "2026-10-23T12:00:00.000Z");
       if (halted) state = haltRun(state, "step order ended in an unknown state", "2026-10-23T12:00:01.000Z");
       runStateStore(join(h.root, "runs"), id).write(state);
       return id;
@@ -519,10 +525,42 @@ describe("run_scenario", () => {
 
     it("refuses a run whose steps do not match the scenario", async () => {
       const h = await connect();
-      const id = seed(h, false, ["other"]);
+      const other = cardScenario({ steps: [{ id: "other", kind: "card_order", amount: "12.00" }] });
+      const id = seed(h, false, ["other"], other);
       const r = await h.call("run_scenario", { scenario: cardScenario(), confirm: true, resume: id });
       expect(r.isError).toBe(true);
-      expect(r.text).toContain("does not match this scenario's steps");
+      expect(r.text).toContain("was not started from this exact scenario");
+      expect(h.calls).toHaveLength(0);
+    });
+
+    it("refuses the same step ids with a different amount, which would let two halves beat the caps", async () => {
+      const h = await connect();
+      const id = seed(h, false, ["order"], cardScenario({ steps: [{ id: "order", kind: "card_order", amount: "1.00" }] }));
+      const r = await h.call("run_scenario", {
+        scenario: cardScenario({ steps: [{ id: "order", kind: "card_order", amount: "450.00" }] }),
+        confirm: true,
+        resume: id,
+      });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("was not started from this exact scenario");
+      expect(h.calls).toHaveLength(0);
+    });
+
+    it("refuses a run with no recorded digest, which only the CLI may resume", async () => {
+      const h = await connect();
+      const id = "20261023120000-def456";
+      runStateStore(join(h.root, "runs"), id).write(
+        initRunState({
+          runId: id,
+          scenarioName: "one card",
+          currency: "USD",
+          steps: [{ id: "order", kind: "card_order" }],
+          order: ["order"],
+          nowIso: "2026-10-23T12:00:00.000Z",
+        }),
+      );
+      const r = await h.call("run_scenario", { scenario: cardScenario(), confirm: true, resume: id });
+      expect(r.isError).toBe(true);
       expect(h.calls).toHaveLength(0);
     });
 
@@ -641,7 +679,7 @@ describe("output guard", () => {
   it("strips control characters the SDK echoes from untrusted input", async () => {
     const h = await connect();
     // An unknown tool name comes straight back in the SDK's own error text.
-    const r = await h.call("\u001b[2J\u001b]0;pwned\u0007evil‮tool");
+    const r = await h.call("\u001b[2J\u001b]0;pwned\u0007evil\u202etool");
     expect(r.isError).toBe(true);
     expect(r.text).toContain("evil");
   });

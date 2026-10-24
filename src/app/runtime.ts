@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import type { AiBudgetTracker } from "../ai/budget";
 import type { FinderDeps } from "../ai/finder";
@@ -12,6 +12,22 @@ import { type RunState, retryStep } from "../core/runState";
 import { type Scenario, validateScenario } from "../core/scenario";
 import { type WebhookMode, executeScenario } from "../executor/executor";
 import type { ClaimResult } from "../executor/types";
+
+/** JSON with keys sorted at every level, so a scenario saved and re-read hashes the same. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function scenarioDigest(scenario: Scenario): string {
+  return createHash("sha256").update(canonicalJson(scenario)).digest("hex");
+}
 
 /**
  * Wiring shared by every front end (the CLI and the MCP server). Each one used
@@ -174,6 +190,7 @@ export async function executeWithPersistence(
       runId: args.runId,
       resume: args.resume,
       webhookMode: args.webhookMode ?? "register",
+      scenarioDigest: scenarioDigest(args.scenario),
     },
     {
       seller: deps.seller,

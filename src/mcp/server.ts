@@ -31,6 +31,7 @@ import {
   loadResume,
   newRunId,
   runStateStore,
+  scenarioDigest,
   storeStateReader,
 } from "../app/runtime";
 import { type Caps, capsFromEnv } from "../core/caps";
@@ -40,6 +41,7 @@ import { type Bank, availablePurchases } from "../core/purchaseBank";
 import { type RunState, summarize } from "../core/runState";
 import type { Scenario } from "../core/scenario";
 import { dryRunLines } from "../executor/dryRun";
+import { SCENARIO_DIGEST_KEY } from "../executor/executor";
 import { runReportLines } from "../executor/report";
 import { guardTransport, safeErrorText } from "./output";
 
@@ -331,7 +333,8 @@ export function createRehearsalServer(deps: ServerDeps): McpServer {
       description:
         "Turns a plain-English business description into a REHEARSAL scenario for the PayPal sandbox, checked against the schema, the event-target allowlist and the spend caps. Makes one model call. Executes nothing.",
       inputSchema: { description: descriptionInput },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      // Not read-only: it spends a model call and saves the plan under runs/plans.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     guarded("plan_scenario", async ({ description }: { description: string }) => {
       const { origins, caps } = config();
@@ -409,7 +412,7 @@ export function createRehearsalServer(deps: ServerDeps): McpServer {
     {
       title: "Run a scenario in the PayPal sandbox",
       description:
-        "Executes a scenario against the PayPal sandbox when confirm is true; otherwise returns the dry run and executes nothing. Applies the same schema, spend caps, event-target allowlist, sandbox host pinning, idempotency keys and resumable run state as the CLI. With resume, continues an interrupted run by its id; a halted run is not retried here.",
+        "Executes a scenario against the PayPal sandbox when confirm is true; otherwise returns the dry run and executes nothing. Applies the scenario schema, the spend caps, the event-target allowlist, the purchase bank check, sandbox host pinning, idempotency keys and resumable run state. With resume, continues an interrupted run started from the same scenario; a halted run is not retried here.",
       inputSchema: {
         scenario: scenarioInput,
         confirm: confirmInput,
@@ -439,9 +442,11 @@ export function createRehearsalServer(deps: ServerDeps): McpServer {
             ]);
           }
           resumeState = loaded.state;
-          const ids = new Set(scenario.steps.map((st) => st.id));
-          if (resumeState.order.length !== ids.size || !resumeState.order.every((id) => ids.has(id))) {
-            return refused([`REFUSED: run ${resume} does not match this scenario's steps, so it cannot be resumed. Nothing ran.`]);
+          // Strict here: a run with no recorded digest predates them and resumes only from the CLI.
+          if (resumeState.meta[SCENARIO_DIGEST_KEY] !== scenarioDigest(scenario)) {
+            return refused([
+              `REFUSED: run ${resume} was not started from this exact scenario, so it cannot be resumed. Nothing ran.`,
+            ]);
           }
         }
 
@@ -467,10 +472,17 @@ export function createRehearsalServer(deps: ServerDeps): McpServer {
             { paths: deps.paths, seller, buyer, now: deps.now, sleep: deps.sleep, log, env: deps.env },
           );
 
+          // The run has already written to PayPal, so a failed report write must
+          // not hide its id: a caller told "failed" would run it again.
           const reportPath = resolve(deps.paths.runsDir, `${state.runId}.md`);
-          writeFileSync(reportPath, `${runReportLines(scenario, state).join("\n")}\n`, "utf8");
+          let reportLine = `report written to ${reportPath}`;
+          try {
+            writeFileSync(reportPath, `${runReportLines(scenario, state).join("\n")}\n`, "utf8");
+          } catch (e) {
+            reportLine = `the report could not be written (${e instanceof Error ? e.name : "error"}); the run state is in runs/${state.runId}.json`;
+          }
 
-          const lines = [...statusLines(state), "", `report written to ${reportPath}`];
+          const lines = [...statusLines(state), "", reportLine];
           return state.halted ? refused(lines) : ok(lines);
         } finally {
           busy = false;
@@ -615,9 +627,14 @@ export function createRehearsalServer(deps: ServerDeps): McpServer {
 
           const report = finderReportLines(results);
           const reportPath = resolve(deps.paths.runsDir, `finder-${newRunId(deps.now())}.md`);
-          mkdirSync(dirname(reportPath), { recursive: true });
-          writeFileSync(reportPath, `${report.join("\n")}\n`, "utf8");
-          return ok([...report, "", `report written to ${reportPath}`, `model calls: ${budget.summary()}`]);
+          let reportLine = `report written to ${reportPath}`;
+          try {
+            mkdirSync(dirname(reportPath), { recursive: true });
+            writeFileSync(reportPath, `${report.join("\n")}\n`, "utf8");
+          } catch (e) {
+            reportLine = `the report could not be written (${e instanceof Error ? e.name : "error"})`;
+          }
+          return ok([...report, "", reportLine, `model calls: ${budget.summary()}`]);
         } finally {
           busy = false;
           activeRunId = null;
