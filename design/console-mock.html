@@ -178,7 +178,9 @@ aside { display: grid; gap: 18px; align-content: start; padding-top: 30px; }
 .facts-block:last-child { border-bottom: 0; }
 .facts-block h2 { margin: 0 0 10px; }
 .facts { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; font-size: 14px; }
-.facts dt { color: var(--text-2); }
+/* One line per fact: a wrapped label reads as two facts. */
+.facts dt { color: var(--text-2); white-space: nowrap; }
+.verdict { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 10px; }
 .facts dd { margin: 0; text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .big { font: 500 44px/1 var(--font-mono); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .big small { font-size: 18px; color: var(--text-3); letter-spacing: 0; }
@@ -306,7 +308,7 @@ footer { padding: 0 24px 32px; color: var(--text-3); font-size: 13px; }
       <div class="gap" data-s="16.4" style="--r:12; --h:26px"></div>
 
       <article class="delivery" data-delivery="p3" data-latency="38.5s" data-state="verified" style="--r:13; --i:6">
-        <div class="env-head"><span>PAYMENT.CAPTURE.COMPLETED <span class="tag">same event, 2nd delivery</span></span><span class="when">+1:36.5</span></div>
+        <div class="env-head"><span>PAYMENT.CAPTURE.COMPLETED <span class="tag">2nd delivery</span></span><span class="when">+1:36.5</span></div>
         <div class="body">
           <dl><dt>event</dt><dd>WH-4MD20941KV7713526-8TC33910AA4428431</dd><dt>store</dt><dd>duplicate_ignored, still fulfilled 1</dd></dl>
           <div class="proof"><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>verified</span><span class="cert">cert host api.sandbox.paypal.com</span></div>
@@ -334,8 +336,8 @@ footer { padding: 0 24px 32px; color: var(--text-3); font-size: 13px; }
   <aside aria-label="Run facts">
     <section class="facts-block">
       <h2 class="label">Deliveries verified</h2>
-      <div class="big">3<small> of 3 arrived</small></div>
-      <p class="note">1 more expected. Verified means the store checked PayPal's signature against the cert host shown on each card.</p>
+      <div class="big">3<small> arrived, 1 waiting</small></div>
+      <p class="note">Verified means the store checked PayPal's signature against the cert host shown on each card.</p>
     </section>
     <section class="facts-block">
       <h2 class="label">This run</h2>
@@ -360,8 +362,8 @@ footer { padding: 0 24px 32px; color: var(--text-3); font-size: 13px; }
       <dl class="facts">
         <dt>Fulfillments of the event</dt><dd>1</dd>
         <dt>Redeliveries ignored</dt><dd>1</dd>
-        <dt>Verdict</dt><dd><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>OK, on evidence</span></dd>
       </dl>
+      <div class="verdict"><span class="label">Verdict</span><span class="mark ok"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" fill="none"/></svg>OK, on evidence</span></div>
       <p class="note">OK only because the redelivery reached the store and was ignored. No second delivery would read INCONCLUSIVE, never OK.</p>
     </section>
   </aside>
