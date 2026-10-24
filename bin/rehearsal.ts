@@ -108,6 +108,23 @@ function cliCaps(): Caps {
   }
 }
 
+/**
+ * A scenario file through the gate every MCP path runs: schema, allowlist and
+ * caps. A hand-written file is no more trusted than a planned one. Shared by
+ * dry-run and run, so a dry run never shows a plan that run would refuse, and
+ * it is called before any client exists, so a refused run sends nothing.
+ */
+function loadCappedScenario(path: string | undefined, consequence: string): Scenario {
+  const loaded = loadScenario(path);
+  const gated = gateScenario(loaded, { allowedEventOrigins: allowedEventOrigins(), caps: cliCaps() });
+  if (!gated.ok) {
+    console.error(`${path} exceeds the spend caps, ${consequence}:`);
+    for (const e of gated.errors) console.error(`  ${e}`);
+    process.exit(1);
+  }
+  return gated.scenario;
+}
+
 function client(role: "seller" | "buyer") {
   return new PaypalClient(credentialsFor(role), {
     label: role,
@@ -121,7 +138,7 @@ const bankStore = () => sharedBankStore(PATHS);
 // ---------------------------------------------------------------- dry run
 
 function dryRun(rest: string[]): void {
-  const scenario = loadScenario(rest[0]);
+  const scenario = loadCappedScenario(rest[0], "so it would not run");
   for (const line of dryRunLines(scenario)) console.log(line);
 }
 
@@ -261,16 +278,8 @@ async function findCommand(rest: string[]): Promise<void> {
 // ---------------------------------------------------------------- run
 
 async function run(rest: string[]): Promise<void> {
-  const loaded = loadScenario(rest[0]);
-  // The gate every MCP path runs. A hand-written file is no more trusted than a
-  // planned one, and this runs before any client exists, so nothing is sent.
-  const gated = gateScenario(loaded, { allowedEventOrigins: allowedEventOrigins(), caps: cliCaps() });
-  if (!gated.ok) {
-    console.error(`${rest[0]} exceeds the spend caps, so nothing was sent to PayPal:`);
-    for (const e of gated.errors) console.error(`  ${e}`);
-    process.exit(1);
-  }
-  await executeAndReport(gated.scenario, args(rest.slice(1)));
+  const scenario = loadCappedScenario(rest[0], "so nothing was sent to PayPal");
+  await executeAndReport(scenario, args(rest.slice(1)));
 }
 
 /** Shared by a file-based run and an AI-planned one, so both behave identically. */

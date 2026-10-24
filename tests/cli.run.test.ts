@@ -21,7 +21,7 @@ afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
-function runCli(scenario: unknown, env: Record<string, string> = {}) {
+function runCli(scenario: unknown, env: Record<string, string> = {}, command = "run") {
   const file = join(cwd, "scenario.json");
   writeFileSync(file, JSON.stringify(scenario));
   const base: Record<string, string> = {};
@@ -29,7 +29,7 @@ function runCli(scenario: unknown, env: Record<string, string> = {}) {
     const v = process.env[name];
     if (v !== undefined) base[name] = v;
   }
-  const r = spawnSync(process.execPath, [TSX, CLI, "run", file], {
+  const r = spawnSync(process.execPath, [TSX, CLI, command, file], {
     cwd,
     env: { ...base, ...env },
     encoding: "utf8",
@@ -46,7 +46,7 @@ const card = (amount: string) => ({
   steps: [{ id: "order", kind: "card_order", amount }],
 });
 
-describe("rehearsal run <file>", () => {
+describe("rehearsal run and dry-run <file>", () => {
   it("refuses a scenario over the per-step cap before any run starts", () => {
     const r = runCli(card("501.00"));
     expect(r.status).toBe(1);
@@ -70,6 +70,20 @@ describe("rehearsal run <file>", () => {
     expect(r.stdout).toMatch(/^run \d{14}-[0-9a-f]{6}: cli caps check$/m);
     expect(r.stderr).toContain("PAYPAL_SELLER_CLIENT_ID");
     expect(r.stderr).not.toContain("exceeds the spend caps");
+  }, 60_000);
+
+  it("dry-run refuses the same over-cap scenario run refuses, rather than showing a plan", () => {
+    const r = runCli(card("501.00"), {}, "dry-run");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("exceeds the spend caps, so it would not run");
+    expect(r.stderr).toContain("per-step cap");
+    expect(r.stdout).not.toContain("DRY RUN");
+  }, 60_000);
+
+  it("dry-run still shows a plan inside the caps", () => {
+    const r = runCli(card("12.00"), {}, "dry-run");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("DRY RUN  cli caps check");
   }, 60_000);
 
   it("names a malformed cap variable without echoing its value", () => {
