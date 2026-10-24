@@ -8,7 +8,7 @@ import {
   planScenario,
 } from "../src/ai/planner";
 import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
-import { capsFromEnv } from "../src/core/caps";
+import { type Caps, capsFromEnv } from "../src/core/caps";
 import { PaypalClient } from "../src/adapters/paypal";
 import {
   DEFAULT_FINDER_DESCRIPTION,
@@ -16,6 +16,7 @@ import {
   eventOriginsFromEnv,
   executeWithPersistence,
   finderDepsFrom,
+  gateScenario,
   loadResume,
   newRunId,
   pathsUnder,
@@ -95,6 +96,18 @@ function loadScenario(path: string | undefined): Scenario {
   return result.scenario;
 }
 
+/** The caps, or a stop that names the variables. A malformed value is never echoed. */
+function cliCaps(): Caps {
+  try {
+    return capsFromEnv(process.env);
+  } catch {
+    console.error(
+      "a cap variable (REHEARSAL_MAX_STEP_AMOUNT, REHEARSAL_MAX_RUN_TOTAL, REHEARSAL_MAX_STEPS or REHEARSAL_MAX_DISPUTES) is malformed, so nothing will run. Fix it in the Windows environment variable screen.",
+    );
+    process.exit(1);
+  }
+}
+
 function client(role: "seller" | "buyer") {
   return new PaypalClient(credentialsFor(role), {
     label: role,
@@ -125,7 +138,7 @@ async function planCommand(rest: string[]): Promise<void> {
 
   const apiKey = requiredEnv("ANTHROPIC_API_KEY");
   const model = optionalEnv("REHEARSAL_PLANNER_MODEL") ?? DEFAULT_PLANNER_MODEL;
-  const caps = capsFromEnv(process.env);
+  const caps = cliCaps();
   const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
   const origins = allowedEventOrigins();
 
@@ -205,7 +218,7 @@ async function findCommand(rest: string[]): Promise<void> {
     allowedEventOrigins(),
   ).origin;
   const storeToken = requiredEnv("REHEARSAL_STORE_TOKEN");
-  const caps = capsFromEnv(process.env);
+  const caps = cliCaps();
   const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
   const generate = anthropicGenerator({ apiKey, model });
   const bank = bankStore();
@@ -248,8 +261,16 @@ async function findCommand(rest: string[]): Promise<void> {
 // ---------------------------------------------------------------- run
 
 async function run(rest: string[]): Promise<void> {
-  const scenario = loadScenario(rest[0]);
-  await executeAndReport(scenario, args(rest.slice(1)));
+  const loaded = loadScenario(rest[0]);
+  // The gate every MCP path runs. A hand-written file is no more trusted than a
+  // planned one, and this runs before any client exists, so nothing is sent.
+  const gated = gateScenario(loaded, { allowedEventOrigins: allowedEventOrigins(), caps: cliCaps() });
+  if (!gated.ok) {
+    console.error(`${rest[0]} exceeds the spend caps, so nothing was sent to PayPal:`);
+    for (const e of gated.errors) console.error(`  ${e}`);
+    process.exit(1);
+  }
+  await executeAndReport(gated.scenario, args(rest.slice(1)));
 }
 
 /** Shared by a file-based run and an AI-planned one, so both behave identically. */
