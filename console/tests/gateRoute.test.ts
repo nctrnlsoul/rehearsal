@@ -105,6 +105,31 @@ describe("POST /api/gate", () => {
     expect((await handleGatePost(post(form("x".repeat(MAX_BODY_BYTES + 10))), deps)).status).toBe(413);
   });
 
+  it("stops reading a chunked body with no length once it passes the cap", async () => {
+    const hashed: string[] = [];
+    const { deps } = harness();
+    let pulled = 0;
+    const chunk = new TextEncoder().encode("x".repeat(1024));
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled += 1;
+        if (pulled > 1000) c.close();
+        else c.enqueue(chunk);
+      },
+    });
+    const req = new Request("https://console.example.test/api/gate", {
+      method: "POST",
+      headers: { host: "console.example.test", origin: "https://console.example.test" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(req.headers.get("content-length")).toBeNull();
+    const res = await handleGatePost(req, { ...deps, verify: (input: string) => (hashed.push(input), false) });
+    expect(res.status).toBe(413);
+    expect(pulled).toBeLessThan(10);
+    expect(hashed).toEqual([]);
+  });
+
   it("treats an empty or overlong passcode as wrong, without hashing it", async () => {
     const hashed: string[] = [];
     const { deps } = harness();

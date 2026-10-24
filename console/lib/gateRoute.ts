@@ -27,6 +27,26 @@ export type GateDeps = {
 
 export const MAX_BODY_BYTES = 2048;
 
+// A chunked upload carries no Content-Length, so the cap is enforced on the
+// bytes as they arrive; the rest of the stream is never read into memory.
+async function readCapped(req: Request, max: number): Promise<string | null> {
+  if (req.body === null) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 const seeOther = (location: string, extra: Record<string, string> = {}) =>
   new Response(null, { status: 303, headers: { Location: location, "Cache-Control": "no-store", ...extra } });
 
@@ -45,8 +65,8 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
 
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (!Number.isFinite(declared) || declared > MAX_BODY_BYTES) return new Response("too large", { status: 413 });
-  const body = await req.text();
-  if (body.length > MAX_BODY_BYTES) return new Response("too large", { status: 413 });
+  const body = await readCapped(req, MAX_BODY_BYTES);
+  if (body === null) return new Response("too large", { status: 413 });
 
   const hash = parsePasscodeHash(deps.env[PASSCODE_HASH_VAR]);
   const secret = sessionSecret(deps.env);
