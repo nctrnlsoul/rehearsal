@@ -8,42 +8,43 @@ import {
   planScenario,
 } from "../src/ai/planner";
 import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
-import { capsFromEnv, checkCaps } from "../src/core/caps";
-import { JsonStore } from "../src/adapters/jsonStore";
+import { capsFromEnv } from "../src/core/caps";
 import { PaypalClient } from "../src/adapters/paypal";
+import {
+  bankStore as sharedBankStore,
+  eventOriginsFromEnv,
+  executeWithPersistence,
+  gateScenario,
+  loadResume,
+  newRunId,
+  pathsUnder,
+  storeStateReader,
+} from "../src/app/runtime";
 import { seedOf } from "../src/core/idempotency";
 import { errorSummary, pick } from "../src/core/json";
 import {
-  type Bank,
   addPurchase,
   attachTransactionId,
   availablePurchases,
-  claimPurchase,
   confirmCapture,
-  emptyBank,
   markExpired,
 } from "../src/core/purchaseBank";
-import {
-  assertAllowedEventTarget,
-  parseEventAllowlist,
-  webhookHandlerUrl,
-} from "../src/core/eventTarget";
-import { type FinderDeps, finderReportLines, runFinder } from "../src/ai/finder";
-import { type RunState, retryStep } from "../src/core/runState";
+import { assertAllowedEventTarget, webhookHandlerUrl } from "../src/core/eventTarget";
+import { finderReportLines, runFinder } from "../src/ai/finder";
+import type { RunState } from "../src/core/runState";
 import { walletOrderBody } from "../src/core/sandboxFixtures";
 import { type Scenario, validateScenario } from "../src/core/scenario";
 import { dryRunLines } from "../src/executor/dryRun";
-import { type WebhookMode, executeScenario } from "../src/executor/executor";
+import type { WebhookMode } from "../src/executor/executor";
 import { runReportLines } from "../src/executor/report";
-import type { ClaimResult } from "../src/executor/types";
 
 /**
  * REHEARSAL command line. Deliberately thin: every decision it makes lives in a
  * tested module, and this file only wires them to the filesystem and the clock.
  */
 
-const BANK_PATH = resolve("bank/purchases.json");
-const RUNS_DIR = resolve("runs");
+const PATHS = pathsUnder(resolve("."));
+const RUNS_DIR = PATHS.runsDir;
 const THROTTLE_MS = 300;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -64,11 +65,7 @@ function args(rest: string[]): Record<string, string> {
 
 /** Origins a scenario may fire real events at. Empty means none are permitted. */
 function allowedEventOrigins(): string[] {
-  const parsed = parseEventAllowlist(
-    ["REHEARSAL_EVENT_ORIGINS", "REHEARSAL_RECEIVER_ORIGIN", "REHEARSAL_STORE_ORIGIN"].map(
-      (name) => ({ name, value: optionalEnv(name) }),
-    ),
-  );
+  const parsed = eventOriginsFromEnv(process.env);
   if (!parsed.ok) {
     console.error(parsed.error);
     process.exit(1);
@@ -105,7 +102,7 @@ function client(role: "seller" | "buyer") {
   });
 }
 
-const bankStore = () => new JsonStore<Bank>(BANK_PATH, emptyBank);
+const bankStore = () => sharedBankStore(PATHS);
 
 // ---------------------------------------------------------------- dry run
 
@@ -230,25 +227,10 @@ async function findCommand(rest: string[]): Promise<void> {
           },
           { generate, budget },
         ),
-      validate: (candidate) => {
-        const v = validateScenario(candidate, { allowedEventOrigins: allowedEventOrigins() });
-        if (!v.ok) return v;
-        const violations = checkCaps(v.scenario, caps);
-        return violations.length === 0
-          ? v
-          : { ok: false, errors: violations.map((x) => x.message) };
-      },
+      validate: (candidate) =>
+        gateScenario(candidate, { allowedEventOrigins: allowedEventOrigins(), caps }),
       run: (scenario, { webhookMode }) => executeScenarioFromCli(scenario, {}, webhookMode),
-      readStore: async (sinceIso) => {
-        const url = new URL(`${storeOrigin}/api/store/state`);
-        url.searchParams.set("since", sinceIso);
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${storeToken}` },
-          signal: AbortSignal.timeout(20_000),
-        });
-        if (!res.ok) throw new Error(`store state read returned http ${res.status}`);
-        return (await res.json()) as Awaited<ReturnType<FinderDeps["readStore"]>>;
-      },
+      readStore: storeStateReader({ origin: storeOrigin, token: storeToken }),
       bankAvailable: () => availablePurchases(bank.read()).length,
       log: (line) => console.log(line),
       now: () => new Date(),
@@ -307,72 +289,47 @@ async function executeScenarioFromCli(
   webhookMode: WebhookMode = "register",
 ): Promise<RunState> {
   const resumeId = flags["resume"];
-  const runId =
-    resumeId ??
-    `${isoNoMillis(new Date()).replace(/[:TZ-]/g, "")}-${randomBytes(3).toString("hex")}`;
-  const stateStore = new JsonStore<RunState | null>(
-    resolve(RUNS_DIR, `${runId}.json`),
-    () => null,
-  );
+  const runId = resumeId ?? newRunId(new Date());
 
   let resume: RunState | null = null;
   if (resumeId !== undefined) {
-    resume = stateStore.read();
-    if (resume === null) {
-      console.error(`no run state found for ${resumeId}, so there is nothing to resume`);
+    let loaded;
+    try {
+      loaded = loadResume(RUNS_DIR, resumeId, flags["retry"] ?? null, new Date().toISOString());
+    } catch (e) {
+      console.error((e as Error).message);
       process.exit(1);
     }
-    const retryId = flags["retry"];
-    if (retryId !== undefined) {
-      const reset = retryStep(resume, retryId, new Date().toISOString());
-      if (!reset.ok) {
-        console.error(reset.error);
-        process.exit(1);
+    if (!loaded.ok) {
+      console.error(loaded.error);
+      if (loaded.halted) {
+        console.error(
+          "Check whether that step wrote to PayPal. If it definitely did not, re-run with --retry <stepId>.",
+        );
       }
-      resume = reset.state;
-      console.log(
-        `WARNING: retrying step ${retryId}. Only do this when you have checked that it did NOT write to PayPal, because a retry can duplicate a payment.`,
-      );
-    } else if (resume.halted) {
-      console.error(`run ${resumeId} is halted: ${resume.haltReason ?? "no reason recorded"}`);
-      console.error(
-        "Check whether that step wrote to PayPal. If it definitely did not, re-run with --retry <stepId>.",
-      );
       process.exit(1);
+    }
+    resume = loaded.state;
+    if (loaded.retried !== null) {
+      console.log(
+        `WARNING: retrying step ${loaded.retried}. Only do this when you have checked that it did NOT write to PayPal, because a retry can duplicate a payment.`,
+      );
     }
   }
 
-  const bank = bankStore();
-  const claim = (rid: string): ClaimResult => {
-    const current = bank.read();
-    const result = claimPurchase(current, rid, new Date().toISOString());
-    if (!result.ok) return { ok: false, error: result.error };
-    // Written BEFORE the dispute call. A crash between the two burns one banked
-    // purchase, which costs a human click; reusing one would double-dispute a
-    // transaction, which is worse.
-    bank.write(result.value.bank);
-    log(
-      `purchase ${result.value.claimed.orderId} claimed and marked used, whatever the dispute call returns`,
-    );
-    return { ok: true, purchase: result.value.claimed };
-  };
-
   console.log(`run ${runId}: ${scenario.name}`);
-  const state = await executeScenario(
+  return executeWithPersistence(
     { scenario, runId, resume, webhookMode },
     {
+      paths: PATHS,
       seller: client("seller"),
       buyer: client("buyer"),
-      claimPurchase: claim,
-      persist: (s) => stateStore.write(s),
       now: () => new Date(),
       sleep,
       log,
       env: process.env,
     },
   );
-
-  return state;
 }
 
 // ---------------------------------------------------------------- bank
