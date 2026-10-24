@@ -7,7 +7,8 @@ import { verifySignature } from "../../../../lib/verify";
  * when PayPal tells it something happened.
  *
  * This app is the SUBJECT of the tests, not part of the test harness. It
- * contains a deliberately planted bug, documented in lib/merchant.ts.
+ * shipped with a deliberately planted bug, now fixed behind one constant;
+ * see lib/merchant.ts.
  */
 
 export const runtime = "nodejs";

@@ -100,7 +100,12 @@ export type RowsOptions = {
 };
 
 export type Db = {
-  /** True when any row already records this event id. */
+  /**
+   * True when a VERIFIED, non-refused row already records this event id.
+   * Refused rows are evidence, not handling: counting them would let a
+   * forged copy, or one transient verify failure, mark a real delivery as a
+   * duplicate so its retries are ignored and the order is never fulfilled.
+   */
   hasEvent(eventId: string): Promise<boolean>;
   insert(row: Omit<StoreRow, "receivedAtMs">): Promise<void>;
   rows(options?: RowsOptions): Promise<StoreRow[]>;
@@ -134,6 +139,8 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
       const url = new URL(endpoint);
       url.searchParams.set("select", "id");
       url.searchParams.set("event_id", `eq.${eventId}`);
+      url.searchParams.set("verified", "is.true");
+      url.searchParams.set("action", "neq.refused");
       url.searchParams.set("limit", "1");
       const res = await doFetch(url, {
         method: "GET",

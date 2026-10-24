@@ -87,6 +87,15 @@ describe("db operations", () => {
     expect(decodeURIComponent(f.calls[0]!.url)).toContain("event_id=eq.WH-1");
   });
 
+  // Refused rows are stored too; the lookup must not count them as handled.
+  it("counts only verified, non-refused rows as seen", async () => {
+    const f = fakeFetch([{ status: 200, body: [] }]);
+    await createDb(CONFIG, { fetchImpl: f.impl }).hasEvent("WH-1");
+    const url = new URL(f.calls[0]!.url);
+    expect(url.searchParams.get("verified")).toBe("is.true");
+    expect(url.searchParams.get("action")).toBe("neq.refused");
+  });
+
   it("reports an absent event as absent", async () => {
     const f = fakeFetch([{ status: 200, body: [] }]);
     expect(await createDb(CONFIG, { fetchImpl: f.impl }).hasEvent("WH-NONE")).toBe(false);

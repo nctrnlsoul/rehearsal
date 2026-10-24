@@ -22,7 +22,10 @@ function fakeDb() {
   const inserted: Array<Omit<StoreRow, "receivedAtMs">> = [];
   const db: Db = {
     async hasEvent(eventId) {
-      return inserted.some((r) => r.eventId === eventId);
+      // Mirrors the real lookup: only a verified, non-refused row counts as seen.
+      return inserted.some(
+        (r) => r.eventId === eventId && r.verified === true && r.action !== "refused",
+      );
     },
     async insert(row) {
       inserted.push(row);
@@ -124,12 +127,34 @@ describe("the planted bug", () => {
     expect(state.orders.every((o) => o.fulfilmentCount === 1)).toBe(true);
   });
 
-  it("defaults to the setting the app ships with, so the route follows it", async () => {
-    const { db } = fakeDb();
+  // A refused copy must not poison the event id: PayPal retries after a
+  // transient verify failure, and a forger may post a junk copy first.
+  it("still fulfils a real delivery after a refused copy of the same event id", async () => {
+    const { db, inserted } = fakeDb();
+    const event = captureEvent("WH-POISON");
+    await handleEvent(db, event, { verified: false, detail: "forged", dedupe: true });
+    await handleEvent(db, event, { verified: null, detail: "verify call failed", dedupe: true });
+    expect(await handleEvent(db, event, { verified: true, dedupe: true })).toBe("fulfilled");
+    expect(await handleEvent(db, event, { verified: true, dedupe: true })).toBe(
+      "duplicate_ignored",
+    );
+    expect(inserted.map((r) => r.action)).toEqual([
+      "refused",
+      "refused",
+      "fulfilled",
+      "duplicate_ignored",
+    ]);
+  });
+
+  // Pinned, not conditional: a test that passes on either value of the flag
+  // would not notice the fix being reverted.
+  it("ships with deduping on, and the route's default follows it", async () => {
+    expect(DEDUPE_BY_EVENT_ID).toBe(true);
+    const { db, inserted } = fakeDb();
     const event = captureEvent("WH-DEFAULT");
-    await handleEvent(db, event, { verified: true });
-    const second = await handleEvent(db, event, { verified: true });
-    expect(second).toBe(DEDUPE_BY_EVENT_ID ? "duplicate_ignored" : "fulfilled");
+    expect(await handleEvent(db, event, { verified: true })).toBe("fulfilled");
+    expect(await handleEvent(db, event, { verified: true })).toBe("duplicate_ignored");
+    expect(inserted.map((r) => r.action)).toEqual(["fulfilled", "duplicate_ignored"]);
   });
 });
 
