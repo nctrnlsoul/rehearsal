@@ -248,6 +248,23 @@ describe("scenario digest on resume", () => {
       executeWithPersistence({ scenario: bigger, runId, resume: interrupted }, deps(paths)),
     ).rejects.toThrow(/started from a different scenario/);
   });
+
+  it("refuses to resume a run with no recorded digest, on the CLI path too (R-021)", async () => {
+    const paths = pathsUnder(root);
+    const runId = "20261023231552-1e9ac7";
+    const scenario = scenarioWith([{ id: "order", kind: "card_order", amount: "1.00" }]);
+    const legacy = initRunState({
+      runId,
+      scenarioName: "t",
+      currency: "USD",
+      steps: [{ id: "order", kind: "card_order" }],
+      order: ["order"],
+      nowIso: "2026-10-23T00:00:00.000Z",
+    });
+    await expect(
+      executeWithPersistence({ scenario, runId, resume: legacy }, deps(paths)),
+    ).rejects.toThrow(/no recorded scenario digest/);
+  });
 });
 
 describe("storeStateReader", () => {

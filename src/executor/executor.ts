@@ -86,11 +86,14 @@ export async function executeScenario(
       );
     }
     // Matching ids are not enough: the same ids with bigger amounts would let
-    // the two halves of a run together move more than the caps allow.
+    // the two halves of a run together move more than the caps allow. A run
+    // with no recorded digest cannot prove it matches, so it is refused too (R-021).
     const recorded = args.resume.meta[SCENARIO_DIGEST_KEY];
-    if (args.scenarioDigest !== undefined && recorded !== undefined && recorded !== args.scenarioDigest) {
+    if (args.scenarioDigest !== undefined && recorded !== args.scenarioDigest) {
       throw new Error(
-        `run ${args.resume.runId} was started from a different scenario, so it cannot be resumed`,
+        recorded === undefined
+          ? `run ${args.resume.runId} has no recorded scenario digest (it predates v0.4.0), so it cannot be resumed`
+          : `run ${args.resume.runId} was started from a different scenario, so it cannot be resumed`,
       );
     }
     state = args.resume;

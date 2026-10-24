@@ -114,10 +114,12 @@ What the server holds to, in code:
 
 - The scenario schema, spend caps, event-target allowlist, sandbox host pin,
   idempotency keys and resumable run state, through the same modules the CLI
-  uses. Every MCP path checks the caps; the CLI checks them on `plan` and
-  `find`, but not yet on `run <file>`.
-- A resume must present the exact scenario the run started from (its SHA-256
-  is recorded in the run state), so a changed scenario cannot finish a run.
+  uses. The caps are checked on every path that can run, MCP or CLI, before
+  any PayPal call.
+- A resume, from MCP or the CLI, must present the exact scenario the run
+  started from (its SHA-256 is recorded in the run state), so a changed
+  scenario cannot finish a run. Runs from before v0.4.0 have no digest and
+  cannot be resumed.
 - Nothing writes to PayPal without `confirm: true`. Leave `run_scenario` and
   `find_edge_cases` on "ask" in Claude Code's permissions, so you approve each
   call and see its arguments.
