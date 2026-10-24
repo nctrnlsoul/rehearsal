@@ -89,6 +89,25 @@ describe("PaypalClient guards", () => {
     expect((await h.client.call({ method: "GET", path: "/v1/x" })).status).toBe(200);
   });
 
+  // The message reaches step details, run reports and MCP tool output.
+  it("reports a failed token request by status and error code, never the body", async () => {
+    const h = harness([
+      {
+        kind: "json",
+        status: 401,
+        body: { error: "invalid_client", error_description: "Client Authentication failed BODY-TEXT" },
+      },
+    ]);
+    await expect(h.client.accessToken()).rejects.toThrow(
+      /^sandbox token request failed with http 401 \(invalid_client\)$/,
+    );
+  });
+
+  it("drops an error code that is not a plain identifier", async () => {
+    const h = harness([{ kind: "json", status: 400, body: { error: "x\u001b[2J; BODY-TEXT" } }]);
+    await expect(h.client.accessToken()).rejects.toThrow(/^sandbox token request failed with http 400$/);
+  });
+
   it("refuses a path that could leave the sandbox host", async () => {
     const h = harness([]);
     for (const path of ["v1/x", "@evil.test/x", "https://evil.test/x"]) {
