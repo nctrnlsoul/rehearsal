@@ -76,6 +76,10 @@ describe("buildPlannerPrompt system message", () => {
     // A dispute needs no card_order: told only "draws from the bank", the model
     // added one and said the dispute was opened against it.
     expect(system).toMatch(/open_dispute .*never a card_order from this scenario, so it needs no other step/);
+    // Still not enough on its own: soap-maker kept planning a card order for the
+    // disputed sale, so the prompt says so in a block of its own.
+    expect(system).toContain("Never add a card_order to represent the order being");
+    expect(system).toContain("the scenario is a single open_dispute step");
   });
 });
 

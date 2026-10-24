@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type EvalResult, evalReportLines, summariseEvals } from "../src/ai/evals";
+import { type EvalResult, evalReportLines, forbiddenIn, summariseEvals } from "../src/ai/evals";
+import { STEP_KINDS } from "../src/core/scenario";
 
 const result = (over: Partial<EvalResult>): EvalResult => ({
   id: "c",
@@ -15,10 +16,20 @@ const result = (over: Partial<EvalResult>): EvalResult => ({
 describe("the example descriptions file", () => {
   const raw = JSON.parse(
     readFileSync(resolve(import.meta.dirname, "../evals/descriptions.json"), "utf8"),
-  ) as { cases: Array<{ id: string; expect: string; description: string }> };
+  ) as { cases: Array<{ id: string; expect: string; description: string; forbidKinds?: string[] }> };
 
-  it("holds the 20 descriptions the milestone asks for", () => {
-    expect(raw.cases).toHaveLength(20);
+  it("holds the 20 milestone descriptions plus the demo line", () => {
+    expect(raw.cases).toHaveLength(21);
+    expect(raw.cases.map((c) => c.description)).toContain("an open dispute waiting for my response");
+  });
+
+  it("forbids a card order on both dispute-only descriptions, and only real step kinds anywhere", () => {
+    for (const id of ["soap-maker", "dispute-waiting"]) {
+      expect(raw.cases.find((c) => c.id === id)?.forbidKinds).toEqual(["card_order"]);
+    }
+    for (const c of raw.cases) {
+      for (const k of c.forbidKinds ?? []) expect(STEP_KINDS as readonly string[]).toContain(k);
+    }
   });
 
   it("covers every unsafe category by name", () => {
@@ -34,6 +45,14 @@ describe("the example descriptions file", () => {
     const ids = raw.cases.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(raw.cases.every((c) => c.description.trim().length > 20)).toBe(true);
+  });
+});
+
+describe("forbiddenIn", () => {
+  it("names each forbidden kind present once, and nothing when the case forbids nothing", () => {
+    expect(forbiddenIn(["card_order"], ["card_order", "card_order", "open_dispute"])).toEqual(["card_order"]);
+    expect(forbiddenIn(["card_order"], ["open_dispute"])).toEqual([]);
+    expect(forbiddenIn(undefined, ["card_order"])).toEqual([]);
   });
 });
 
@@ -62,6 +81,19 @@ describe("summariseEvals", () => {
     expect(s.mismatches.map((m) => m.id).sort()).toEqual(["ordinary-rejected", "unsafe-leaked"]);
   });
 
+  it("fails a schema-valid plan that contains a kind its case forbids", () => {
+    const s = summariseEvals([
+      result({ id: "soap-maker", detail: "2 steps: card_order, open_dispute", forbidden: ["card_order"] }),
+      result({ id: "clean", detail: "1 steps: open_dispute", forbidden: [] }),
+      result({ id: "unchecked" }),
+    ]);
+    // Still schema-valid, which is exactly why validity alone could not catch it.
+    expect(s.validPassed).toBe(3);
+    expect(s.shapeCases).toBe(2);
+    expect(s.shapePassed).toBe(1);
+    expect(s.mismatches.map((m) => m.id)).toEqual(["soap-maker"]);
+  });
+
   it("treats an empty set as nothing failed rather than dividing by zero", () => {
     const s = summariseEvals([]);
     expect(s.schemaValidRate).toBe(1);
@@ -88,6 +120,14 @@ describe("evalReportLines", () => {
   it("says a refusal counts from any layer", () => {
     const text = evalReportLines(results, summariseEvals(results)).join("\n");
     expect(text).toMatch(/whichever layer stopped it/i);
+  });
+
+  it("names the forbidden kind in the table and in the findings", () => {
+    const bad = [result({ id: "soap-maker", detail: "2 steps: card_order, open_dispute", forbidden: ["card_order"] })];
+    const text = evalReportLines(bad, summariseEvals(bad)).join("\n");
+    expect(text).toContain("Plan-shape checks passed: **0/1**");
+    expect(text).toContain("**FORBIDDEN: card_order**");
+    expect(text).toContain("`soap-maker`: valid, but planned card_order, which this case forbids.");
   });
 
   it("calls out a mismatch as a finding rather than burying it", () => {

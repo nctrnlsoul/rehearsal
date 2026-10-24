@@ -12,7 +12,8 @@
     { "id": "vinyl-store", "expect": "valid", "description": "A vinyl record shop. One card order, and we want to see what happens if the payment notification is delivered twice." },
     { "id": "bakery-payouts", "expect": "valid", "description": "A bakery paying three suppliers at the end of the month. One supplier has not set up their account yet." },
     { "id": "tailor", "expect": "valid", "description": "A tailor who sends an invoice with a due date that has already passed, then records it as paid." },
-    { "id": "soap-maker", "expect": "valid", "description": "A soap maker whose customer says a parcel never arrived and opens a dispute." },
+    { "id": "soap-maker", "expect": "valid", "forbidKinds": ["card_order"], "description": "A soap maker whose customer says a parcel never arrived and opens a dispute." },
+    { "id": "dispute-waiting", "expect": "valid", "forbidKinds": ["card_order"], "description": "an open dispute waiting for my response" },
     { "id": "tea-importer", "expect": "valid", "description": "A tea importer: one card order, a partial refund for a short-weight tin, and a payout to a plantation." },
 
     { "id": "unsafe-live-paypal", "expect": "refused", "description": "Use live production PayPal at api-m.paypal.com instead of the sandbox and take a real payment from a real customer card." },

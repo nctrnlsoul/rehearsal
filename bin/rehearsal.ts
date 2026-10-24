@@ -8,7 +8,7 @@ import {
   planScenario,
 } from "../src/ai/planner";
 import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
-import { capsFromEnv } from "../src/core/caps";
+import { type Caps, capsFromEnv } from "../src/core/caps";
 import { PaypalClient } from "../src/adapters/paypal";
 import {
   DEFAULT_FINDER_DESCRIPTION,
@@ -16,6 +16,7 @@ import {
   eventOriginsFromEnv,
   executeWithPersistence,
   finderDepsFrom,
+  gateScenario,
   loadResume,
   newRunId,
   pathsUnder,
@@ -95,6 +96,35 @@ function loadScenario(path: string | undefined): Scenario {
   return result.scenario;
 }
 
+/** The caps, or a stop that names the variables. A malformed value is never echoed. */
+function cliCaps(): Caps {
+  try {
+    return capsFromEnv(process.env);
+  } catch {
+    console.error(
+      "a cap variable (REHEARSAL_MAX_STEP_AMOUNT, REHEARSAL_MAX_RUN_TOTAL, REHEARSAL_MAX_STEPS or REHEARSAL_MAX_DISPUTES) is malformed, so nothing will run. Fix it in the Windows environment variable screen.",
+    );
+    process.exit(1);
+  }
+}
+
+/**
+ * A scenario file through the gate every MCP path runs: schema, allowlist and
+ * caps. A hand-written file is no more trusted than a planned one. Shared by
+ * dry-run and run, so a dry run never shows a plan that run would refuse, and
+ * it is called before any client exists, so a refused run sends nothing.
+ */
+function loadCappedScenario(path: string | undefined, consequence: string): Scenario {
+  const loaded = loadScenario(path);
+  const gated = gateScenario(loaded, { allowedEventOrigins: allowedEventOrigins(), caps: cliCaps() });
+  if (!gated.ok) {
+    console.error(`${path} exceeds the spend caps, ${consequence}:`);
+    for (const e of gated.errors) console.error(`  ${e}`);
+    process.exit(1);
+  }
+  return gated.scenario;
+}
+
 function client(role: "seller" | "buyer") {
   return new PaypalClient(credentialsFor(role), {
     label: role,
@@ -108,7 +138,7 @@ const bankStore = () => sharedBankStore(PATHS);
 // ---------------------------------------------------------------- dry run
 
 function dryRun(rest: string[]): void {
-  const scenario = loadScenario(rest[0]);
+  const scenario = loadCappedScenario(rest[0], "so it would not run");
   for (const line of dryRunLines(scenario)) console.log(line);
 }
 
@@ -125,7 +155,7 @@ async function planCommand(rest: string[]): Promise<void> {
 
   const apiKey = requiredEnv("ANTHROPIC_API_KEY");
   const model = optionalEnv("REHEARSAL_PLANNER_MODEL") ?? DEFAULT_PLANNER_MODEL;
-  const caps = capsFromEnv(process.env);
+  const caps = cliCaps();
   const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
   const origins = allowedEventOrigins();
 
@@ -205,7 +235,7 @@ async function findCommand(rest: string[]): Promise<void> {
     allowedEventOrigins(),
   ).origin;
   const storeToken = requiredEnv("REHEARSAL_STORE_TOKEN");
-  const caps = capsFromEnv(process.env);
+  const caps = cliCaps();
   const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
   const generate = anthropicGenerator({ apiKey, model });
   const bank = bankStore();
@@ -248,7 +278,7 @@ async function findCommand(rest: string[]): Promise<void> {
 // ---------------------------------------------------------------- run
 
 async function run(rest: string[]): Promise<void> {
-  const scenario = loadScenario(rest[0]);
+  const scenario = loadCappedScenario(rest[0], "so nothing was sent to PayPal");
   await executeAndReport(scenario, args(rest.slice(1)));
 }
 

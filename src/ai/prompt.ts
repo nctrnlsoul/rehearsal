@@ -111,6 +111,14 @@ export function buildPlannerPrompt(args: {
     "  - A webhook target must be exactly one of these URLs, character for character:",
     targets,
     "",
+    // The step doc alone was not enough: told a dispute draws from the bank, the
+    // model still added a card_order to stand for the sale being disputed.
+    "Disputes: open_dispute disputes a purchase that was made BEFORE this scenario",
+    "and is drawn from the bank. Never add a card_order to represent the order being",
+    "disputed, even when the description mentions the original sale, a parcel or a",
+    "customer's purchase: it would be a second, unrelated charge. When the description",
+    "is only about a dispute, the scenario is a single open_dispute step.",
+    "",
     "If the request cannot be met safely inside these rules, return exactly",
     '  { "refusal": "<one short sentence saying why>" }',
     "Do that for anything asking for live or production PayPal, amounts beyond the",
