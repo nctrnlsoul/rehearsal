@@ -48,6 +48,8 @@ function describe(step: Step, scenario: Scenario): string {
       return `cancel invoice ${step.from}`;
     case "open_dispute":
       return `open dispute from the purchase bank, reason ${step.reason}`;
+    case "resend_webhook":
+      return `ask PayPal to redeliver ${step.eventType} for ${step.from}`;
     default:
       return "unknown step";
   }

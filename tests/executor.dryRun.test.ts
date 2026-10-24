@@ -67,6 +67,17 @@ describe("dryRunLines", () => {
     expect(out).toContain("USD 1.50 claimed");
   });
 
+  it("describes a resend step instead of calling it unknown", () => {
+    const out = text(
+      scenarioWith([
+        { id: "order", kind: "card_order", amount: "25.00" },
+        { id: "resend", kind: "resend_webhook", needs: ["order"], from: "order", eventType: "PAYMENT.CAPTURE.COMPLETED" },
+      ]),
+    );
+    expect(out).toContain("ask PayPal to redeliver PAYMENT.CAPTURE.COMPLETED for order");
+    expect(out).not.toContain("unknown step");
+  });
+
   // The plan is only reproducible if it is computed, not assumed.
   it("reports an invalid plan instead of printing a confident order", () => {
     const broken = {
