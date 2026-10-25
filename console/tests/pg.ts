@@ -17,7 +17,7 @@ export const migrationFiles = (): string[] =>
 
 export const sql = (file: string): string => readFileSync(join(DIR, file), "utf8");
 
-export async function freshDb(upTo?: string): Promise<PGlite> {
+async function migrated(upTo?: string): Promise<PGlite> {
   const db = new PGlite();
   // As on Supabase: service_role bypasses RLS, the two API roles do not.
   await db.exec("create role anon; create role authenticated; create role service_role bypassrls;");
@@ -26,4 +26,14 @@ export async function freshDb(upTo?: string): Promise<PGlite> {
     await db.exec(sql(f));
   }
   return db;
+}
+
+// Migrating takes about a second; a clone of a migrated database is the same
+// committed SQL, applied once per test file instead of once per test.
+let template: Promise<PGlite> | null = null;
+
+export async function freshDb(upTo?: string): Promise<PGlite> {
+  if (upTo !== undefined) return migrated(upTo);
+  template ??= migrated();
+  return (await (await template).clone()) as PGlite;
 }

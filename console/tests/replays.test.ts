@@ -145,11 +145,22 @@ describe("facts", () => {
 describe("Stage A boundaries", () => {
   const source = [...filesUnder(join(ROOT, "app"), /\.tsx?$/), ...filesUnder(join(ROOT, "lib"), /\.ts$/), ...filesUnder(join(ROOT, "components"), /\.tsx?$/), join(ROOT, "middleware.ts")];
 
-  it("labels every page that shows recorded data as REPLAY", () => {
+  // A live page may list the recorded plans, because there they run live; it
+  // then says LIVE and calls each one "a recorded plan". Anything else that
+  // reads the recorded data says REPLAY.
+  it("labels every page that shows recorded data as REPLAY, or as LIVE with its recorded plans named as recorded", () => {
     const pages = source.filter((f) => /page\.tsx$/.test(f));
     const usesReplays = pages.filter((f) => /lib\/replays/.test(readFileSync(f, "utf8")));
     expect(usesReplays.length).toBeGreaterThanOrEqual(4);
-    for (const f of usesReplays) expect(readFileSync(f, "utf8"), f).toMatch(/<ReplayBanner>/);
+    for (const f of usesReplays) {
+      const text = readFileSync(f, "utf8");
+      if (text.includes('className="live-banner"')) {
+        expect(text, f).not.toMatch(/\b(RUNS|FINDER|runById)\b/);
+        expect(readFileSync(join(ROOT, "components", "LiveBuilder.tsx"), "utf8")).toContain("A recorded plan");
+      } else {
+        expect(text, f).toMatch(/<ReplayBanner>/);
+      }
+    }
   });
 
   // Stage B adds outbound calls on purpose, so this names where they may live.
@@ -164,17 +175,30 @@ describe("Stage A boundaries", () => {
     for (const f of source) {
       if (OUTBOUND_ALLOWED.has(f) || isApiRoute(f)) continue;
       const text = readFileSync(f, "utf8");
-      expect(text, f).not.toMatch(/\bfetch\s*\(/);
       expect(text, f).not.toMatch(/@ai-sdk|from ["']ai["']|PaypalClient|api-m\.sandbox\.paypal\.com\/v/);
       expect(text, f).not.toMatch(/lib\/(db|engine|worker|live)["']/);
     }
   });
 
-  it("calls the network directly only from the database client", () => {
+  // The server reaches the network only through lib/db.ts (the engine's own
+  // PayPal and model clients aside). A browser component may call this
+  // console's own /api/ routes, which run every check, and nothing else.
+  it("fetches only from the database client, and from the browser only this console's /api/", () => {
     for (const f of source) {
       if (f === join(ROOT, "lib", "db.ts")) continue;
-      expect(readFileSync(f, "utf8"), f).not.toMatch(/\bfetch\s*\(/);
+      const text = readFileSync(f, "utf8");
+      const calls = text.match(/\bfetch\s*\(\s*.{0,8}/g) ?? [];
+      const browser = text.startsWith('"use client"') && f.startsWith(join(ROOT, "components"));
+      for (const call of calls) {
+        expect(browser && /^fetch\s*\(\s*[`'"]\/api\//.test(call), `${f}: ${call}`).toBe(true);
+      }
     }
+  });
+
+  it("checks a run id's shape exactly as the engine does", async () => {
+    const { RUN_ID_SHAPE } = await import("../lib/liveView");
+    const { RUN_ID_PATTERN } = await import("../lib/engine");
+    expect(RUN_ID_SHAPE.source).toBe(RUN_ID_PATTERN.source);
   });
 
   // A server component cannot run outside a request, so its wiring is checked at
