@@ -22,12 +22,12 @@ begin
     if exists (select 1 from pg_policies where schemaname = 'public' and tablename = t) then
       raise exception 'POLICY PRESENT on %: it must have none', t;
     end if;
-    if has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE')
-       or has_table_privilege('authenticated', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE') then
+    if has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+       or has_table_privilege('authenticated', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') then
       raise exception 'GRANT WRONG: anon or authenticated can touch %', t;
     end if;
-    if has_table_privilege('service_role', 'public.' || t, 'DELETE') then
-      raise exception 'GRANT WRONG: service_role can delete from %', t;
+    if has_table_privilege('service_role', 'public.' || t, 'DELETE,TRUNCATE,REFERENCES,TRIGGER') then
+      raise exception 'GRANT WRONG: service_role can delete, truncate, reference or trigger on %', t;
     end if;
   end loop;
   if has_table_privilege('service_role', 'public.console_plans', 'UPDATE') then
@@ -48,7 +48,7 @@ begin
     'public.console_daily_used(text, text)',
     'public.console_gate_take(text, integer, integer)',
     'public.console_gate_fail(integer, integer)',
-    'public.console_gate_clear(text)'] loop
+    'public.console_gate_release(text)'] loop
     select not p.prosecdef and p.proconfig = array['search_path=""'] into ok
       from pg_proc p where p.oid = f::regprocedure;
     if ok is distinct from true then
@@ -88,10 +88,11 @@ begin
     if r.allowed then
       raise exception 'GATE BROKEN: a sixth try within the hour was allowed';
     end if;
-    perform public.console_gate_clear(k);
+    -- A correct passcode gives back one slot, never more.
+    perform public.console_gate_release(k);
     select * into r from public.console_gate_take(k, 5, 3600);
-    if not r.allowed or r.ip_left <> 4 then
-      raise exception 'GATE BROKEN: a cleared address was not given 5 fresh tries';
+    if not r.allowed or r.ip_left <> 0 then
+      raise exception 'GATE BROKEN: a release did not give back exactly one slot';
     end if;
     raise exception using errcode = 'P0V03', message = 'rollback the verify rows';
   exception when sqlstate 'P0V03' then

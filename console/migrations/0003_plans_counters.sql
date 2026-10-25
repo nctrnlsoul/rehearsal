@@ -21,7 +21,7 @@ create table if not exists public.console_plans (
 );
 
 alter table public.console_plans enable row level security;
-revoke all on public.console_plans from anon, authenticated;
+revoke all on public.console_plans from public, anon, authenticated, service_role;
 -- A plan never changes once saved: changing it would be a different plan.
 grant select, insert on public.console_plans to service_role;
 
@@ -51,8 +51,8 @@ as $$
 $$;
 
 -- One row per (scope, key): the count in the current window. Daily scopes use
--- the UTC day; the gate scopes use an hour that starts at the first failure,
--- exactly as the in-memory limiter did. Keys are HMACs, never raw addresses.
+-- the UTC day; the gate scopes use an hour that starts at an address's first
+-- try. Keys are HMACs, never raw addresses.
 create table if not exists public.console_counters (
   scope         text        not null
                 constraint console_counters_scope check (scope in (
@@ -68,9 +68,9 @@ create table if not exists public.console_counters (
 );
 
 alter table public.console_counters enable row level security;
-revoke all on public.console_counters from anon, authenticated;
--- Counts change, so update (R-042). Nothing deletes: a cleared count is set to
--- zero, which keeps the grant inside the ruling.
+revoke all on public.console_counters from public, anon, authenticated, service_role;
+-- Counts change, so update (R-042). Nothing deletes: an old window is
+-- overwritten in place by the next one.
 grant select, insert, update on public.console_counters to service_role;
 
 -- -------------------------------------------------------------------------
@@ -151,7 +151,10 @@ $$;
 --   * the global count is of wrong tries, logged when it reaches its
 --     ceiling, and refuses no one (R-036);
 --   * a window starts at an address's first try and lasts p_window_s;
---   * a correct passcode clears that address's count, never the global one.
+--   * a correct passcode gives back the one slot its own try took, and
+--     nothing more: right passcodes never use up an address's tries, and a
+--     judge logging in beside a guesser (a NAT, an IPv6 /64, the one
+--     "unknown" bucket) never resets the guesser's count.
 -- -------------------------------------------------------------------------
 
 -- Allowed: the slot is taken and ip_left is what remains after it. Refused:
@@ -217,18 +220,18 @@ begin
 end;
 $$;
 
--- The window is set to the epoch, not to now: the next try then starts a
--- fresh window of its own, exactly as when the in-memory limiter forgot the
--- address. Setting it to now would end that window early.
-create or replace function public.console_gate_clear(p_key text)
+-- The slot a correct passcode's try took, given back. Never below zero. It
+-- cannot hand anyone a try they did not spend: the gate route releases at
+-- most once, after the take its own request made.
+create or replace function public.console_gate_release(p_key text)
 returns void
 language sql
 security invoker
 set search_path = ''
 as $$
   update public.console_counters
-     set count = 0, window_start = 'epoch'::timestamptz
-   where scope = 'gate_ip' and key = p_key;
+     set count = count - 1
+   where scope = 'gate_ip' and key = p_key and count > 0;
 $$;
 
 revoke all on function public.console_save_plan(text, text, jsonb, text) from public, anon, authenticated;
@@ -239,11 +242,11 @@ revoke all on function public.console_take_daily(text[], text[], integer[]) from
 revoke all on function public.console_daily_used(text, text) from public, anon, authenticated;
 revoke all on function public.console_gate_take(text, integer, integer) from public, anon, authenticated;
 revoke all on function public.console_gate_fail(integer, integer) from public, anon, authenticated;
-revoke all on function public.console_gate_clear(text) from public, anon, authenticated;
+revoke all on function public.console_gate_release(text) from public, anon, authenticated;
 grant execute on function public.console_take_daily(text[], text[], integer[]) to service_role;
 grant execute on function public.console_daily_used(text, text) to service_role;
 grant execute on function public.console_gate_take(text, integer, integer) to service_role;
 grant execute on function public.console_gate_fail(integer, integer) to service_role;
-grant execute on function public.console_gate_clear(text) to service_role;
+grant execute on function public.console_gate_release(text) to service_role;
 
 notify pgrst, 'reload schema';

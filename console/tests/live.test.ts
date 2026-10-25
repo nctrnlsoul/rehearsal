@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plans from "../fixtures/plans.json";
 import { createDb } from "../lib/db";
 import type { GenerateFn, Scenario } from "../lib/engine";
@@ -6,6 +6,7 @@ import { SESSION_COOKIE, signSession } from "../lib/gate";
 import {
   HOSTED_FINDER_CLASSES,
   PLAN_BODY_MAX_BYTES,
+  type RunsDeps,
   handleBankGet,
   handleFinderPost,
   handleDryRunPost,
@@ -75,7 +76,7 @@ async function harness(env: Record<string, string | undefined> = ENV) {
     setReply: (r: string) => (reply = r),
     plan: (r: Request, over: Partial<{ generate: GenerateFn | null }> = {}) => handlePlanPost(r, { ...base, generate, ...over }),
     dry: (r: Request) => handleDryRunPost(r, base),
-    runs: (r: Request, over: Partial<{ paypalReady: boolean }> = {}) =>
+    runs: (r: Request, over: Partial<{ paypalReady: boolean; startWorker: RunsDeps["startWorker"] }> = {}) =>
       handleRunsPost(r, { ...base, paypalReady: true, startWorker: (a) => started.push(a), ...over }),
     get: (r: Request, id: string) => handleRunGet(r, id, base),
     bank: (r: Request) => handleBankGet(r, base),
@@ -113,14 +114,18 @@ describe("every live route", () => {
     expect((await h.bank(req("/api/bank", { cookie: expired })))).toHaveProperty("status", 401);
   });
 
-  it("refuses writes while the kill switch is off, and still lets a run be watched", async () => {
-    for (const value of [undefined, "", "off", "ON", "true"]) {
-      const h = await harness({ ...ENV, CONSOLE_LIVE_RUNS: value });
-      expect((await h.plan(req("/api/plan", { body: { description: "a shop" } }))).status, String(value)).toBe(503);
-      expect((await h.runs(req("/api/runs", { body: runBody(DISPUTE!) }))).status, String(value)).toBe(503);
-      expect(h.modelCalls).toEqual([]);
-      expect(h.started).toEqual([]);
-    }
+  // One test per value: five harnesses in one test took 10 s of its 15 s
+  // budget on a loaded machine, and timed out for reasons unrelated to it.
+  it.each([undefined, "", "off", "ON", "true"])("refuses writes while the kill switch is %j", async (value) => {
+    const h = await harness({ ...ENV, CONSOLE_LIVE_RUNS: value });
+    expect((await h.plan(req("/api/plan", { body: { description: "a shop" } }))).status).toBe(503);
+    expect((await h.runs(req("/api/runs", { body: runBody(DISPUTE!) }))).status).toBe(503);
+    expect((await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: DISPUTE!.plan } }))).status).toBe(200);
+    expect(h.modelCalls).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("still lets a run be watched while the kill switch is off", async () => {
     const h = await harness({ ...ENV, CONSOLE_LIVE_RUNS: undefined });
     expect((await h.get(req("/api/runs/20261025000000-000001"), "20261025000000-000001")).status).toBe(404);
     expect((await h.bank(req("/api/bank"))).status).toBe(200);
@@ -323,7 +328,37 @@ describe("POST /api/runs", () => {
     )).rows[0]!.id;
     const r = await h.runs(req("/api/runs", { body: { source: "planned", planId: id, sha256: "a".repeat(64), confirm: true } }));
     expect(r.status).toBe(409);
+    // Verifier finding: the stored-digest clause was never tested alone, because
+    // the browser always sent the stored value. Here it sends the digest the
+    // server recomputes, so only the stored one disagrees.
+    const recomputed = (await bodyOf(await h.dry(req("/api/dry-run", { body: { source: "planned", planId: id } }))))["sha256"];
+    expect(recomputed).toMatch(/^[0-9a-f]{64}$/);
+    expect(recomputed).not.toBe("a".repeat(64));
+    const r2 = await h.runs(req("/api/runs", { body: { source: "planned", planId: id, sha256: recomputed, confirm: true } }));
+    expect(r2.status).toBe(409);
     expect(h.started).toEqual([]);
+    expect(await h.used("runs_global")).toBe(0);
+  });
+
+  // Verifier finding: a hand-off that threw answered 503 but left the run
+  // queued, holding the one slot for 60 s and spending a run.
+  it("gives the run and its quota back when the worker cannot be handed the run", async () => {
+    const h = await harness();
+    await h.addPurchase();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await h.runs(req("/api/runs", { body: runBody(DISPUTE!) }), {
+      startWorker: () => {
+        throw new Error("after() outside a request");
+      },
+    });
+    expect(r.status).toBe(503);
+    expect(await h.used("runs_global")).toBe(0);
+    const spent = (await h.pg.query<{ n: number }>("select coalesce(sum(count), 0)::int as n from public.console_counters")).rows[0]!.n;
+    expect(spent).toBe(0);
+    const rows = (await h.pg.query<{ status: string }>("select status from public.console_runs")).rows;
+    expect(rows).toEqual([{ status: "abandoned" }]);
+    // The slot is free at once.
+    expect((await h.runs(req("/api/runs", { body: runBody(DISPUTE!) }))).status).toBe(202);
   });
 
   it("refuses without confirm: true, or with a malformed digest", async () => {
@@ -439,12 +474,24 @@ describe("no route", () => {
       await h.bank(req("/api/bank")),
       await h.runs(req("/api/runs", { body: runBody(DISPUTE!) })),
       await h.plan(req("/api/plan", { body: { description: "a shop" } })),
+      await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: DISPUTE!.plan } })),
+      await h.get(req("/api/runs/20261025000000-000001"), "20261025000000-000001"),
+      await handleFinderPost(req("/api/finder", { body: { classId: "overdue-invoice", confirm: true } }), {
+        env: ENV,
+        db: createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: h.rest.fetch }),
+        now: () => T0,
+        paypalReady: true,
+        generate: async () => ({ text: "{}" }),
+        startFinder: () => {},
+      }),
     ];
+    expect(responses.map((r) => r.status)).toEqual([503, 503, 503, 503, 503, 503]);
     for (const r of responses) {
       const text = await r.text();
       expect(text).not.toContain(SECRET);
       expect(text).not.toContain(TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY);
       expect(text).not.toContain("supabase.co");
+      expect(text).not.toContain(TEST_DB_ENV.SUPABASE_URL);
     }
   });
 });

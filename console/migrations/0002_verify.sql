@@ -21,14 +21,14 @@ begin
   if exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'console_purchases') then
     raise exception 'POLICY PRESENT on console_purchases: it must have none';
   end if;
-  if has_table_privilege('anon', 'public.console_purchases', 'SELECT,INSERT,UPDATE,DELETE')
-     or has_table_privilege('authenticated', 'public.console_purchases', 'SELECT,INSERT,UPDATE,DELETE') then
+  if has_table_privilege('anon', 'public.console_purchases', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+     or has_table_privilege('authenticated', 'public.console_purchases', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') then
     raise exception 'GRANT WRONG: anon or authenticated can touch console_purchases';
   end if;
   if not (has_table_privilege('service_role', 'public.console_purchases', 'SELECT')
           and has_table_privilege('service_role', 'public.console_purchases', 'INSERT')
           and has_table_privilege('service_role', 'public.console_purchases', 'UPDATE'))
-     or has_table_privilege('service_role', 'public.console_purchases', 'DELETE') then
+     or has_table_privilege('service_role', 'public.console_purchases', 'DELETE,TRUNCATE,REFERENCES,TRIGGER') then
     raise exception 'GRANT WRONG: service_role needs exactly select, insert, update on console_purchases';
   end if;
 
@@ -48,9 +48,11 @@ begin
   end loop;
 
   begin
-    insert into public.console_runs (id, kind, plan_source, plan_id, scenario_sha256, session_hash, ip_hash, status)
+    -- A live run: the claim reaps first, so a run with no heartbeat would be dead.
+    insert into public.console_runs (id, kind, plan_source, plan_id, scenario_sha256, session_hash, ip_hash,
+                                     status, started_at, heartbeat_at)
     values ('20000101000000-000002', 'scenario', 'recorded', 'verify-0002',
-            repeat('a', 64), repeat('b', 64), repeat('c', 64), 'running');
+            repeat('a', 64), repeat('b', 64), repeat('c', 64), 'running', now(), now());
     insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)
     values ('VERIFY-NEWER', 'CAP-2', 'TXN-2', '1.00', 'USD', now()),
            ('VERIFY-OLDER', 'CAP-1', 'TXN-1', '1.00', 'USD', now() - interval '1 day');

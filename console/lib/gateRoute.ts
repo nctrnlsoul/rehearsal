@@ -114,10 +114,10 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   }
 
   try {
-    await attempts.recordSuccess(ip);
+    await attempts.release(ip);
   } catch (e) {
-    // The passcode was right; a stale count only means fewer tries later, never more.
-    console.error(`gate: count could not be cleared (${e instanceof Error ? e.name : "error"})`);
+    // The passcode was right; a slot not given back only means one fewer try later, never more.
+    console.error(`gate: slot could not be given back (${e instanceof Error ? e.name : "error"})`);
   }
   return seeOther("/live", { "Set-Cookie": sessionCookieHeader(signSession(secret, deps.now())) });
 }

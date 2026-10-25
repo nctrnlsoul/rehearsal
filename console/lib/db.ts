@@ -30,8 +30,9 @@ export type RpcName =
   | "console_daily_used"
   | "console_gate_take"
   | "console_gate_fail"
-  | "console_gate_clear"
-  | "console_start_run";
+  | "console_gate_release"
+  | "console_start_run"
+  | "console_cancel_start";
 
 export type DbConfig = { readonly url: URL; readonly key: string };
 

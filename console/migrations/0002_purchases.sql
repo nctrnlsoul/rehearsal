@@ -34,7 +34,14 @@ create table if not exists public.console_purchases (
 );
 
 alter table public.console_purchases enable row level security;
-revoke all on public.console_purchases from anon, authenticated;
+-- Revoked from the service role too: Supabase's default privileges grant it
+-- ALL, delete and truncate included (see 0001).
+revoke all on public.console_purchases from public, anon, authenticated, service_role;
+do $$
+begin
+  execute format('revoke all on sequence %s from public, anon, authenticated, service_role',
+                 pg_get_serial_sequence('public.console_purchases', 'id'));
+end $$;
 -- A claim marks a purchase used, so update is needed (R-042). Nothing deletes:
 -- a used purchase is the record of which dispute consumed it.
 grant select, insert, update on public.console_purchases to service_role;
@@ -43,6 +50,11 @@ grant select, insert, update on public.console_purchases to service_role;
 -- statement. "skip locked" means two claims can never take the same row. The
 -- caller does this BEFORE the dispute call: a crash between the two burns one
 -- purchase (a human click), while reusing one would dispute a payment twice.
+--
+-- Fenced like every worker write: it reaps first, then heartbeats the run,
+-- which locks the run's row until the claim commits. A reaper running at the
+-- same moment waits for it and then sees the fresh heartbeat, so a run cannot
+-- be called dead between its status check and its draw.
 create or replace function public.console_claim_purchase(p_run_id text)
 returns table (order_id text, capture_id text, buyer_transaction_id text, amount text, currency text, created_at timestamptz)
 language plpgsql
@@ -50,7 +62,10 @@ security invoker
 set search_path = ''
 as $$
 begin
-  if not exists (select 1 from public.console_runs r where r.id = p_run_id and r.status = 'running') then
+  perform public.console_reap_runs();
+  update public.console_runs r set heartbeat_at = now()
+   where r.id = p_run_id and r.status = 'running';
+  if not found then
     return;
   end if;
   return query

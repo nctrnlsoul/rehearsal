@@ -5,7 +5,8 @@ import type { PGlite } from "@electric-sql/pglite";
  * POST /rest/v1/rpc/<function> with named arguments, answered the way
  * PostgREST answers (a set-returning function gives an array of rows, any
  * other a single JSON value). A wrong apikey gets 401, so a test proves the
- * key is sent. `down` makes every call fail, for the fail-closed tests.
+ * key is sent, and each call runs as service_role, so the grants are under
+ * test too. `down` makes every call fail, for the fail-closed tests.
  * Each call waits a few milliseconds first, as a network round trip does.
  */
 
@@ -53,12 +54,14 @@ export function postgrestOver(pg: PGlite, key: string = TEST_DB_ENV.SUPABASE_SER
       });
       const call = `public.${name}(${names.map((k, i) => `${k} => $${i + 1}`).join(", ")})`;
       try {
-        if (proc.rows[0]!.proretset) {
-          const r = await pg.query(`select * from ${call}`, params);
-          return Response.json(r.rows);
-        }
-        const r = await pg.query<{ v: unknown }>(`select ${call} as v`, params);
-        return Response.json(r.rows[0]!.v ?? null);
+        // As PostgREST does with the service key: the call runs AS service_role,
+        // so a grant the migrations forgot fails here as it would on Supabase.
+        const out = await pg.transaction(async (tx) => {
+          await tx.exec("set local role service_role");
+          if (proc.rows[0]!.proretset) return (await tx.query(`select * from ${call}`, params)).rows;
+          return (await tx.query<{ v: unknown }>(`select ${call} as v`, params)).rows[0]!.v ?? null;
+        });
+        return Response.json(out);
       } catch {
         // PostgREST answers a raised exception or a constraint failure with a 4xx.
         return new Response(null, { status: 400 });

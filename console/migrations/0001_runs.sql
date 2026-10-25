@@ -78,8 +78,16 @@ alter table public.console_runs enable row level security;
 alter table public.console_run_events enable row level security;
 
 -- RLS hides rows; the revoke takes the tables off the API map entirely.
-revoke all on public.console_runs from anon, authenticated;
-revoke all on public.console_run_events from anon, authenticated;
+-- Supabase's default privileges grant ALL on every new table (and its
+-- identity sequence) to anon, authenticated AND service_role, so the service
+-- role is revoked too and then given back only what it needs.
+revoke all on public.console_runs from public, anon, authenticated, service_role;
+revoke all on public.console_run_events from public, anon, authenticated, service_role;
+do $$
+begin
+  execute format('revoke all on sequence %s from public, anon, authenticated, service_role',
+                 pg_get_serial_sequence('public.console_run_events', 'seq'));
+end $$;
 
 -- A run's status and state change as it goes, so runs need update (R-042).
 -- Events are append-only, like the webhook ledgers (R-008). Nothing deletes.
@@ -89,7 +97,9 @@ grant select, insert on public.console_run_events to service_role;
 -- -------------------------------------------------------------------------
 -- The worker's writes. Each is FENCED on status = 'running': once the reaper
 -- has called a run dead, a server that turns out to be alive cannot write
--- another step, and learns so from the false it gets back.
+-- another step, and learns so from the false it gets back. Each reaps first,
+-- so the fence holds even when nobody is polling: a server that went quiet
+-- for 90 s, or ran past 860 s, is refused by its own next write.
 -- -------------------------------------------------------------------------
 
 create or replace function public.console_mark_running(p_id text)
@@ -99,6 +109,7 @@ security invoker
 set search_path = ''
 as $$
 begin
+  perform public.console_reap_runs();
   update public.console_runs
      set status = 'running', started_at = now(), heartbeat_at = now()
    where id = p_id and status = 'queued';
@@ -122,6 +133,7 @@ begin
   if jsonb_typeof(p_events) is distinct from 'array' then
     raise exception 'console_save_state needs an array of events';
   end if;
+  perform public.console_reap_runs();
   update public.console_runs
      set state = p_state, heartbeat_at = now()
    where id = p_id and status = 'running';
@@ -142,6 +154,7 @@ security invoker
 set search_path = ''
 as $$
 begin
+  perform public.console_reap_runs();
   update public.console_runs set heartbeat_at = now()
    where id = p_id and status = 'running';
   return found;
@@ -158,6 +171,7 @@ begin
   if jsonb_typeof(p_events) is distinct from 'array' then
     raise exception 'console_add_events needs an array of events';
   end if;
+  perform public.console_reap_runs();
   update public.console_runs set heartbeat_at = now()
    where id = p_id and status = 'running';
   if not found then
@@ -180,6 +194,7 @@ begin
   if p_status not in ('complete', 'halted', 'failed') then
     raise exception 'console_finish_run got a status it does not set: %', p_status;
   end if;
+  perform public.console_reap_runs();
   update public.console_runs
      set status = p_status, halt_reason = left(p_reason, 300), finished_at = now(), heartbeat_at = now()
    where id = p_id and status = 'running';
@@ -197,7 +212,8 @@ $$;
 -- run route, R-030), and a live worker heartbeats at least every 5 s. So a
 -- running run with no heartbeat for 90 s, or started more than 860 s ago, has
 -- no server left. A queued run nobody picked up within 60 s never started,
--- so nothing was sent for it. Called on every poll and every start: no cron.
+-- so nothing was sent for it. Called on every poll, every start and every
+-- worker write: no cron.
 -- -------------------------------------------------------------------------
 
 create or replace function public.console_reap_runs()

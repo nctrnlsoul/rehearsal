@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { fakePaypal, scenarioWith } from "../../tests/helpers/fakePaypal";
 import { createDb } from "../lib/db";
 import { type HandlerRegistry, type StepHandler, type StoreSnapshot, defaultHandlers, scenarioDigest } from "../lib/engine";
-import { HOSTED_CAPS } from "../lib/hosted";
-import { runFinderWorker, runScenarioWorker } from "../lib/worker";
+import { HOSTED_CAPS, STEP_MARGIN_S } from "../lib/hosted";
+import { runFinderWorker, runScenarioWorker, timeGuarded } from "../lib/worker";
 import { freshDb } from "./pg";
 import { TEST_DB_ENV, postgrestOver } from "./postgrest";
 
@@ -162,6 +162,32 @@ describe("runScenarioWorker", () => {
     await h.pg.exec(`update public.console_runs set heartbeat_at = now() - interval '91 seconds'`);
     await h.pg.query("select public.console_reap_runs()");
     expect((await h.run()).status).toBe("abandoned");
+  });
+
+  // Verifier finding: with the poller heartbeating beside it, a worker that
+  // ignored a refused save kept going. Here only the save is refused; every
+  // heartbeat still succeeds, so nothing else can stop the run.
+  it("stops at the first refused save, even while its heartbeats still succeed", async () => {
+    let h!: Harness;
+    let refuse = false;
+    h = await harness({
+      handlers: {
+        card_order: async (ctx) => {
+          h.ran.push(ctx.step.id);
+          refuse = true;
+          return { kind: "success", detail: "ok", ids: {} };
+        },
+      },
+    });
+    const real = h.rest.fetch;
+    h.deps.db = createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, {
+      fetchImpl: (async (input: string | URL | Request, init?: RequestInit) =>
+        refuse && String(input).endsWith("/rpc/console_save_state") ? Response.json(false) : real(input, init)) as typeof fetch,
+    });
+    await work(h);
+    expect(h.ran).toEqual(["o1"]);
+    expect(h.logs.some((l) => /no longer lists it as running/.test(l))).toBe(true);
+    expect((await h.events()).map((e) => e.kind)).not.toContain("run_finished");
   });
 
   it("stops before the next step once the reaper has called the run dead (the fence)", async () => {
@@ -331,5 +357,33 @@ describe("runFinderWorker", () => {
     const finding = (await h.events()).find((e) => e.kind === "note" && "finding" in e.data)!;
     expect((finding.data["finding"] as Record<string, unknown>)["verdict"]).toBe("inconclusive");
     expect((await h.run()).status).toBe("halted");
+  });
+});
+
+describe("timeGuarded", () => {
+  const NOW = Date.parse("2026-10-25T18:00:00Z");
+  const sent = async (kind: string, leftS: number) => {
+    let called = false;
+    const base = { [kind]: async () => ((called = true), { kind: "success", detail: "sent" }) } as unknown as HandlerRegistry;
+    const guarded = timeGuarded(base, NOW + leftS * 1000, () => new Date(NOW));
+    await guarded[kind as keyof HandlerRegistry](undefined as never);
+    return called;
+  };
+
+  // Each kind at exactly its worst case plus the 60 s margin, and a millisecond under.
+  it.each([
+    ["card_order", 30],
+    ["refund", 30],
+    ["open_dispute", 130],
+    ["resend_webhook", 150],
+  ])("sends %s with %i s plus the margin left, and not a millisecond less", async (kind, worst) => {
+    expect(STEP_MARGIN_S).toBe(60);
+    expect(await sent(kind, worst + STEP_MARGIN_S)).toBe(true);
+    expect(await sent(kind, worst + STEP_MARGIN_S - 0.001)).toBe(false);
+  });
+
+  it("keeps a dispute that a card order would fit in", async () => {
+    expect(await sent("card_order", 100)).toBe(true);
+    expect(await sent("open_dispute", 100)).toBe(false);
   });
 });

@@ -22,12 +22,12 @@ begin
     if exists (select 1 from pg_policies where schemaname = 'public' and tablename = t) then
       raise exception 'POLICY PRESENT on %: this table must have none', t;
     end if;
-    if has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE')
-       or has_table_privilege('authenticated', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE') then
+    if has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+       or has_table_privilege('authenticated', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') then
       raise exception 'GRANT WRONG: anon or authenticated can touch %', t;
     end if;
-    if has_table_privilege('service_role', 'public.' || t, 'DELETE') then
-      raise exception 'GRANT WRONG: service_role can delete from %', t;
+    if has_table_privilege('service_role', 'public.' || t, 'DELETE,TRUNCATE,REFERENCES,TRIGGER') then
+      raise exception 'GRANT WRONG: service_role can delete, truncate, reference or trigger on %', t;
     end if;
   end loop;
 

@@ -126,8 +126,11 @@ export type LimitCheck =
  * Where passcode tries are counted. Shared by every server instance (R-038):
  * the counts live in the console's database, so a guesser cannot reset them by
  * landing on a fresh instance. The rules themselves are SQL, in
- * migrations/0003 (console_gate_take, console_gate_fail, console_gate_clear),
- * and only the caller's own count ever refuses anyone (R-036).
+ * migrations/0003 (console_gate_take, console_gate_fail, console_gate_release),
+ * and only the caller's own count ever refuses anyone (R-036). A correct
+ * passcode gives back the one slot its own try took, and nothing more: an
+ * address bucket can be shared (a NAT, an IPv6 /64, "unknown"), and a judge
+ * logging in must not hand a guesser beside them fresh tries.
  *
  * A try takes its slot BEFORE the passcode is hashed, in one atomic call. A
  * separate check and count would let a burst of parallel guesses all read the
@@ -141,8 +144,8 @@ export type AttemptStore = {
   take(bucket: string): Promise<LimitCheck>;
   /** Counts a wrong try toward the global ceiling. True on the one that reaches it, so the caller logs it once. */
   recordFailure(): Promise<boolean>;
-  /** A correct passcode clears that address's count; it never lowers the global one. */
-  recordSuccess(bucket: string): Promise<void>;
+  /** A correct passcode gives back the slot its own take used. Never more than that one. */
+  release(bucket: string): Promise<void>;
 };
 
 /**
@@ -164,10 +167,10 @@ export function dbAttemptStore(
   return {
     async take(bucket) {
       const rows = await db.rpc("console_gate_take", { p_key: key(bucket), p_per_ip: limits.perIp, p_window_s: windowS });
-      const row = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : undefined;
-      // Anything but the exact shape is an unreadable answer, and an unreadable
-      // answer about a lockout is never read as "allowed".
-      if (row === undefined || typeof row["allowed"] !== "boolean") throw new Error("gate take returned an unreadable answer");
+      // Exactly one row of the exact shape. Anything else is an unreadable
+      // answer, and an unreadable answer about a lockout is never "allowed".
+      const row = Array.isArray(rows) && rows.length === 1 ? (rows[0] as Record<string, unknown> | null) : null;
+      if (row === null || typeof row !== "object" || typeof row["allowed"] !== "boolean") throw new Error("gate take returned an unreadable answer");
       if (row["allowed"] === true && typeof row["ip_left"] === "number") return { allowed: true, ipLeft: row["ip_left"] };
       if (row["allowed"] === false && typeof row["retry_after_s"] === "number") {
         return { allowed: false, retryAfterS: row["retry_after_s"] };
@@ -179,8 +182,8 @@ export function dbAttemptStore(
       if (typeof hit !== "boolean") throw new Error("gate failure count returned an unreadable answer");
       return hit;
     },
-    async recordSuccess(bucket) {
-      await db.rpc("console_gate_clear", { p_key: key(bucket) });
+    async release(bucket) {
+      await db.rpc("console_gate_release", { p_key: key(bucket) });
     },
   };
 }

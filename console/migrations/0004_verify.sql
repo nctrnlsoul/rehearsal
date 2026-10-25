@@ -1,30 +1,70 @@
--- Verification for 0004. Run it and read the results.
+-- Verification for 0004, and the sweep over EVERYTHING the console owns.
+-- Run it last and read the results.
 --
 -- Expected: the DO block finishes without raising, then one row:
 --   start_run_check = 'ok'
--- Failures raise FUNCTION WRONG, GRANT WRONG or START BROKEN. The functional
--- checks run inside a subtransaction that rolls back on purpose.
+-- Failures raise RLS MISSING, POLICY PRESENT, FUNCTION WRONG, GRANT WRONG,
+-- START BROKEN or CANCEL BROKEN. The functional checks run inside a
+-- subtransaction that rolls back on purpose.
+--
+-- The sweep finds every console_ table, sequence and function by name in the
+-- catalog, not from a list, so one added later and left open is caught here
+-- even if its own verify file forgets it.
 
 do $$
 declare
-  f text := 'public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])';
+  rec record;
   ok boolean;
   a text;
   b text;
   c text;
 begin
-  select not p.prosecdef and p.proconfig = array['search_path=""'] into ok
-    from pg_proc p where p.oid = f::regprocedure;
-  if ok is distinct from true then
-    raise exception 'FUNCTION WRONG: console_start_run must be security invoker with search_path ''''';
-  end if;
-  if not has_function_privilege('service_role', f, 'EXECUTE')
-     or has_function_privilege('anon', f, 'EXECUTE')
-     or has_function_privilege('authenticated', f, 'EXECUTE')
-     or exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
-                 where p.oid = f::regprocedure and x.grantee = 0 and x.privilege_type = 'EXECUTE') then
-    raise exception 'GRANT WRONG: only service_role may execute console_start_run';
-  end if;
+  for rec in select c.oid, c.relname, c.relkind, c.relrowsecurity
+               from pg_class c join pg_namespace n on n.oid = c.relnamespace
+              where n.nspname = 'public' and c.relname like 'console\_%' and c.relkind in ('r', 'S') loop
+    if rec.relkind = 'r' then
+      if not rec.relrowsecurity then
+        raise exception 'RLS MISSING on %', rec.relname;
+      end if;
+      if exists (select 1 from pg_policies where schemaname = 'public' and tablename = rec.relname) then
+        raise exception 'POLICY PRESENT on %: it must have none', rec.relname;
+      end if;
+      if has_table_privilege('anon', rec.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+         or has_table_privilege('authenticated', rec.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+         or has_table_privilege('service_role', rec.oid, 'DELETE,TRUNCATE,REFERENCES,TRIGGER') then
+        raise exception 'GRANT WRONG: % grants more than service_role select, insert, update', rec.relname;
+      end if;
+    else
+      if has_sequence_privilege('anon', rec.oid, 'USAGE,SELECT,UPDATE')
+         or has_sequence_privilege('authenticated', rec.oid, 'USAGE,SELECT,UPDATE')
+         or has_sequence_privilege('service_role', rec.oid, 'USAGE,SELECT,UPDATE') then
+        raise exception 'GRANT WRONG: sequence % is usable from the API', rec.relname;
+      end if;
+    end if;
+    if exists (select 1 from aclexplode(coalesce((select relacl from pg_class where oid = rec.oid), '{}'::aclitem[])) x
+                where x.grantee = 0) then
+      raise exception 'GRANT WRONG: PUBLIC holds a privilege on %', rec.relname;
+    end if;
+  end loop;
+
+  for rec in select p.oid, p.oid::regprocedure::text as sig, p.prosecdef, p.proconfig, p.proacl, p.proowner
+               from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public' and p.proname like 'console\_%' loop
+    if rec.prosecdef or rec.proconfig is distinct from array['search_path=""'] then
+      raise exception 'FUNCTION WRONG: % must be security invoker with search_path ''''', rec.sig;
+    end if;
+    if not has_function_privilege('service_role', rec.oid, 'EXECUTE')
+       or has_function_privilege('anon', rec.oid, 'EXECUTE')
+       or has_function_privilege('authenticated', rec.oid, 'EXECUTE')
+       or exists (select 1 from aclexplode(coalesce(rec.proacl, acldefault('f', rec.proowner))) x
+                   where x.grantee = 0 and x.privilege_type = 'EXECUTE') then
+      raise exception 'GRANT WRONG: only service_role may execute %', rec.sig;
+    end if;
+  end loop;
+
+  -- The two functions this file adds must exist (the sweep passes vacuously on a missing one).
+  perform 'public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])'::regprocedure;
+  perform 'public.console_cancel_start(text)'::regprocedure;
 
   begin
     a := public.console_start_run('20000101000000-00000a', 'scenario', 'recorded', 'verify-0004',
@@ -48,9 +88,29 @@ begin
     if exists (select 1 from public.console_runs where id = '20000101000000-00000c') then
       raise exception 'START BROKEN: a refused start left a row';
     end if;
+    -- A queued run whose worker never started is canceled and its quota given back.
+    update public.console_runs set status = 'complete' where status in ('queued', 'running');
+    c := public.console_start_run('20000101000000-00000d', 'scenario', 'recorded', 'verify-0004',
+           repeat('a', 64), repeat('e', 64), repeat('f', 64), 20, 5, 5);
+    if c is distinct from 'started' or public.console_daily_used('runs_global', 'all') <> 2 then
+      raise exception 'CANCEL BROKEN: the set-up start gave %', c;
+    end if;
+    -- Called on its own: SQL does not promise to evaluate an OR left to right,
+    -- so the reads below could otherwise run before the cancel.
+    ok := public.console_cancel_start('20000101000000-00000d');
+    if not ok
+       or public.console_daily_used('runs_global', 'all') <> 1
+       or public.console_daily_used('runs_session', repeat('e', 64)) <> 0
+       or (select status from public.console_runs where id = '20000101000000-00000d') <> 'abandoned' then
+      raise exception 'CANCEL BROKEN: a canceled start kept its quota or its slot';
+    end if;
+    ok := public.console_cancel_start('20000101000000-00000d');
+    if ok then
+      raise exception 'CANCEL BROKEN: a run was canceled twice';
+    end if;
     raise exception using errcode = 'P0V04', message = 'rollback the verify rows';
   exception when sqlstate 'P0V04' then
-    raise notice 'start is all or nothing';
+    raise notice 'start is all or nothing, and a cancel gives it back';
   end;
 end $$;
 

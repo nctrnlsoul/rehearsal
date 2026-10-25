@@ -258,7 +258,7 @@ describe("POST /api/gate", () => {
       recordFailure: async () => {
         throw new Error("down");
       },
-      recordSuccess: deps.attempts.recordSuccess,
+      release: deps.attempts.release,
     };
     const res = await handleGatePost(post(form("not it")), { ...deps, attempts: failing });
     expect(res.headers.get("location")).toBe("/gate?e=wrong&left=4");
@@ -283,7 +283,17 @@ describe("POST /api/gate", () => {
 
   it("refuses an answer it cannot read as a lockout, never as allowed", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    for (const answer of [[], [{}], [{ allowed: "true", ip_left: 5 }], [{ allowed: true }], { allowed: true, ip_left: 5 }, null]) {
+    for (const answer of [
+      [],
+      [{}],
+      [null],
+      [{ allowed: "true", ip_left: 5 }],
+      [{ allowed: true }],
+      { allowed: true, ip_left: 5 },
+      null,
+      // Verifier finding: only the first row used to be read, so a second row saying "refused" was ignored.
+      [{ allowed: true, ip_left: 5, retry_after_s: 0 }, { allowed: false, ip_left: 0, retry_after_s: 3600 }],
+    ]) {
       const db = { rpc: async () => answer };
       const res = await handleGatePost(post(form(PASS)), { env: ENV, attempts: dbAttemptStore(db, SECRET), now: () => T0 });
       expect(res.headers.get("location"), JSON.stringify(answer)).toBe("/gate?e=unavailable");
@@ -297,6 +307,27 @@ describe("POST /api/gate", () => {
     const db = createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: first.rest.fetch });
     const res = await handleGatePost(post(form(PASS)), { ...first.deps, attempts: dbAttemptStore(db, SECRET) });
     expect(res.headers.get("location")).toBe("/gate?e=locked&m=60");
+  });
+
+  // Verifier finding: a correct passcode used to clear its bucket, so a judge
+  // logging in from a shared address (a NAT, an IPv6 /64, "unknown") handed a
+  // guesser there 5 fresh tries. Now it gives back only its own slot.
+  it("a correct passcode gives back only its own slot: a guesser sharing the address keeps their count", async () => {
+    const { deps, ipLeft } = await harness();
+    for (let i = 0; i < 3; i += 1) await handleGatePost(post(form("not it")), deps);
+    expect((await handleGatePost(post(form(PASS)), deps)).headers.get("location")).toBe("/live");
+    expect(await ipLeft("203.0.113.10")).toBe(2);
+    expect((await handleGatePost(post(form("not it")), deps)).headers.get("location")).toBe("/gate?e=wrong&left=1");
+    expect((await handleGatePost(post(form("not it")), deps)).headers.get("location")).toBe("/gate?e=wrong&left=0");
+    expect((await handleGatePost(post(form("not it")), deps)).headers.get("location")).toBe("/gate?e=locked&m=60");
+  });
+
+  it("right passcodes never use up an address's tries: a whole office can log in", async () => {
+    const { deps, ipLeft } = await harness();
+    for (let i = 0; i < 8; i += 1) {
+      expect((await handleGatePost(post(form(PASS)), deps)).headers.get("location"), `login ${i}`).toBe("/live");
+    }
+    expect(await ipLeft("203.0.113.10")).toBe(5);
   });
 
   it("never stores the caller's address, only its hash", async () => {

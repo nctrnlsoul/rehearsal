@@ -28,6 +28,19 @@ const status = (db: PGlite, id: string) =>
 const age = (db: PGlite, id: string, column: string, seconds: number) =>
   db.exec(`update public.console_runs set ${column} = now() - interval '${seconds} seconds' where id = '${id}'`);
 
+// Ages a row and reaps in ONE transaction, so both read the same now() and a
+// boundary is tested exactly: a row aged 60 s is 60 s old to the reaper, not
+// 60 s plus however long the next query took to arrive.
+const ageThenReap = async (db: PGlite, id: string, column: string, seconds: number) => {
+  const out = await db.exec(
+    `begin;
+     update public.console_runs set ${column} = now() - interval '${seconds} seconds' where id = '${id}';
+     select public.console_reap_runs() as n;
+     commit;`,
+  );
+  return (out.find((r) => r.fields.some((f) => f.name === "n"))!.rows[0] as { n: number }).n;
+};
+
 describe("migration files", () => {
   it("are the four expected, in order", () => {
     expect(migrationFiles()).toEqual([
@@ -80,8 +93,43 @@ describe("verify files", () => {
 
   it("fail loudly when anon can call a function", async () => {
     const db = await freshDb();
-    await db.exec("grant execute on function public.console_gate_clear(text) to anon");
-    await expect(db.exec(sql("0003_verify.sql"))).rejects.toThrow(/only service_role may execute public.console_gate_clear/);
+    await db.exec("grant execute on function public.console_gate_fail(integer, integer) to anon");
+    await expect(db.exec(sql("0003_verify.sql"))).rejects.toThrow(/only service_role may execute public.console_gate_fail/);
+  });
+
+  it("fail loudly when the service role can truncate, reference or trigger", async () => {
+    for (const [grant, file] of [
+      ["truncate on public.console_counters", "0003_verify.sql"],
+      ["references on public.console_runs", "0001_verify.sql"],
+      ["trigger on public.console_purchases", "0002_verify.sql"],
+    ] as const) {
+      const db = await freshDb();
+      await db.exec(`grant ${grant} to service_role`);
+      await expect(db.exec(sql(file)), grant).rejects.toThrow(/GRANT WRONG/);
+      await expect(db.exec(sql("0004_verify.sql")), grant).rejects.toThrow(/GRANT WRONG/);
+    }
+  });
+
+  // The sweep in 0004_verify finds objects by name, so one no list mentions is still checked.
+  it("the last verify file catches a console table, sequence or function no list names", async () => {
+    const open = [
+      ["create table public.console_extra (id int primary key)", /RLS MISSING on console_extra/],
+      ["create sequence public.console_extra_seq", /sequence console_extra_seq is usable/],
+      [
+        "create function public.console_extra() returns int language sql security invoker set search_path = '' as 'select 1'",
+        /only service_role may execute console_extra\(\)/,
+      ],
+      [
+        "create function public.console_extra() returns int language sql security definer set search_path = '' as 'select 1'",
+        /FUNCTION WRONG: console_extra\(\)/,
+      ],
+      ["grant select on public.console_runs to public", /GRANT WRONG/],
+    ] as const;
+    for (const [ddl, error] of open) {
+      const db = await freshDb();
+      await db.exec(ddl);
+      await expect(db.exec(sql("0004_verify.sql")), ddl).rejects.toThrow(error);
+    }
   });
 
   it("fail loudly when a function runs as its owner", async () => {
@@ -185,33 +233,27 @@ describe("the reaper", () => {
   it("leaves a queued run alone for 60 s, then abandons it as never started", async () => {
     const db = await freshDb();
     await start(db, "20261025000000-000001");
-    await age(db, "20261025000000-000001", "created_at", 59);
-    expect(await one(db, "select public.console_reap_runs() as n")).toEqual({ n: 0 });
-    await age(db, "20261025000000-000001", "created_at", 61);
-    expect(await one(db, "select public.console_reap_runs() as n")).toEqual({ n: 1 });
+    expect(await ageThenReap(db, "20261025000000-000001", "created_at", 60)).toBe(0);
+    expect(await ageThenReap(db, "20261025000000-000001", "created_at", 60.5)).toBe(1);
     const row = await one<{ halt_reason: string }>(db, "select halt_reason from public.console_runs");
     expect(row.halt_reason).toMatch(/never started; nothing was sent/);
     const ev = await one<{ data: unknown }>(db, "select data from public.console_run_events where kind = 'run_abandoned'");
     expect(ev.data).toEqual({ started: false });
   });
 
-  it("abandons a running run at 90 s without a heartbeat, not at 89", async () => {
+  it("abandons a running run just past 90 s without a heartbeat, not at 90", async () => {
     const db = await freshDb();
     const id = await running(db);
-    await age(db, id, "heartbeat_at", 89);
-    expect(await one(db, "select public.console_reap_runs() as n")).toEqual({ n: 0 });
-    await age(db, id, "heartbeat_at", 91);
-    expect(await one(db, "select public.console_reap_runs() as n")).toEqual({ n: 1 });
+    expect(await ageThenReap(db, id, "heartbeat_at", 90)).toBe(0);
+    expect(await ageThenReap(db, id, "heartbeat_at", 90.5)).toBe(1);
     expect(await status(db, id)).toBe("abandoned");
   });
 
-  it("abandons a run started over 860 s ago even with a fresh heartbeat", async () => {
+  it("abandons a run started just past 860 s ago even with a fresh heartbeat, not at 860", async () => {
     const db = await freshDb();
     const id = await running(db);
-    await age(db, id, "started_at", 859);
-    expect(await one(db, "select public.console_reap_runs() as n")).toEqual({ n: 0 });
-    await age(db, id, "started_at", 861);
-    expect(await one(db, "select public.console_reap_runs() as n")).toEqual({ n: 1 });
+    expect(await ageThenReap(db, id, "started_at", 860)).toBe(0);
+    expect(await ageThenReap(db, id, "started_at", 860.5)).toBe(1);
   });
 
   it("never touches a finished run", async () => {
@@ -245,6 +287,44 @@ describe("the fence", () => {
     }
     const state = await one<{ state: unknown }>(db, `select state from public.console_runs where id = '${id}'`);
     expect(state.state).toEqual({ v: 1 });
+  });
+
+  // Verifier finding: the fence used to hold only after something polled. A
+  // server silent for 300 s could still save state and draw a purchase.
+  it("refuses a dead run's own next write even when nobody has polled", async () => {
+    for (const [column, seconds] of [["heartbeat_at", 300], ["started_at", 900]] as const) {
+      const db = await freshDb();
+      const id = "20261025000000-000001";
+      await start(db, id);
+      await db.query(`select public.console_mark_running('${id}')`);
+      await db.exec(`insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)
+                     values ('O-1', 'C-1', 'T-1', '25.00', 'USD', now())`);
+      await age(db, id, column, seconds);
+      for (const q of [
+        `select public.console_save_state('${id}', '{"v":2}'::jsonb, '[]'::jsonb) as ok`,
+        `select public.console_heartbeat('${id}') as ok`,
+        `select public.console_add_events('${id}', '[{"kind":"note"}]'::jsonb) as ok`,
+        `select public.console_finish_run('${id}', 'complete', '') as ok`,
+      ]) {
+        expect(await one(db, q), `${column} ${q}`).toEqual({ ok: false });
+      }
+      expect((await db.query(`select * from public.console_claim_purchase('${id}')`)).rows).toEqual([]);
+      expect(await status(db, id)).toBe("abandoned");
+      expect(await one(db, "select available from public.console_bank_counts()")).toEqual({ available: 1 });
+    }
+  });
+
+  it("a claim heartbeats the run, so a reap right after it does not call the run dead", async () => {
+    const db = await freshDb();
+    const id = "20261025000000-000001";
+    await start(db, id);
+    await db.query(`select public.console_mark_running('${id}')`);
+    await db.exec(`insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)
+                   values ('O-1', 'C-1', 'T-1', '25.00', 'USD', now())`);
+    await age(db, id, "heartbeat_at", 80);
+    expect((await db.query(`select order_id from public.console_claim_purchase('${id}')`)).rows).toEqual([{ order_id: "O-1" }]);
+    const hb = await one<{ s: number }>(db, `select extract(epoch from now() - heartbeat_at) as s from public.console_runs where id = '${id}'`);
+    expect(Number(hb.s)).toBeLessThan(5);
   });
 
   it("writes state and its events together", async () => {
@@ -337,7 +417,7 @@ describe("daily quotas", () => {
   });
 });
 
-describe("the gate counters (same rules as the old AttemptLimiter, slot taken first)", () => {
+describe("the gate counters (slot taken first, a right passcode gives back only its own)", () => {
   const take = (db: PGlite, key: string, perIp = 5) =>
     one<{ allowed: boolean; ip_left: number; retry_after_s: number }>(db, `select * from public.console_gate_take('${key}', ${perIp}, 3600)`);
   const fail = (db: PGlite, global = 50) =>
@@ -371,28 +451,16 @@ describe("the gate counters (same rules as the old AttemptLimiter, slot taken fi
     expect(await take(db, H("9"))).toMatchObject({ allowed: true, ip_left: 4 });
   });
 
-  it("clears an address on success without lowering the global count", async () => {
+  it("gives back exactly one slot on a release, never more, and never below zero", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 3; i += 1) {
-      await take(db, H("1"));
-      await fail(db);
-    }
-    await db.query(`select public.console_gate_clear('${H("1")}')`);
-    expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 4 });
-    const g = await one<{ count: number }>(db, "select count from public.console_counters where scope = 'gate_global'");
-    expect(g.count).toBe(3);
-  });
-
-  it("after a clear, the next try starts its own window", async () => {
-    const db = await freshDb();
-    await take(db, H("1"));
-    await db.exec(`update public.console_counters set window_start = now() - interval '3000 seconds' where scope = 'gate_ip'`);
-    await db.query(`select public.console_gate_clear('${H("1")}')`);
     for (let i = 0; i < 5; i += 1) await take(db, H("1"));
-    const locked = await take(db, H("1"));
-    expect(locked.allowed).toBe(false);
-    // A window kept from before the clear would end in about 600 s.
-    expect(locked.retry_after_s).toBeGreaterThan(3500);
+    await db.query(`select public.console_gate_release('${H("1")}')`);
+    expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 0 });
+    expect(await take(db, H("1"))).toMatchObject({ allowed: false });
+    await take(db, H("2"));
+    for (let i = 0; i < 3; i += 1) await db.query(`select public.console_gate_release('${H("2")}')`);
+    const c = await one<{ count: number }>(db, `select count from public.console_counters where key = '${H("2")}'`);
+    expect(c.count).toBe(0);
   });
 
   it("treats a per-address limit under 1 as locked", async () => {
@@ -487,5 +555,94 @@ describe("console_start_run for a finder", () => {
     await expect(
       db.query(`select public.console_start_run('20261025000000-000002', 'scenario', 'recorded', 'p', '${H("a")}', '${H("b")}', '${H("c")}', 20, 5, 5, array[30, 8, 8])`),
     ).rejects.toThrow(/finder run takes model limits/);
+  });
+});
+
+describe("console_cancel_start", () => {
+  it("closes a queued run as never started and gives its quotas back", async () => {
+    const db = await freshDb();
+    expect(await start(db, "20261025000000-000001")).toBe("started");
+    expect(await one(db, "select public.console_cancel_start('20261025000000-000001') as ok")).toEqual({ ok: true });
+    expect(await status(db, "20261025000000-000001")).toBe("abandoned");
+    for (const [scope, key] of [["runs_global", "all"], ["runs_session", H("b")], ["runs_ip", H("c")]]) {
+      expect(await one(db, `select public.console_daily_used('${scope}', '${key}') as n`), scope).toEqual({ n: 0 });
+    }
+    // The slot is free at once, not after the reaper's 60 s.
+    expect(await start(db, "20261025000000-000002")).toBe("started");
+  });
+
+  it("gives a finder's model call back too", async () => {
+    const db = await freshDb();
+    await db.query(`select public.console_start_run('20261025000000-000001', 'finder', 'finder', 'duplicate-webhook', null,
+                      '${H("b")}', '${H("c")}', 20, 5, 5, array[30, 8, 8])`);
+    await db.query("select public.console_cancel_start('20261025000000-000001')");
+    expect(await one(db, `select public.console_daily_used('model_session', '${H("b")}') as n`)).toEqual({ n: 0 });
+    expect(await one(db, "select public.console_daily_used('model_global', 'all') as n")).toEqual({ n: 0 });
+  });
+
+  it("refuses a run a worker has already marked running, and keeps its quota spent", async () => {
+    const db = await freshDb();
+    await start(db, "20261025000000-000001");
+    await db.query("select public.console_mark_running('20261025000000-000001')");
+    expect(await one(db, "select public.console_cancel_start('20261025000000-000001') as ok")).toEqual({ ok: false });
+    expect(await status(db, "20261025000000-000001")).toBe("running");
+    expect(await one(db, "select public.console_daily_used('runs_global', 'all') as n")).toEqual({ n: 1 });
+  });
+
+  it("never touches another day's count", async () => {
+    const db = await freshDb();
+    await start(db, "20261025000000-000001");
+    await db.exec("update public.console_counters set window_start = window_start - interval '1 day'");
+    await db.query("select public.console_cancel_start('20261025000000-000001')");
+    const counts = (await db.query<{ count: number }>("select count from public.console_counters")).rows.map((r) => r.count);
+    expect(counts).toEqual([1, 1, 1]);
+  });
+});
+
+describe("as service_role, the role the console's key acts as", () => {
+  const as = (db: PGlite, role: string, q: string) =>
+    db.transaction(async (tx) => {
+      await tx.exec(`set local role ${role}`);
+      return tx.query(q);
+    });
+
+  it("can do everything the console does, through the functions", async () => {
+    const db = await freshDb();
+    const r = await as(
+      db,
+      "service_role",
+      `select public.console_start_run('20261025000000-000001', 'scenario', 'recorded', 'p', '${H("a")}', '${H("b")}', '${H("c")}', 20, 5, 5) as out`,
+    );
+    expect(r.rows).toEqual([{ out: "started" }]);
+    expect((await as(db, "service_role", "select public.console_mark_running('20261025000000-000001') as ok")).rows).toEqual([{ ok: true }]);
+    expect((await as(db, "service_role", `select public.console_add_events('20261025000000-000001', '[{"kind":"note"}]'::jsonb) as ok`)).rows).toEqual([
+      { ok: true },
+    ]);
+  });
+
+  // Verifier finding: under Supabase's default privileges the service role kept
+  // DELETE, TRUNCATE and UPDATE on the event log, because nothing revoked them.
+  it("cannot delete or truncate anything, or rewrite an event or a plan, under Supabase's default grants", async () => {
+    const db = await freshDb();
+    await start(db, "20261025000000-000001");
+    for (const q of [
+      "delete from public.console_runs",
+      "delete from public.console_run_events",
+      "truncate public.console_counters",
+      "update public.console_run_events set kind = 'note'",
+      "update public.console_plans set description = 'x'",
+      "delete from public.console_purchases",
+    ]) {
+      await expect(as(db, "service_role", q), q).rejects.toThrow(/permission denied/);
+    }
+  });
+
+  it("anon and authenticated can read nothing and call nothing", async () => {
+    const db = await freshDb();
+    for (const role of ["anon", "authenticated"]) {
+      for (const q of ["select * from public.console_runs", "select public.console_active_run()", "select public.console_bank_counts()"]) {
+        await expect(as(db, role, q), `${role}: ${q}`).rejects.toThrow(/permission denied/);
+      }
+    }
   });
 });

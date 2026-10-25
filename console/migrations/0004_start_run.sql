@@ -72,6 +72,51 @@ begin
 end;
 $$;
 
+-- Undoes a start whose worker could not be handed off: the run is closed as
+-- never started and its quotas are given back, so a server error spends
+-- nothing and does not hold the one active slot for the reaper's 60 s. Only a
+-- run still queued can be canceled; once a worker has marked it running,
+-- something may have reached PayPal and the quota stays spent.
+create or replace function public.console_cancel_start(p_id text)
+returns boolean
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  r       public.console_runs%rowtype;
+  v_day   timestamptz := date_trunc('day', now() at time zone 'utc') at time zone 'utc';
+begin
+  update public.console_runs
+     set status = 'abandoned', finished_at = now(),
+         halt_reason = 'the run never started; nothing was sent to PayPal'
+   where id = p_id and status = 'queued'
+  returning * into r;
+  if not found then
+    return false;
+  end if;
+  insert into public.console_run_events (run_id, kind, data)
+  values (p_id, 'run_abandoned', jsonb_build_object('started', false));
+
+  -- The same lock the quota take holds, so a refund never interleaves with a take.
+  perform pg_advisory_xact_lock(hashtextextended('console_take_daily', 0));
+  update public.console_counters c
+     set count = c.count - 1
+   where c.window_start = v_day
+     and c.count > 0
+     and ((c.scope = 'runs_global' and c.key = 'all')
+          or (c.scope = 'runs_session' and c.key = r.session_hash)
+          or (c.scope = 'runs_ip' and c.key = r.ip_hash)
+          or (r.kind = 'finder' and ((c.scope = 'model_global' and c.key = 'all')
+                                     or (c.scope = 'model_session' and c.key = r.session_hash)
+                                     or (c.scope = 'model_ip' and c.key = r.ip_hash))));
+  return true;
+end;
+$$;
+
+revoke all on function public.console_cancel_start(text) from public, anon, authenticated;
+grant execute on function public.console_cancel_start(text) to service_role;
+
 revoke all on function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])
   from public, anon, authenticated;
 grant execute on function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])

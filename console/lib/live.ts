@@ -361,11 +361,30 @@ export async function handleRunsPost(req: Request, deps: RunsDeps): Promise<Resp
     if (typeof started === "string" && started in QUOTA_COPY) return quotaRefusal(started);
     if (started !== "started") throw new Error("start came back unreadable");
 
-    deps.startWorker({ runId, scenario: dry.scenario, digest: dry.sha256, config: s.config, db: s.db });
-    return json(202, { runId });
+    const scenario = dry.scenario;
+    const digest = dry.sha256;
+    return await handOff(s.db, runId, () => deps.startWorker({ runId, scenario, digest, config: s.config, db: s.db }));
   } catch {
     return NOT_READY();
   }
+}
+
+/**
+ * Hands a started run to its worker. If that throws, the run never began, so
+ * it is canceled and its quota given back (console_cancel_start) rather than
+ * left queued, spending a run and holding the one active slot until the reaper.
+ */
+async function handOff(db: ConsoleDb, runId: string, start: () => void): Promise<Response> {
+  try {
+    start();
+  } catch (e) {
+    console.error(`live: run ${runId} could not be handed to its worker (${e instanceof Error ? e.name : "error"})`);
+    await db.rpc("console_cancel_start", { p_id: runId }).catch(() => {
+      // Left queued, the reaper closes it within 60 s; the quota then stays spent.
+    });
+    return NOT_READY();
+  }
+  return json(202, { runId });
 }
 
 // ------------------------------------------------------------------ POST /api/finder
@@ -413,8 +432,8 @@ export async function handleFinderPost(req: Request, deps: FinderDeps): Promise<
     }
     if (typeof started === "string" && started in QUOTA_COPY) return quotaRefusal(started);
     if (started !== "started") throw new Error("start came back unreadable");
-    deps.startFinder({ runId, classId, config: s.config, db: s.db, generate: deps.generate });
-    return json(202, { runId });
+    const generate = deps.generate;
+    return await handOff(s.db, runId, () => deps.startFinder({ runId, classId, config: s.config, db: s.db, generate }));
   } catch {
     return NOT_READY();
   }
