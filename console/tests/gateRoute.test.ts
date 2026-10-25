@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type AttemptStore, SESSION_COOKIE, clientIp, dbAttemptStore, verifySession } from "../lib/gate";
+import { type AttemptStore, SESSION_COOKIE, clientIp, dbAttemptStore, hashedKey, verifySession } from "../lib/gate";
 import { createDb } from "../lib/db";
 import { MAX_BODY_BYTES, handleGatePost } from "../lib/gateRoute";
 import { hasValidSession } from "../lib/session";
@@ -40,9 +40,11 @@ async function harness(env: Record<string, string | undefined> = ENV, global = 5
   const attempts: AttemptStore = dbAttemptStore(db, SECRET, { perIp: 5, global, windowMs: 3_600_000 });
   const globalFailures = async () =>
     (await pg.query<{ count: number }>("select count from public.console_counters where scope = 'gate_global'")).rows[0]?.count ?? 0;
+  // Read straight from the table, so looking does not take a try.
   const ipLeft = async (ip: string) => {
-    const c = await attempts.check(clientIp(new Headers({ "x-vercel-forwarded-for": ip })));
-    return c.allowed ? c.ipLeft : 0;
+    const key = hashedKey(SECRET, "gate", clientIp(new Headers({ "x-vercel-forwarded-for": ip })));
+    const r = await pg.query<{ count: number }>("select count from public.console_counters where scope = 'gate_ip' and key = $1", [key]);
+    return 5 - (r.rows[0]?.count ?? 0);
   };
   return { deps: { env, attempts, now: () => T0 }, pg, rest, globalFailures, ipLeft };
 }
@@ -248,18 +250,35 @@ describe("POST /api/gate", () => {
     expect(hashed).toEqual([]);
   });
 
-  it("does not report tries left when a wrong try could not be counted", async () => {
-    const { deps } = await harness();
+  it("a failed global count still answers wrong, and the address's try stays counted", async () => {
+    const { deps, ipLeft } = await harness();
     vi.spyOn(console, "error").mockImplementation(() => {});
     const failing: AttemptStore = {
-      check: deps.attempts.check,
+      take: deps.attempts.take,
       recordFailure: async () => {
         throw new Error("down");
       },
       recordSuccess: deps.attempts.recordSuccess,
     };
     const res = await handleGatePost(post(form("not it")), { ...deps, attempts: failing });
-    expect(res.headers.get("location")).toBe("/gate?e=unavailable");
+    expect(res.headers.get("location")).toBe("/gate?e=wrong&left=4");
+    expect(await ipLeft("203.0.113.10")).toBe(4);
+  });
+
+  // Security review of ebab5e4: with a separate check and count, parallel
+  // guesses all read "5 left" before any failure was recorded, and all were
+  // hashed. Each try now takes its slot first, in one atomic call.
+  it("hashes at most 5 of a parallel burst of wrong guesses from one address", async () => {
+    const { deps } = await harness();
+    const hashed: string[] = [];
+    const spy = { ...deps, verify: (input: string) => (hashed.push(input), false) };
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => handleGatePost(post(form(`guess ${i}`)), spy)),
+    );
+    expect(hashed.length).toBe(5);
+    const locations = results.map((r) => r.headers.get("location"));
+    expect(locations.filter((l) => l?.startsWith("/gate?e=locked"))).toHaveLength(5);
+    expect(locations.filter((l) => l?.startsWith("/gate?e=wrong"))).toHaveLength(5);
   });
 
   it("refuses an answer it cannot read as a lockout, never as allowed", async () => {

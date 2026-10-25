@@ -28,7 +28,7 @@ export type RpcName =
   | "console_get_plan"
   | "console_take_daily"
   | "console_daily_used"
-  | "console_gate_check"
+  | "console_gate_take"
   | "console_gate_fail"
   | "console_gate_clear"
   | "console_start_run";

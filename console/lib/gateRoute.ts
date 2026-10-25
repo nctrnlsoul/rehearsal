@@ -80,13 +80,14 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   const attempts = deps.attempts;
   if (attempts === null) return seeOther("/gate?e=unavailable");
 
-  // Refused before the passcode is hashed, so a locked-out caller costs no
-  // scrypt work. Only the caller's own count refuses: past the global ceiling
-  // the right passcode still opens the gate (R-036).
+  // The try takes its slot before the passcode is hashed, so a locked-out
+  // caller costs no scrypt work and parallel guesses cannot share one count.
+  // Only the caller's own count refuses: past the global ceiling the right
+  // passcode still opens the gate (R-036).
   const ip = clientIp(req.headers);
   let check;
   try {
-    check = await attempts.check(ip);
+    check = await attempts.take(ip);
   } catch (e) {
     console.error(`gate: attempt count unreadable (${e instanceof Error ? e.name : "error"})`);
     return seeOther("/gate?e=unavailable");
@@ -102,15 +103,14 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   const ok = passcode !== "" && passcode.length <= PASSCODE_MAX_CHARS && verify(passcode, hash);
   if (!ok) {
     try {
-      if (await attempts.recordFailure(ip)) {
+      if (await attempts.recordFailure()) {
         console.warn("gate: wrong passcodes from all addresses reached the global ceiling this window");
       }
     } catch (e) {
-      // The try went uncounted, so the caller is not told how many are left.
-      console.error(`gate: wrong try could not be counted (${e instanceof Error ? e.name : "error"})`);
-      return seeOther("/gate?e=unavailable");
+      // Only the global log missed it; this address's try was taken above.
+      console.error(`gate: global wrong-try count failed (${e instanceof Error ? e.name : "error"})`);
     }
-    return seeOther(`/gate?e=wrong&left=${Math.max(0, check.ipLeft - 1)}`);
+    return seeOther(`/gate?e=wrong&left=${Math.max(0, check.ipLeft)}`);
   }
 
   try {

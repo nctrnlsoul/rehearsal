@@ -123,19 +123,24 @@ export type LimitCheck =
   | { readonly allowed: false; readonly retryAfterS: number };
 
 /**
- * Where wrong passcodes are counted. Shared by every server instance (R-038):
+ * Where passcode tries are counted. Shared by every server instance (R-038):
  * the counts live in the console's database, so a guesser cannot reset them by
  * landing on a fresh instance. The rules themselves are SQL, in
- * migrations/0003 (console_gate_check, console_gate_fail, console_gate_clear),
+ * migrations/0003 (console_gate_take, console_gate_fail, console_gate_clear),
  * and only the caller's own count ever refuses anyone (R-036).
+ *
+ * A try takes its slot BEFORE the passcode is hashed, in one atomic call. A
+ * separate check and count would let a burst of parallel guesses all read the
+ * same count and all be hashed.
  *
  * Any method may throw when the database cannot be reached; the gate then
  * stays closed rather than letting a guess through uncounted.
  */
 export type AttemptStore = {
-  check(bucket: string): Promise<LimitCheck>;
-  /** True on the one failure that reaches the global ceiling, so the caller can log it once. */
-  recordFailure(bucket: string): Promise<boolean>;
+  /** Takes one try for this address. When allowed, ipLeft is what remains after it. */
+  take(bucket: string): Promise<LimitCheck>;
+  /** Counts a wrong try toward the global ceiling. True on the one that reaches it, so the caller logs it once. */
+  recordFailure(): Promise<boolean>;
   /** A correct passcode clears that address's count; it never lowers the global one. */
   recordSuccess(bucket: string): Promise<void>;
 };
@@ -157,20 +162,20 @@ export function dbAttemptStore(
   const windowS = Math.round(limits.windowMs / 1000);
   const key = (bucket: string) => hashedKey(secret, "gate", bucket);
   return {
-    async check(bucket) {
-      const rows = await db.rpc("console_gate_check", { p_key: key(bucket), p_per_ip: limits.perIp, p_window_s: windowS });
+    async take(bucket) {
+      const rows = await db.rpc("console_gate_take", { p_key: key(bucket), p_per_ip: limits.perIp, p_window_s: windowS });
       const row = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : undefined;
       // Anything but the exact shape is an unreadable answer, and an unreadable
       // answer about a lockout is never read as "allowed".
-      if (row === undefined || typeof row["allowed"] !== "boolean") throw new Error("gate check returned an unreadable answer");
+      if (row === undefined || typeof row["allowed"] !== "boolean") throw new Error("gate take returned an unreadable answer");
       if (row["allowed"] === true && typeof row["ip_left"] === "number") return { allowed: true, ipLeft: row["ip_left"] };
       if (row["allowed"] === false && typeof row["retry_after_s"] === "number") {
         return { allowed: false, retryAfterS: row["retry_after_s"] };
       }
-      throw new Error("gate check returned an unreadable answer");
+      throw new Error("gate take returned an unreadable answer");
     },
-    async recordFailure(bucket) {
-      const hit = await db.rpc("console_gate_fail", { p_key: key(bucket), p_global: limits.global, p_window_s: windowS });
+    async recordFailure() {
+      const hit = await db.rpc("console_gate_fail", { p_global: limits.global, p_window_s: windowS });
       if (typeof hit !== "boolean") throw new Error("gate failure count returned an unreadable answer");
       return hit;
     },
@@ -193,8 +198,11 @@ export function verifySession(token: string | undefined, secret: string | null, 
   if (secret === null || token === undefined || token.length > 200) return false;
   const m = /^(v1\.(\d{1,12})\.[A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/.exec(token);
   if (m === null) return false;
-  const expected = mac(secret, m[1]!);
-  const presented = Buffer.from(m[3]!, "base64url");
+  // Compared as text, not decoded bytes: the 43rd character carries only 4
+  // bits of the MAC, so decoding let a few different spellings of one MAC all
+  // pass. Exactly one spelling is valid.
+  const expected = Buffer.from(b64url(mac(secret, m[1]!)));
+  const presented = Buffer.from(m[3]!);
   if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return false;
   return Number(m[2]) * 1000 > nowMs;
 }

@@ -80,7 +80,7 @@ describe("gate lockout claim", () => {
     expect(route).toContain("dbAttemptStore(db, secret)");
     expect(read("console", "lib", "gate.ts")).not.toMatch(/new Map</);
     const sqlFile = read("console", "migrations", "0003_plans_counters.sql");
-    expect(sqlFile).toContain("function public.console_gate_check");
+    expect(sqlFile).toContain("function public.console_gate_take");
   });
 
   it("never says a network is locked, since the key is an address", () => {

@@ -142,44 +142,62 @@ as $$
 $$;
 
 -- -------------------------------------------------------------------------
--- The judge gate (R-034, R-036, R-038). Same rules the in-memory limiter had,
--- now shared by every server instance:
+-- The judge gate (R-034, R-036, R-038), shared by every server instance:
+--   * a try TAKES its slot before the passcode is hashed, in one atomic
+--     upsert, so a burst of parallel guesses cannot all read the same "5
+--     left" and all be hashed (the check-then-count race a separate check
+--     and count would have);
 --   * only the caller's own count refuses anyone;
---   * the global count is logged when it reaches its ceiling, refuses no one;
---   * a window starts at an address's first failure and lasts p_window_s;
+--   * the global count is of wrong tries, logged when it reaches its
+--     ceiling, and refuses no one (R-036);
+--   * a window starts at an address's first try and lasts p_window_s;
 --   * a correct passcode clears that address's count, never the global one.
 -- -------------------------------------------------------------------------
 
-create or replace function public.console_gate_check(p_key text, p_per_ip integer, p_window_s integer)
+-- Allowed: the slot is taken and ip_left is what remains after it. Refused:
+-- nothing changes and retry_after_s says when the window ends. Concurrent
+-- calls for one key queue on the row, and each re-reads the count it sees.
+create or replace function public.console_gate_take(p_key text, p_per_ip integer, p_window_s integer)
 returns table (allowed boolean, ip_left integer, retry_after_s integer)
 language plpgsql
 security invoker
 set search_path = ''
-stable
 as $$
 declare
+  v_window interval := make_interval(secs => p_window_s);
   v_count integer;
   v_since timestamptz;
 begin
-  select c.count, c.window_start into v_count, v_since
+  if p_per_ip is null or p_per_ip < 1 then
+    return query select false, 0, p_window_s;
+    return;
+  end if;
+
+  insert into public.console_counters as c (scope, key, window_start, count)
+  values ('gate_ip', p_key, now(), 1)
+  on conflict (scope, key) do update
+    set count = case when now() - c.window_start >= v_window then 1 else c.count + 1 end,
+        window_start = case when now() - c.window_start >= v_window then now() else c.window_start end
+    where now() - c.window_start >= v_window or c.count < p_per_ip
+  returning c.count into v_count;
+
+  if v_count is not null then
+    return query select true, p_per_ip - v_count, 0;
+    return;
+  end if;
+
+  select c.window_start into v_since
     from public.console_counters c
    where c.scope = 'gate_ip' and c.key = p_key;
-  if v_since is null or now() - v_since >= make_interval(secs => p_window_s) then
-    v_count := 0;
-    v_since := now();
-  end if;
-  if v_count >= p_per_ip then
-    return query select false, 0,
-      ceil(extract(epoch from (v_since + make_interval(secs => p_window_s) - now())))::integer;
-  else
-    return query select true, p_per_ip - v_count, 0;
-  end if;
+  return query select false, 0,
+    greatest(1, ceil(extract(epoch from (v_since + v_window - now())))::integer);
 end;
 $$;
 
--- True on the one failure that brings the global count to its ceiling, so the
--- caller logs it once.
-create or replace function public.console_gate_fail(p_key text, p_global integer, p_window_s integer)
+-- Counts one wrong try toward the global ceiling. True on the one try that
+-- brings it to the ceiling, so the caller logs it once. The address's own
+-- count was already taken by console_gate_take.
+create or replace function public.console_gate_fail(p_global integer, p_window_s integer)
 returns boolean
 language plpgsql
 security invoker
@@ -195,18 +213,11 @@ begin
     set count = case when now() - c.window_start >= v_window then 1 else c.count + 1 end,
         window_start = case when now() - c.window_start >= v_window then now() else c.window_start end
   returning c.count into v_global;
-
-  insert into public.console_counters as c (scope, key, window_start, count)
-  values ('gate_ip', p_key, now(), 1)
-  on conflict (scope, key) do update
-    set count = case when now() - c.window_start >= v_window then 1 else c.count + 1 end,
-        window_start = case when now() - c.window_start >= v_window then now() else c.window_start end;
-
   return v_global = p_global;
 end;
 $$;
 
--- The window is set to the epoch, not to now: the next failure then starts a
+-- The window is set to the epoch, not to now: the next try then starts a
 -- fresh window of its own, exactly as when the in-memory limiter forgot the
 -- address. Setting it to now would end that window early.
 create or replace function public.console_gate_clear(p_key text)
@@ -226,13 +237,13 @@ grant execute on function public.console_save_plan(text, text, jsonb, text) to s
 grant execute on function public.console_get_plan(uuid) to service_role;
 revoke all on function public.console_take_daily(text[], text[], integer[]) from public, anon, authenticated;
 revoke all on function public.console_daily_used(text, text) from public, anon, authenticated;
-revoke all on function public.console_gate_check(text, integer, integer) from public, anon, authenticated;
-revoke all on function public.console_gate_fail(text, integer, integer) from public, anon, authenticated;
+revoke all on function public.console_gate_take(text, integer, integer) from public, anon, authenticated;
+revoke all on function public.console_gate_fail(integer, integer) from public, anon, authenticated;
 revoke all on function public.console_gate_clear(text) from public, anon, authenticated;
 grant execute on function public.console_take_daily(text[], text[], integer[]) to service_role;
 grant execute on function public.console_daily_used(text, text) to service_role;
-grant execute on function public.console_gate_check(text, integer, integer) to service_role;
-grant execute on function public.console_gate_fail(text, integer, integer) to service_role;
+grant execute on function public.console_gate_take(text, integer, integer) to service_role;
+grant execute on function public.console_gate_fail(integer, integer) to service_role;
 grant execute on function public.console_gate_clear(text) to service_role;
 
 notify pgrst, 'reload schema';

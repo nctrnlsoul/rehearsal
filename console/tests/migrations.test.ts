@@ -337,67 +337,72 @@ describe("daily quotas", () => {
   });
 });
 
-describe("the gate counters (same rules as AttemptLimiter)", () => {
-  const check = (db: PGlite, key: string) =>
-    one<{ allowed: boolean; ip_left: number; retry_after_s: number }>(db, `select * from public.console_gate_check('${key}', 5, 3600)`);
-  const fail = (db: PGlite, key: string, global = 50) =>
-    one<{ hit: boolean }>(db, `select public.console_gate_fail('${key}', ${global}, 3600) as hit`).then((r) => r.hit);
+describe("the gate counters (same rules as the old AttemptLimiter, slot taken first)", () => {
+  const take = (db: PGlite, key: string, perIp = 5) =>
+    one<{ allowed: boolean; ip_left: number; retry_after_s: number }>(db, `select * from public.console_gate_take('${key}', ${perIp}, 3600)`);
+  const fail = (db: PGlite, global = 50) =>
+    one<{ hit: boolean }>(db, `select public.console_gate_fail(${global}, 3600) as hit`).then((r) => r.hit);
 
-  it("allows 5 wrong tries per address, then locks it for the rest of the hour", async () => {
+  it("allows 5 tries per address, then refuses for the rest of the hour without counting more", async () => {
     const db = await freshDb();
-    expect(await check(db, H("1"))).toEqual({ allowed: true, ip_left: 5, retry_after_s: 0 });
-    for (let i = 0; i < 4; i += 1) await fail(db, H("1"));
-    expect(await check(db, H("1"))).toMatchObject({ allowed: true, ip_left: 1 });
-    await fail(db, H("1"));
-    const locked = await check(db, H("1"));
+    for (let i = 1; i <= 5; i += 1) expect(await take(db, H("1"))).toEqual({ allowed: true, ip_left: 5 - i, retry_after_s: 0 });
+    const locked = await take(db, H("1"));
     expect(locked.allowed).toBe(false);
     expect(locked.retry_after_s).toBeGreaterThan(3500);
     expect(locked.retry_after_s).toBeLessThanOrEqual(3600);
+    const row = await one<{ count: number }>(db, "select count from public.console_counters where scope = 'gate_ip'");
+    expect(row.count).toBe(5);
     // Another address is untouched.
-    expect(await check(db, H("2"))).toMatchObject({ allowed: true, ip_left: 5 });
+    expect(await take(db, H("2"))).toMatchObject({ allowed: true, ip_left: 4 });
   });
 
-  it("starts a fresh window once the hour since the first failure has passed", async () => {
+  it("starts a fresh window once the hour since the first try has passed", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 5; i += 1) await fail(db, H("1"));
+    for (let i = 0; i < 5; i += 1) await take(db, H("1"));
     await db.exec(`update public.console_counters set window_start = now() - interval '3600 seconds' where scope = 'gate_ip'`);
-    expect(await check(db, H("1"))).toMatchObject({ allowed: true, ip_left: 5 });
-    await fail(db, H("1"));
-    expect(await check(db, H("1"))).toMatchObject({ allowed: true, ip_left: 4 });
+    expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 4 });
   });
 
   it("reports the global ceiling exactly once and refuses no one for it (R-036)", async () => {
     const db = await freshDb();
     const hits: boolean[] = [];
-    for (let i = 0; i < 4; i += 1) hits.push(await fail(db, H(String(i)), 3));
+    for (let i = 0; i < 4; i += 1) hits.push(await fail(db, 3));
     expect(hits).toEqual([false, false, true, false]);
-    expect(await check(db, H("9"))).toMatchObject({ allowed: true, ip_left: 5 });
+    expect(await take(db, H("9"))).toMatchObject({ allowed: true, ip_left: 4 });
   });
 
   it("clears an address on success without lowering the global count", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 3; i += 1) await fail(db, H("1"));
+    for (let i = 0; i < 3; i += 1) {
+      await take(db, H("1"));
+      await fail(db);
+    }
     await db.query(`select public.console_gate_clear('${H("1")}')`);
-    expect(await check(db, H("1"))).toMatchObject({ allowed: true, ip_left: 5 });
+    expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 4 });
     const g = await one<{ count: number }>(db, "select count from public.console_counters where scope = 'gate_global'");
     expect(g.count).toBe(3);
   });
 
-  it("after a clear, the next failure starts its own window", async () => {
+  it("after a clear, the next try starts its own window", async () => {
     const db = await freshDb();
-    await fail(db, H("1"));
+    await take(db, H("1"));
     await db.exec(`update public.console_counters set window_start = now() - interval '3000 seconds' where scope = 'gate_ip'`);
     await db.query(`select public.console_gate_clear('${H("1")}')`);
-    for (let i = 0; i < 5; i += 1) await fail(db, H("1"));
-    const locked = await check(db, H("1"));
+    for (let i = 0; i < 5; i += 1) await take(db, H("1"));
+    const locked = await take(db, H("1"));
     expect(locked.allowed).toBe(false);
     // A window kept from before the clear would end in about 600 s.
     expect(locked.retry_after_s).toBeGreaterThan(3500);
   });
 
+  it("treats a per-address limit under 1 as locked", async () => {
+    const db = await freshDb();
+    expect(await take(db, H("1"), 0)).toMatchObject({ allowed: false });
+  });
+
   it("stores no raw address: a key must be a 64-hex hash", async () => {
     const db = await freshDb();
-    await expect(fail(db, "203.0.113.7")).rejects.toThrow(/console_counters_key_shape/);
+    await expect(take(db, "203.0.113.7")).rejects.toThrow(/console_counters_key_shape/);
   });
 });
 

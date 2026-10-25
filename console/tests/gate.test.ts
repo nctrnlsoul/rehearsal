@@ -155,3 +155,18 @@ describe("session cookie", () => {
     expect(readCookie(null, SESSION_COOKIE)).toBeUndefined();
   });
 });
+
+describe("session token spelling", () => {
+  // The MAC's last base64url character carries 4 real bits; its 2 spare bits
+  // must not give one MAC several accepted spellings. Before the fix this
+  // passed about 1 time in 16, whenever the MAC happened to end in A to D.
+  it("accepts exactly one spelling of a MAC, for every token", () => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    for (let i = 0; i < 200; i += 1) {
+      const tok = signSession(SECRET, T0 + i * 1000, 60);
+      const head = tok.slice(0, -1);
+      const accepted = [...alphabet].filter((c) => verifySession(head + c, SECRET, T0));
+      expect(accepted).toEqual([tok.slice(-1)]);
+    }
+  });
+});

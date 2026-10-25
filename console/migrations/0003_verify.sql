@@ -46,8 +46,8 @@ begin
     'public.console_get_plan(uuid)',
     'public.console_take_daily(text[], text[], integer[])',
     'public.console_daily_used(text, text)',
-    'public.console_gate_check(text, integer, integer)',
-    'public.console_gate_fail(text, integer, integer)',
+    'public.console_gate_take(text, integer, integer)',
+    'public.console_gate_fail(integer, integer)',
     'public.console_gate_clear(text)'] loop
     select not p.prosecdef and p.proconfig = array['search_path=""'] into ok
       from pg_proc p where p.oid = f::regprocedure;
@@ -77,17 +77,20 @@ begin
       raise exception 'QUOTA BROKEN: a refused take spent the global quota';
     end if;
 
-    -- Five failures lock the address; the sixth check says so.
+    -- Five tries take five slots; the sixth is refused before any hashing.
     for i in 1 .. 5 loop
-      perform public.console_gate_fail(k, 50, 3600);
+      select * into r from public.console_gate_take(k, 5, 3600);
+      if not r.allowed or r.ip_left <> 5 - i then
+        raise exception 'GATE BROKEN: try % was refused or miscounted', i;
+      end if;
     end loop;
-    select * into r from public.console_gate_check(k, 5, 3600);
+    select * into r from public.console_gate_take(k, 5, 3600);
     if r.allowed then
-      raise exception 'GATE BROKEN: five failures did not lock the address';
+      raise exception 'GATE BROKEN: a sixth try within the hour was allowed';
     end if;
     perform public.console_gate_clear(k);
-    select * into r from public.console_gate_check(k, 5, 3600);
-    if not r.allowed or r.ip_left <> 5 then
+    select * into r from public.console_gate_take(k, 5, 3600);
+    if not r.allowed or r.ip_left <> 4 then
       raise exception 'GATE BROKEN: a cleared address was not given 5 fresh tries';
     end if;
     raise exception using errcode = 'P0V03', message = 'rollback the verify rows';
