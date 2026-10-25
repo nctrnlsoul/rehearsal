@@ -28,8 +28,8 @@ export type StepContext = {
   readonly outputs: ReadonlyMap<string, StepOutputs>;
   /** Run-level ids, such as the registered webhook a resend needs. */
   readonly meta: Readonly<Record<string, string>>;
-  /** Draws one banked purchase and marks it used. */
-  claimPurchase(): ClaimResult;
+  /** Draws one banked purchase and marks it used. Await it: a hosted bank is a database. */
+  claimPurchase(): ClaimResult | Promise<ClaimResult>;
   readonly env: Readonly<Record<string, string | undefined>>;
   now(): Date;
   sleep(ms: number): Promise<void>;

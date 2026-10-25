@@ -31,7 +31,7 @@ export const openDisputeHandler: StepHandler = async (ctx) => {
   const step = ctx.step;
   if (step.kind !== "open_dispute") return wrongKind("open_dispute", step.kind);
 
-  const claim = ctx.claimPurchase();
+  const claim = await ctx.claimPurchase();
   if (!claim.ok) return failed(claim.error);
   const purchase = claim.purchase;
 

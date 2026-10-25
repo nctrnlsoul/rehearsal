@@ -46,7 +46,9 @@ function harness(
     seller: seller.client,
     buyer: buyer.client,
     claimPurchase: () => ({ ok: false, error: "the purchase bank is empty" }),
-    persist: (s) => persisted.push(s),
+    persist: (s) => {
+      persisted.push(s);
+    },
     now: () => new Date((clock += 1000)),
     sleep: async () => {},
     log: (l) => logs.push(l),
@@ -405,5 +407,65 @@ describe("a finder-mode resend names only the store's webhook", () => {
     expect(resends[0]!.path).toBe("/v1/notifications/webhooks-events/WH-EV-1/resend");
     expect(resends[0]!.body).toEqual({ webhook_ids: [STORE_ID] });
     expect(h.sellerCalls.some((c) => c.method === "POST" && c.path === "/v1/notifications/webhooks")).toBe(false);
+  });
+});
+
+// Stage B saves run state to a database, which is asynchronous. A step must
+// never reach PayPal before the state that says it started is saved: if that
+// save fails, nobody could later tell the step had been attempted.
+describe("asynchronous persistence", () => {
+  it("does not start a step's handler until the save that marks it started has finished", async () => {
+    const timeline: string[] = [];
+    const h = harness({
+      persist: async (s) => {
+        await new Promise((r) => setTimeout(r, 5));
+        const started = Object.values(s.steps).filter((x) => x.startedAt !== null && x.finishedAt === null);
+        timeline.push(`saved:${started.map((x) => x.id).join(",")}`);
+      },
+      handlers: registry({
+        card_order: async (ctx) => {
+          timeline.push(`ran:${ctx.step.id}`);
+          return { kind: "success", detail: "ok", ids: {} };
+        },
+        refund: async (ctx) => {
+          timeline.push(`ran:${ctx.step.id}`);
+          return { kind: "success", detail: "ok", ids: {} };
+        },
+      }),
+    });
+    await executeScenario({ scenario: twoStep(), runId: "run-1" }, h.deps);
+    expect(timeline.indexOf("ran:o1")).toBeGreaterThan(timeline.indexOf("saved:o1"));
+    expect(timeline.indexOf("ran:r1")).toBeGreaterThan(timeline.indexOf("saved:r1"));
+    expect(timeline.indexOf("saved:o1")).toBeGreaterThanOrEqual(0);
+    expect(timeline.indexOf("saved:r1")).toBeGreaterThanOrEqual(0);
+  });
+
+  it("when the save before a step fails, that step never runs and makes no PayPal call", async () => {
+    ran.length = 0;
+    let saves = 0;
+    const h = harness({
+      persist: async () => {
+        saves += 1;
+        // Save 1 is the new run; save 2 marks o1 started.
+        if (saves === 2) throw new Error("database unavailable");
+      },
+    });
+    await expect(executeScenario({ scenario: twoStep(), runId: "run-1" }, h.deps)).rejects.toThrow(/database unavailable/);
+    expect(ran).toEqual([]);
+    expect(h.sellerCalls).toEqual([]);
+  });
+
+  it("awaits an asynchronous purchase claim in a dispute step", async () => {
+    const { openDisputeHandler } = await import("../src/executor/handlers/dispute");
+    const h = harness({
+      claimPurchase: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return { ok: false, error: "the hosted bank is empty" };
+      },
+      handlers: registry({ open_dispute: openDisputeHandler }),
+    });
+    const state = await executeScenario({ scenario: scenarioWith([{ id: "d1", kind: "open_dispute" }]), runId: "run-1" }, h.deps);
+    expect(state.steps["d1"]!.status).toBe("failed");
+    expect(state.steps["d1"]!.detail).toBe("the hosted bank is empty");
   });
 });
