@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import plans from "../fixtures/plans.json";
 import {
@@ -159,5 +161,13 @@ describe("hostedGate", () => {
     expect(g.ok).toBe(false);
     expect(!g.ok && g.errors[0]).toContain("650 s");
     expect(timeBudgetS({ steps: [{ kind: "open_dispute" }, { kind: "card_order" }] } as never)).toBe(160);
+  });
+});
+
+describe("the run route's duration", () => {
+  it("is exported as exactly 800 from the route file itself (R-030)", () => {
+    const route = readFileSync(join(__dirname, "..", "app", "api", "runs", "route.ts"), "utf8");
+    expect(route).toMatch(/^export const maxDuration = 800;$/m);
+    expect(route.match(/export const maxDuration/g)).toHaveLength(1);
   });
 });

@@ -195,16 +195,25 @@ export function signSession(secret: string, nowMs: number, ttlS: number = SESSIO
 }
 
 export function verifySession(token: string | undefined, secret: string | null, nowMs: number): boolean {
-  if (secret === null || token === undefined || token.length > 200) return false;
+  return verifiedSessionId(token, secret, nowMs) !== null;
+}
+
+/**
+ * The signed part of a valid, unexpired session token ("v1.<expiry>.<nonce>"),
+ * or null. It names one unlock of the gate, so it is what per-session quotas
+ * are counted against (hashed before it is stored). Never the MAC.
+ */
+export function verifiedSessionId(token: string | undefined, secret: string | null, nowMs: number): string | null {
+  if (secret === null || token === undefined || token.length > 200) return null;
   const m = /^(v1\.(\d{1,12})\.[A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/.exec(token);
-  if (m === null) return false;
+  if (m === null) return null;
   // Compared as text, not decoded bytes: the 43rd character carries only 4
   // bits of the MAC, so decoding let a few different spellings of one MAC all
   // pass. Exactly one spelling is valid.
   const expected = Buffer.from(b64url(mac(secret, m[1]!)));
   const presented = Buffer.from(m[3]!);
-  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return false;
-  return Number(m[2]) * 1000 > nowMs;
+  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return null;
+  return Number(m[2]) * 1000 > nowMs ? m[1]! : null;
 }
 
 /** __Host- requires Secure, Path=/ and no Domain, so the cookie cannot be scoped wider or sent in clear. */
