@@ -99,14 +99,31 @@ export type RowsOptions = {
   readonly sinceIso?: string;
 };
 
+/** What a verified event can be recorded as. Refusals and duplicates are never passed in. */
+export type VerifiedAction = "fulfilled" | "refund_recorded" | "dispute_noted" | "ignored";
+
+export type VerifiedEvent = {
+  eventId: string;
+  eventType: string;
+  captureId: string | null;
+  amount: string | null;
+  currency: string | null;
+  action: VerifiedAction;
+  certHost: string | null;
+};
+
 export type Db = {
   /**
-   * True when a VERIFIED, non-refused row already records this event id.
+   * Records a verified event as `action`, or as duplicate_ignored when a
+   * VERIFIED, non-refused row already holds its event id. One database call
+   * (store_record_event, migration 0005) that checks and inserts under a lock
+   * on the event id, so two deliveries arriving together cannot both act.
+   *
    * Refused rows are evidence, not handling: counting them would let a
    * forged copy, or one transient verify failure, mark a real delivery as a
    * duplicate so its retries are ignored and the order is never fulfilled.
    */
-  hasEvent(eventId: string): Promise<boolean>;
+  recordOnce(event: VerifiedEvent): Promise<StoreAction>;
   insert(row: Omit<StoreRow, "receivedAtMs">): Promise<void>;
   rows(options?: RowsOptions): Promise<StoreRow[]>;
 };
@@ -131,25 +148,33 @@ function toRow(raw: Record<string, unknown>): StoreRow {
 export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = {}): Db {
   const doFetch = deps.fetchImpl ?? fetch;
   const endpoint = new URL(`/rest/v1/${TABLE}`, config.url);
+  const rpc = new URL("/rest/v1/rpc/store_record_event", config.url);
   // apikey only: the sb_secret_ key format is not a JWT.
   const auth = { apikey: config.key };
 
   return {
-    async hasEvent(eventId) {
-      const url = new URL(endpoint);
-      url.searchParams.set("select", "id");
-      url.searchParams.set("event_id", `eq.${eventId}`);
-      url.searchParams.set("verified", "is.true");
-      url.searchParams.set("action", "neq.refused");
-      url.searchParams.set("limit", "1");
-      const res = await doFetch(url, {
-        method: "GET",
-        headers: auth,
+    async recordOnce(event) {
+      const res = await doFetch(rpc, {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          p_event_id: event.eventId,
+          p_event_type: event.eventType,
+          p_capture_id: event.captureId,
+          p_amount: event.amount,
+          p_currency: event.currency,
+          p_action: event.action,
+          p_cert_host: event.certHost,
+        }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      if (!res.ok) throw new StoreDbError("event lookup", res.status);
+      if (!res.ok) throw new StoreDbError("record once", res.status);
       const body: unknown = await res.json();
-      return Array.isArray(body) && body.length > 0;
+      // Anything but the two answers the function can give means the row's
+      // fate is unknown, so it is an error, never a guess.
+      if (body === "duplicate_ignored") return "duplicate_ignored";
+      if (body === event.action) return event.action;
+      throw new Error("store record once returned an unexpected answer");
     },
 
     async insert(row) {

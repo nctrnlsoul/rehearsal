@@ -80,25 +80,46 @@ describe("db operations", () => {
     expect(carrying).toEqual(["apikey"]);
   });
 
-  it("looks an event up by id", async () => {
-    const f = fakeFetch([{ status: 200, body: [{ id: 1 }] }]);
-    const found = await createDb(CONFIG, { fetchImpl: f.impl }).hasEvent("WH-1");
-    expect(found).toBe(true);
-    expect(decodeURIComponent(f.calls[0]!.url)).toContain("event_id=eq.WH-1");
+  const verifiedEvent = {
+    eventId: "WH-1",
+    eventType: "PAYMENT.CAPTURE.COMPLETED",
+    captureId: "CAP-1",
+    amount: "1.00",
+    currency: "USD",
+    action: "fulfilled" as const,
+    certHost: "api.sandbox.paypal.com",
+  };
+
+  it("records a verified event through the store_record_event RPC, in one call", async () => {
+    const f = fakeFetch([{ status: 200, body: "fulfilled" }]);
+    expect(await createDb(CONFIG, { fetchImpl: f.impl }).recordOnce(verifiedEvent)).toBe("fulfilled");
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.url).toBe(`${PROJECT}/rest/v1/rpc/store_record_event`);
+    expect(f.calls[0]!.method).toBe("POST");
+    expect(f.calls[0]!.body).toEqual({
+      p_event_id: "WH-1",
+      p_event_type: "PAYMENT.CAPTURE.COMPLETED",
+      p_capture_id: "CAP-1",
+      p_amount: "1.00",
+      p_currency: "USD",
+      p_action: "fulfilled",
+      p_cert_host: "api.sandbox.paypal.com",
+    });
   });
 
-  // Refused rows are stored too; the lookup must not count them as handled.
-  it("counts only verified, non-refused rows as seen", async () => {
-    const f = fakeFetch([{ status: 200, body: [] }]);
-    await createDb(CONFIG, { fetchImpl: f.impl }).hasEvent("WH-1");
-    const url = new URL(f.calls[0]!.url);
-    expect(url.searchParams.get("verified")).toBe("is.true");
-    expect(url.searchParams.get("action")).toBe("neq.refused");
+  it("passes a duplicate back as one", async () => {
+    const f = fakeFetch([{ status: 200, body: "duplicate_ignored" }]);
+    expect(await createDb(CONFIG, { fetchImpl: f.impl }).recordOnce(verifiedEvent)).toBe("duplicate_ignored");
   });
 
-  it("reports an absent event as absent", async () => {
-    const f = fakeFetch([{ status: 200, body: [] }]);
-    expect(await createDb(CONFIG, { fetchImpl: f.impl }).hasEvent("WH-NONE")).toBe(false);
+  // An answer it cannot place means the row's fate is unknown: an error, never a guess.
+  it("throws on any other answer", async () => {
+    for (const body of ["refund_recorded", "", null, ["fulfilled"], { action: "fulfilled" }]) {
+      const f = fakeFetch([{ status: 200, body }]);
+      await expect(createDb(CONFIG, { fetchImpl: f.impl }).recordOnce(verifiedEvent)).rejects.toThrow(
+        /unexpected answer/,
+      );
+    }
   });
 
   // The webhook endpoint is publicly writable, so an ascending read plus a cap
@@ -203,7 +224,7 @@ describe("db operations", () => {
           reason: null,
           certHost: null,
         })],
-      [403, "event lookup", (d: ReturnType<typeof createDb>) => d.hasEvent("WH-1")],
+      [403, "record once", (d: ReturnType<typeof createDb>) => d.recordOnce(verifiedEvent)],
     ] as const) {
       const f = fakeFetch([{ status }]);
       const db = createDb(CONFIG, { fetchImpl: f.impl });

@@ -22,11 +22,14 @@ const captureEvent = (eventId: string, captureId = "CAP-1", amount = "54.00") =>
 function fakeDb() {
   const inserted: Array<Omit<StoreRow, "receivedAtMs">> = [];
   const db: Db = {
-    async hasEvent(eventId) {
-      // Mirrors the real lookup: only a verified, non-refused row counts as seen.
-      return inserted.some(
-        (r) => r.eventId === eventId && r.verified === true && r.action !== "refused",
+    async recordOnce(event) {
+      // Mirrors store_record_event: only a verified, non-refused row counts as seen.
+      const seen = inserted.some(
+        (r) => r.eventId === event.eventId && r.verified === true && r.action !== "refused",
       );
+      const action = seen ? "duplicate_ignored" : event.action;
+      inserted.push({ ...event, action, verified: true, reason: null });
+      return action;
     },
     async insert(row) {
       inserted.push(row);

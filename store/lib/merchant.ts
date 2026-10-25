@@ -1,4 +1,4 @@
-import type { Db, StoreAction, StoreRow } from "./db";
+import type { Db, StoreAction, StoreRow, VerifiedAction } from "./db";
 
 /**
  * The merchant app's own logic: what a typical small shop does when PayPal
@@ -64,7 +64,7 @@ export function readEvent(body: unknown): ParsedEvent {
   };
 }
 
-export function actionFor(eventType: string): StoreAction {
+export function actionFor(eventType: string): VerifiedAction {
   switch (eventType) {
     case "PAYMENT.CAPTURE.COMPLETED":
       return "fulfilled";
@@ -159,19 +159,16 @@ export async function handleEvent(
     return "refused";
   }
 
-  if (dedupe && parsed.eventId !== null && (await db.hasEvent(parsed.eventId))) {
-    // Recorded rather than dropped, so a duplicate is visible as handled.
-    await db.insert({
-      ...parsed,
-      action: "duplicate_ignored",
-      verified: opts.verified,
-      reason: null,
-      certHost,
-    });
-    return "duplicate_ignored";
+  const action = actionFor(parsed.eventType);
+
+  // The check and the insert are one atomic call, so two deliveries of one
+  // event arriving together cannot both act. A duplicate is still recorded
+  // rather than dropped, so it is visible as handled.
+  if (dedupe && parsed.eventId !== null) {
+    return db.recordOnce({ ...parsed, eventId: parsed.eventId, action, certHost });
   }
 
-  const action = actionFor(parsed.eventType);
+  // The planted bug's path, and the path for an event with no id to dedupe on.
   await db.insert({ ...parsed, action, verified: opts.verified, reason: null, certHost });
   return action;
 }

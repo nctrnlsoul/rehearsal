@@ -19,7 +19,8 @@ export const sql = (file: string): string => readFileSync(join(DIR, file), "utf8
 
 export async function freshDb(upTo?: string): Promise<PGlite> {
   const db = new PGlite();
-  await db.exec("create role anon; create role authenticated; create role service_role;");
+  // As on Supabase: service_role bypasses RLS, the two API roles do not.
+  await db.exec("create role anon; create role authenticated; create role service_role bypassrls;");
   for (const f of migrationFiles()) {
     if (upTo !== undefined && f > upTo) break;
     await db.exec(sql(f));
