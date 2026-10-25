@@ -108,6 +108,10 @@ describe("storeOrigin", () => {
     expect(storeOrigin({ REHEARSAL_STORE_ORIGIN: "http://localhost:3001" })).toEqual({ origin: "http://localhost:3001" });
   });
 
+  it("normalizes the default port and the host's case, as the URL standard does", () => {
+    expect(storeOrigin({ REHEARSAL_STORE_ORIGIN: "https://Store.Test:443" })).toEqual({ origin: "https://store.test" });
+  });
+
   it.each([
     ["", /neither/],
     ["store.test", /not a URL/],
@@ -115,6 +119,8 @@ describe("storeOrigin", () => {
     ["https://store.test/api/paypal/webhook", /origin only/],
     ["https://store.test?x=1", /origin only/],
     ["https://user:pw@store.test", /origin only/],
+    ["https://store.test/#x", /origin only/],
+    ["https://store.test?", /origin only/],
   ])("refuses %j", (raw, detail) => {
     const out = storeOrigin({ REHEARSAL_STORE_ORIGIN: raw });
     expect(out.origin).toBeNull();

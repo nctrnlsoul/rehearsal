@@ -171,7 +171,8 @@ npm run build        # fetches Switzer first (see below)
 
 **Judge gate (R-034):**
 - The passcode is compared server-side, as an scrypt hash, with `timingSafeEqual`.
-- Lockout is keyed by client IP (`x-vercel-forwarded-for`, which Vercel sets and does not take from the client), plus a global ceiling.
+- Lockout is keyed by client address (`x-vercel-forwarded-for` only, which Vercel sets and does not take from the client; IPv6 counted by /64): 5 wrong tries lock that address for an hour, counted by each server instance on its own.
+- A global count of wrong tries is logged when it crosses its ceiling but refuses no one (R-036), so the right passcode always works from an address that is not locked. Guessing from many addresses is bounded by a Vercel WAF rate limit on `POST /api/gate`, set in the Vercel dashboard, not in this repo.
 - A passing passcode gets a signed `__Host-` session cookie: httpOnly, Secure, SameSite=Strict, 2 hours.
 - Behind the gate, Stage A only says that live runs arrive in Stage B.
 

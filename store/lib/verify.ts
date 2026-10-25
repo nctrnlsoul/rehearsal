@@ -167,7 +167,9 @@ export function storeOrigin(
   if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
     return { origin: null, detail: `${STORE_ORIGIN_VAR} is not https` };
   }
-  if (raw.replace(/\/$/, "") !== url.origin) {
+  const originOnly =
+    url.pathname === "/" && url.search === "" && url.hash === "" && url.username === "" && url.password === "" && !raw.endsWith("?") && !raw.endsWith("#");
+  if (!originOnly) {
     return { origin: null, detail: `${STORE_ORIGIN_VAR} must be an origin only, like https://host` };
   }
   return { origin: url.origin };
