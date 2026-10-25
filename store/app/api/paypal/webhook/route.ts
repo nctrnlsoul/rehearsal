@@ -1,5 +1,6 @@
 import { createDb, readConfig } from "../../../../lib/db";
 import { certHostOf, handleEvent, recordRefusal } from "../../../../lib/merchant";
+import { readBodyCapped } from "../../../../lib/body";
 import { verifySignature } from "../../../../lib/verify";
 
 /**
@@ -48,9 +49,9 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false }, { status });
   };
 
-  const raw = await req.text();
-  if (raw.length > MAX_BODY_BYTES) {
-    return refuse(413, `body over ${MAX_BODY_BYTES} characters`);
+  const raw = await readBodyCapped(req, MAX_BODY_BYTES);
+  if (raw === null) {
+    return refuse(413, `body over ${MAX_BODY_BYTES} bytes`);
   }
 
   let event: unknown;

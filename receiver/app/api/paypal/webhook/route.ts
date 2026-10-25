@@ -1,3 +1,4 @@
+import { readBodyCapped } from "../../../../lib/body";
 import { checkCertUrl } from "../../../../lib/certUrl";
 import { createLedger, readConfig } from "../../../../lib/ledger";
 import { accessToken, forgetToken } from "../../../../lib/paypalToken";
@@ -122,8 +123,8 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false }, { status: 503 });
   }
 
-  const raw = await req.text();
-  if (raw.length > MAX_BODY_BYTES) {
+  const raw = await readBodyCapped(req, MAX_BODY_BYTES);
+  if (raw === null) {
     return Response.json({ ok: false }, { status: 413 });
   }
 

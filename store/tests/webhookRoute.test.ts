@@ -113,7 +113,7 @@ describe("every refusal leaves a row with its reason", () => {
   it("an oversized body: 413, refused", async () => {
     const res = await post("x".repeat(1_000_001));
     expect(res.status).toBe(413);
-    expect(inserts[0]).toMatchObject({ action: "refused", reason: "body over 1000000 characters" });
+    expect(inserts[0]).toMatchObject({ action: "refused", reason: "body over 1000000 bytes" });
   });
 
   // Recording is evidence, never a way in: a failed write must not turn a
@@ -148,5 +148,16 @@ describe("every refusal leaves a row with its reason", () => {
     await post(JSON.stringify(capture));
     await post(JSON.stringify(capture), signedLooking({ "paypal-cert-url": "not a url" }));
     expect(inserts.map((r) => r["action"])).toEqual(["refused", "refused"]);
+  });
+});
+
+describe("the body cap is in bytes (L6)", () => {
+  it("refuses multibyte text over a megabyte with 413, before any PayPal call", async () => {
+    const body = JSON.stringify({ ...capture, note: "é".repeat(600_000) });
+    expect(body.length).toBeLessThan(1_000_000);
+    const res = await post(body, signedLooking());
+    expect(res.status).toBe(413);
+    expect(inserts[0]).toMatchObject({ action: "refused", reason: "body over 1000000 bytes" });
+    expect(paypalCalls).toEqual([]);
   });
 });

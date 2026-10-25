@@ -135,3 +135,20 @@ describe("the receiver bounds what it stores", () => {
     expect(rows[0]).toMatchObject({ event_id: id, event_type: "PAYMENT.CAPTURE.COMPLETED", resource_id: "CAP-1" });
   });
 });
+
+describe("the body cap is in bytes (L6)", () => {
+  it("refuses multibyte text over a megabyte with 413, records nothing and calls nobody", async () => {
+    const body = JSON.stringify({ id: "WH-1", note: "é".repeat(600_000) });
+    expect(body.length).toBeLessThan(1_000_000);
+    const res = await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body,
+        headers: headers("https://api.sandbox.paypal.com/c"),
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(rows).toEqual([]);
+    expect(paypalCalls).toEqual([]);
+  });
+});
