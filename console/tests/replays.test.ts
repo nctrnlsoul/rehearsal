@@ -152,11 +152,28 @@ describe("Stage A boundaries", () => {
     for (const f of usesReplays) expect(readFileSync(f, "utf8"), f).toMatch(/<ReplayBanner>/);
   });
 
-  it("makes no outbound call: no fetch, no PayPal client, no model client", () => {
+  // Stage B adds outbound calls on purpose, so this names where they may live.
+  // A page, a component, the middleware or the replay code that grew one would
+  // be a new path to PayPal, a model or the database that skipped the gate.
+  const OUTBOUND_ALLOWED = new Set(
+    ["lib/db.ts", "lib/engine.ts", "lib/worker.ts", "lib/live.ts"].map((p) => join(ROOT, ...p.split("/"))),
+  );
+  const isApiRoute = (f: string) => f.startsWith(join(ROOT, "app", "api"));
+
+  it("makes outbound calls only from the named server modules and API routes", () => {
     for (const f of source) {
+      if (OUTBOUND_ALLOWED.has(f) || isApiRoute(f)) continue;
       const text = readFileSync(f, "utf8");
       expect(text, f).not.toMatch(/\bfetch\s*\(/);
       expect(text, f).not.toMatch(/@ai-sdk|from ["']ai["']|PaypalClient|api-m\.sandbox\.paypal\.com\/v/);
+      expect(text, f).not.toMatch(/lib\/(db|engine|worker|live)["']/);
+    }
+  });
+
+  it("calls the network directly only from the database client", () => {
+    for (const f of source) {
+      if (f === join(ROOT, "lib", "db.ts")) continue;
+      expect(readFileSync(f, "utf8"), f).not.toMatch(/\bfetch\s*\(/);
     }
   });
 
