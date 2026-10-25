@@ -88,21 +88,32 @@ describe("POST /api/gate", () => {
     }
   });
 
+  // A refusal is a redirect a browser can follow back to the gate, never a bare
+  // body, and it must reach neither the hash nor the attempt count.
+  async function expectRefused(req: Request) {
+    const hashed: string[] = [];
+    const { deps, limiter } = harness();
+    const res = await handleGatePost(req, { ...deps, verify: (input: string) => (hashed.push(input), true) });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/gate?e=refused");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(hashed).toEqual([]);
+    const after = limiter.check("203.0.113.10");
+    expect(after.allowed && after.ipLeft).toBe(5);
+  }
+
   it("refuses a cross-site, missing or malformed Origin", async () => {
-    const { deps } = harness();
     for (const origin of ["https://evil.example.test", "null", "not a url"]) {
-      const res = await handleGatePost(post(form(PASS), { origin }), deps);
-      expect(res.status).toBe(403);
+      await expectRefused(post(form(PASS), { origin }));
     }
     const noOrigin = post(form(PASS));
     noOrigin.headers.delete("origin");
-    expect((await handleGatePost(noOrigin, deps)).status).toBe(403);
+    await expectRefused(noOrigin);
   });
 
   it("refuses an oversized body, by header or by content", async () => {
-    const { deps } = harness();
-    expect((await handleGatePost(post(form(PASS), { "content-length": String(MAX_BODY_BYTES + 1) }), deps)).status).toBe(413);
-    expect((await handleGatePost(post(form("x".repeat(MAX_BODY_BYTES + 10))), deps)).status).toBe(413);
+    await expectRefused(post(form(PASS), { "content-length": String(MAX_BODY_BYTES + 1) }));
+    await expectRefused(post(form("x".repeat(MAX_BODY_BYTES + 10))));
   });
 
   it("stops reading a chunked body with no length once it passes the cap", async () => {
@@ -125,7 +136,7 @@ describe("POST /api/gate", () => {
     } as RequestInit);
     expect(req.headers.get("content-length")).toBeNull();
     const res = await handleGatePost(req, { ...deps, verify: (input: string) => (hashed.push(input), false) });
-    expect(res.status).toBe(413);
+    expect(res.headers.get("location")).toBe("/gate?e=refused");
     expect(pulled).toBeLessThan(10);
     expect(hashed).toEqual([]);
   });

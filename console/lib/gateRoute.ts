@@ -13,8 +13,9 @@ import {
 
 /**
  * POST /api/gate, as a function of its dependencies so every branch is tested.
- * The form posts here without JavaScript; every outcome is a 303 back to a
- * page, except a cross-site or oversized request, which gets a bare refusal.
+ * The form posts here without JavaScript, so every outcome, refusals included,
+ * is a 303 back to a page: a browser that lands here must never be left on a
+ * bare response.
  */
 
 export type GateDeps = {
@@ -61,12 +62,13 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   } catch {
     sameOrigin = false;
   }
-  if (!sameOrigin) return new Response("forbidden", { status: 403 });
+  // One generic reason for both refusals: neither reaches the limiter or the hash.
+  if (!sameOrigin) return seeOther("/gate?e=refused");
 
   const declared = Number(req.headers.get("content-length") ?? "0");
-  if (!Number.isFinite(declared) || declared > MAX_BODY_BYTES) return new Response("too large", { status: 413 });
+  if (!Number.isFinite(declared) || declared > MAX_BODY_BYTES) return seeOther("/gate?e=refused");
   const body = await readCapped(req, MAX_BODY_BYTES);
-  if (body === null) return new Response("too large", { status: 413 });
+  if (body === null) return seeOther("/gate?e=refused");
 
   const hash = parsePasscodeHash(deps.env[PASSCODE_HASH_VAR]);
   const secret = sessionSecret(deps.env);

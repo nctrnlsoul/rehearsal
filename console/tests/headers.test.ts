@@ -15,7 +15,8 @@ describe("security headers", () => {
     expect(h["Strict-Transport-Security"]).toMatch(/max-age=\d{8,}/);
     expect(h["X-Frame-Options"]).toBe("DENY");
     expect(h["X-Content-Type-Options"]).toBe("nosniff");
-    expect(h["Referrer-Policy"]).toBe("no-referrer");
+    // no-referrer would make the gate's own form POST arrive with "Origin: null".
+    expect(h["Referrer-Policy"]).toBe("same-origin");
     expect(h["Permissions-Policy"]).toContain("camera=()");
   });
 });
