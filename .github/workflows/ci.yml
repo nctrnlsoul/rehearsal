@@ -1,6 +1,6 @@
 name: CI
 
-# Typecheck and unit tests only.
+# Typecheck, unit tests and builds, plus the console's browser tests against its own build.
 #
 # No secrets are referenced and no job talks to PayPal. The test suite is
 # hermetic: the pure core has no I/O at all, the adapter tests inject a fake
@@ -136,4 +136,17 @@ jobs:
       # pinned sha256; its license forbids committing the files. No secrets needed.
       - name: Build
         run: npm run build
+        working-directory: console
+
+      # Chromium matching the pinned playwright version, plus its system libraries.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: console
+
+      # Serves the build above with next start and loads every page in Chromium:
+      # fails on any CSP violation, console error or page that does not hydrate,
+      # and submits the gate form as a browser does. The passcode hash and session
+      # secret are throwaway values the test makes for itself.
+      - name: Browser tests
+        run: npm run test:browser
         working-directory: console
