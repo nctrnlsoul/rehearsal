@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 
@@ -18,10 +18,20 @@ const securityHeaders = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
 ];
 
+const here = dirname(fileURLToPath(import.meta.url));
+
 const config: NextConfig = {
   poweredByHeader: false,
   // Pinned so file tracing cannot latch onto a stray lockfile higher up the tree.
-  outputFileTracingRoot: dirname(fileURLToPath(import.meta.url)),
+  outputFileTracingRoot: here,
+  // The engine lives in ../src and is bundled, not copied. Vercel installs
+  // only this folder, so a package imported from ../src must resolve from this
+  // folder's node_modules first; walking up from ../src would find nothing on
+  // Vercel and, on a dev machine, whatever copy happens to sit higher up.
+  webpack(webpackConfig: { resolve: { modules?: string[] } }) {
+    webpackConfig.resolve.modules = [join(here, "node_modules"), "node_modules"];
+    return webpackConfig;
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
