@@ -64,13 +64,7 @@ export async function POST(req: Request): Promise<Response> {
   // This endpoint is public, so the signature is the only thing distinguishing
   // PayPal from anyone else. An event that does not verify is recorded and
   // ignored, never acted on.
-  const selfOrigin = new URL(req.url).origin;
-  const { verified, detail } = await verifySignature(
-    req.headers,
-    event,
-    process.env,
-    selfOrigin,
-  );
+  const { verified, detail } = await verifySignature(req.headers, event, process.env);
 
   try {
     await handleEvent(db, event, { verified, detail, certHost });

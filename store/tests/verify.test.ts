@@ -142,7 +142,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
   it("returns verified null, and never asks PayPal to verify, when only a bare-origin webhook exists", async () => {
     const origin = freshOrigin();
     const { fetchImpl, calls } = fakePaypal([{ id: "WH-BARE", url: origin }]);
-    const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
+    const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBeNull();
     expect(calls.some((c) => c.endsWith("/verify-webhook-signature"))).toBe(false);
   });
@@ -154,7 +154,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
       { id: "WH-A", url },
       { id: "WH-B", url },
     ]);
-    const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
+    const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBeNull();
     expect(out.detail).toContain("2 webhooks");
     expect(calls.some((c) => c.endsWith("/verify-webhook-signature"))).toBe(false);
@@ -166,7 +166,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
       { id: "WH-BARE", url: origin },
       { id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` },
     ]);
-    const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
+    const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBe(true);
     expect(verifyBodies).toEqual([expect.objectContaining({ webhook_id: "WH-STORE" })]);
   });
@@ -178,7 +178,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
       const { fetchImpl } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }], {
         verificationStatus: status,
       });
-      const out = await verifySignature(signedHeaders(), { id: "E-1" }, CREDS, origin, fetchImpl);
+      const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
       expect(out.verified, String(status)).toBe(false);
     }
   });
@@ -197,7 +197,7 @@ describe("verifySignature refuses junk before any PayPal call", () => {
   it("refuses an unsigned request with no network call at all", async () => {
     const origin = freshOrigin();
     const { fetchImpl, calls } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }]);
-    const out = await verifySignature(new Headers(), { id: "E-1" }, CREDS, origin, fetchImpl);
+    const out = await verifySignature(new Headers(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBe(false);
     expect(out.detail).toContain("paypal-transmission-sig");
     expect(calls).toEqual([]);
@@ -208,7 +208,7 @@ describe("verifySignature refuses junk before any PayPal call", () => {
     const { fetchImpl, calls } = fakePaypal([]);
     const h = full();
     h.delete("paypal-transmission-time");
-    const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
+    const out = await verifySignature(h, { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out).toEqual({ verified: false, detail: "missing paypal-transmission-time" });
     expect(calls).toEqual([]);
   });
@@ -218,7 +218,7 @@ describe("verifySignature refuses junk before any PayPal call", () => {
     const { fetchImpl, calls } = fakePaypal([]);
     const h = full();
     h.set("paypal-cert-url", "https://evil.test/cert");
-    const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
+    const out = await verifySignature(h, { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBe(false);
     expect(calls).toEqual([]);
   });
@@ -229,7 +229,7 @@ describe("verifySignature refuses junk before any PayPal call", () => {
       const { fetchImpl, calls } = fakePaypal([]);
       const h = full();
       h.set("paypal-cert-url", bad);
-      const out = await verifySignature(h, { id: "E-1" }, CREDS, origin, fetchImpl);
+      const out = await verifySignature(h, { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
       expect(out.verified, bad).toBe(false);
       expect(calls, bad).toEqual([]);
     }

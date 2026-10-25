@@ -9,9 +9,10 @@ const SANDBOX_HOST = "api-m.sandbox.paypal.com";
  * authentication boundary rather than a diagnostic. A failure and an
  * inability to check are both reported, and both stop the event acting.
  *
- * The webhook id is discovered by asking PayPal which webhook points at this
- * app's exact handler URL, so there is no chicken-and-egg where the store cannot verify
- * until someone pastes an id that only exists after the first run.
+ * The webhook id is pinned in env (REHEARSAL_STORE_WEBHOOK_ID), or discovered
+ * by asking PayPal which webhook points at this app's exact handler URL, built
+ * from REHEARSAL_STORE_ORIGIN. Discovery means the store can verify without
+ * someone pasting an id that only exists after the first run.
  */
 
 export type VerifyResult = {
@@ -136,11 +137,46 @@ export async function resolveWebhookId(
   return { id: ids[0]! };
 }
 
+export const STORE_ORIGIN_VAR = "REHEARSAL_STORE_ORIGIN";
+
+/**
+ * The store's own origin, from env, never from the request (audit 2026-10-25
+ * L4). The request's Host is chosen by whoever sends it: every alias of the
+ * deployment is a different handler URL, so each one cost a fresh webhook
+ * lookup and a new cache entry. An origin with a path, query or credentials is
+ * refused rather than trimmed, because a guessed-at origin finds the wrong
+ * webhook.
+ */
+export function storeOrigin(
+  env: Record<string, string | undefined>,
+): { origin: string } | { origin: null; detail: string } {
+  const raw = (env[STORE_ORIGIN_VAR] ?? "").trim();
+  if (raw === "") {
+    return {
+      origin: null,
+      detail: `store has neither REHEARSAL_STORE_WEBHOOK_ID nor ${STORE_ORIGIN_VAR}, so it cannot name its webhook`,
+    };
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { origin: null, detail: `${STORE_ORIGIN_VAR} is not a URL` };
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
+    return { origin: null, detail: `${STORE_ORIGIN_VAR} is not https` };
+  }
+  if (raw.replace(/\/$/, "") !== url.origin) {
+    return { origin: null, detail: `${STORE_ORIGIN_VAR} must be an origin only, like https://host` };
+  }
+  return { origin: url.origin };
+}
+
 export async function verifySignature(
   headers: Headers,
   event: unknown,
   env: Record<string, string | undefined>,
-  selfOrigin: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<VerifyResult> {
   const clientId = env["PAYPAL_SELLER_CLIENT_ID"];
@@ -162,7 +198,11 @@ export async function verifySignature(
   const cert = checkCertUrl(certUrl);
   if (!cert.ok) return { verified: false, detail: cert.detail };
 
-  const resolved = await resolveWebhookId(env, selfOrigin, fetchImpl);
+  // A pinned webhook id needs no origin; otherwise the origin comes from env.
+  const pinnedId = (env["REHEARSAL_STORE_WEBHOOK_ID"] ?? "").trim() !== "";
+  const self = storeOrigin(env);
+  if (!pinnedId && self.origin === null) return { verified: null, detail: self.detail };
+  const resolved = await resolveWebhookId(env, self.origin ?? "", fetchImpl);
   if (resolved.id === null) return { verified: null, detail: resolved.detail };
   const webhookId = resolved.id;
 

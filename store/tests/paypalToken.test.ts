@@ -108,7 +108,7 @@ describe("forged requests cost one token, not one each (M3 probe)", () => {
       REHEARSAL_STORE_WEBHOOK_ID: "WH-PINNED",
     };
     for (let i = 0; i < 10; i += 1) {
-      const out = await verifySignature(signed(i), { id: `WH-${i}` }, env, "https://store.test", fetchImpl);
+      const out = await verifySignature(signed(i), { id: `WH-${i}` }, env, fetchImpl);
       expect(out.verified).toBe(false);
     }
     expect(calls.filter((c) => c === "/v1/oauth2/token")).toHaveLength(1);
@@ -126,8 +126,8 @@ describe("forged requests cost one token, not one each (M3 probe)", () => {
       return new Response("{}", { status: 401 });
     }) as typeof fetch;
     const env = { PAYPAL_SELLER_CLIENT_ID: "id", PAYPAL_SELLER_CLIENT_SECRET: "secret", REHEARSAL_STORE_WEBHOOK_ID: "WH" };
-    await verifySignature(signed(1), {}, env, "https://store.test", fetchImpl);
-    await verifySignature(signed(2), {}, env, "https://store.test", fetchImpl);
+    await verifySignature(signed(1), {}, env, fetchImpl);
+    await verifySignature(signed(2), {}, env, fetchImpl);
     expect(tokens).toBe(2);
   });
 });
