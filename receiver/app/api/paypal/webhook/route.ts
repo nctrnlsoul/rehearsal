@@ -1,5 +1,6 @@
 import { checkCertUrl } from "../../../../lib/certUrl";
 import { createLedger, readConfig } from "../../../../lib/ledger";
+import { accessToken, forgetToken } from "../../../../lib/paypalToken";
 
 /**
  * The webhook endpoint PayPal delivers to.
@@ -40,6 +41,15 @@ function detailOf(raw: string): string {
   return Array.from(flat).slice(0, MAX_DETAIL_CHARS).join("");
 }
 
+/** Every PayPal delivery carries these. Lacking any one, it is not a delivery. */
+const REQUIRED_HEADERS = [
+  "paypal-transmission-id",
+  "paypal-transmission-time",
+  "paypal-transmission-sig",
+  "paypal-auth-algo",
+  "paypal-cert-url",
+] as const;
+
 async function verify(
   headers: Headers,
   event: unknown,
@@ -52,6 +62,11 @@ async function verify(
     return { verified: null, detail: "receiver holds no credentials, verification not attempted" };
   }
 
+  // Local checks first. The endpoint is public, so a request that cannot be
+  // PayPal's must be refused before it costs a token call or a verify call.
+  const missing = REQUIRED_HEADERS.filter((h) => (headers.get(h) ?? "").trim() === "");
+  if (missing.length > 0) return { verified: false, detail: `missing ${missing.join(", ")}` };
+
   const certUrl = headers.get("paypal-cert-url") ?? "";
   // cert_url arrives from the request and PayPal will fetch it. We do not fetch
   // it, but we refuse to forward anything but a PayPal API URL.
@@ -59,24 +74,13 @@ async function verify(
   if (!cert.ok) return { verified: false, detail: cert.detail };
 
   try {
-    const basic = Buffer.from(`${clientId}:${clientSecret}`, "utf8").toString("base64");
-    const tokenRes = await fetch(`https://${SANDBOX_HOST}/v1/oauth2/token`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${basic}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: "grant_type=client_credentials",
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!tokenRes.ok) return { verified: false, detail: `token http ${tokenRes.status}` };
-    const token = (await tokenRes.json()) as { access_token?: string };
-    if (!token.access_token) return { verified: false, detail: "no access_token" };
+    const bearer = await accessToken(clientId, clientSecret, fetch);
+    if (bearer === null) return { verified: false, detail: "could not get a PayPal token" };
 
     const res = await fetch(`https://${SANDBOX_HOST}/v1/notifications/verify-webhook-signature`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token.access_token}`,
+        Authorization: `Bearer ${bearer}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -90,6 +94,7 @@ async function verify(
       }),
       signal: AbortSignal.timeout(8000),
     });
+    if (res.status === 401) forgetToken();
     if (!res.ok) return { verified: false, detail: `verify http ${res.status}` };
     const out = (await res.json()) as { verification_status?: string };
     return {
