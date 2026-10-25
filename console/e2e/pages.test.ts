@@ -197,3 +197,35 @@ describe("the gate, submitted by a real browser", () => {
     await ctx.close();
   });
 });
+
+// R-037: the NorthSchema blossom as maker's mark, white on dark, in the header
+// and favicon; the footer credit is text (vault ruling J-023).
+describe("maker's mark", () => {
+  it.each(PAGES)("%s shows the blossom in the header and credits NorthSchema in text below", async (path) => {
+    const { ctx, page } = await watched();
+    await page.goto(base + path, { waitUntil: "load" });
+    const mark = await page.locator(".topbar img.maker-mark").evaluate((img: HTMLImageElement) => {
+      const r = img.getBoundingClientRect();
+      return { loaded: img.complete && img.naturalWidth > 0, natural: [img.naturalWidth, img.naturalHeight], height: r.height, alt: img.alt, src: new URL(img.src).pathname };
+    });
+    expect(mark).toEqual({ loaded: true, natural: [76, 72], height: 36, alt: "Made by NorthSchema", src: "/northschema-blossom.png" });
+    expect(await page.locator("footer.site").innerText()).toMatch(/by NorthSchema$/);
+    expect(await page.locator("footer.site img").count()).toBe(0);
+    await ctx.close();
+  });
+
+  it("the favicon is the blossom PNG, and the old letter icon is gone", async () => {
+    const { ctx, page } = await watched();
+    await page.goto(base + "/", { waitUntil: "load" });
+    const href = await page.locator('link[rel="icon"]').first().getAttribute("href");
+    expect(href).toMatch(/^\/icon\.png/);
+    const icon = await fetch(base + href!);
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get("content-type")).toBe("image/png");
+    const png = Buffer.from(await icon.arrayBuffer());
+    // PNG IHDR: width and height, big-endian, at bytes 16 and 20.
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([64, 64]);
+    expect((await fetch(base + "/icon.svg")).status).toBe(404);
+    await ctx.close();
+  });
+});
