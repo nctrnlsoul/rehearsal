@@ -222,7 +222,11 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
   const byCapture = new Map<string, OrderState>();
 
   for (const row of rows) {
-    if (row.captureId === null) continue;
+    // Orders are built from verified rows only (audit 2026-10-25 L1). A refused
+    // row carries whatever its sender claimed, so it must not set an order's
+    // amount or currency, or make an order appear at all. Rows written before
+    // refused rows stopped carrying fields (H1) are still in the table.
+    if (row.captureId === null || row.verified !== true) continue;
     const current =
       byCapture.get(row.captureId) ??
       {

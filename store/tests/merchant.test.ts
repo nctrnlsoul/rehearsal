@@ -349,6 +349,26 @@ describe("summarise", () => {
     ...over,
   });
 
+  // L1 (audit 2026-10-25): a forged row recorded before H1 carried its own
+  // amount and currency, and the first one seen set the order's.
+  it("takes an order's amount and currency from verified rows only", () => {
+    const state = summarise([
+      row({ action: "refused", verified: false, amount: "999999.00", currency: "XXX", eventId: "FORGED" }),
+      row({ action: "refused", verified: null, amount: "1.00", currency: "YYY", eventId: "UNCHECKED" }),
+      row({}),
+    ]);
+    expect(state.orders).toEqual([
+      expect.objectContaining({ captureId: "CAP-1", amount: "54.00", currency: "USD", fulfilmentCount: 1 }),
+    ]);
+  });
+
+  it("lists no order for a capture that only forged rows name", () => {
+    const state = summarise([row({ action: "refused", verified: false, captureId: "CAP-FAKE" })]);
+    expect(state.orders).toEqual([]);
+    // The refusal is still visible as a delivery, for the finder.
+    expect(state.deliveries[0]).toMatchObject({ eventId: "WH-1", refused: 1 });
+  });
+
   it("groups by capture and counts each action", () => {
     const state = summarise([
       row({}),
