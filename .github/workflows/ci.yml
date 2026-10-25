@@ -1,6 +1,6 @@
 name: CI
 
-# Typecheck and unit tests only.
+# Typecheck, unit tests and builds, plus the console's browser tests against its own build.
 #
 # No secrets are referenced and no job talks to PayPal. The test suite is
 # hermetic: the pure core has no I/O at all, the adapter tests inject a fake
