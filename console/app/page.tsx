@@ -18,7 +18,7 @@ export default function TrustPage() {
       <main>
         <section className="facts-label arrive" style={order(0)} id="facts" aria-labelledby="facts-h">
           <h1 id="facts-h">REHEARSAL facts</h1>
-          <p className="serving">Per run · the same for every scenario, hosted or local</p>
+          <p className="serving">Per run · the defaults in code; a local install can change them with REHEARSAL_MAX_* variables</p>
           <div className="bar-heavy" aria-hidden="true" />
 
           <p className="group-h">Where it can reach</p>
@@ -41,7 +41,8 @@ export default function TrustPage() {
           <p className="group-h">How it proves things</p>
           <dl>
             <div className="line"><dt>Writes with an idempotency key<small>refused before sending if one is missing</small></dt><dd>every POST, PUT, PATCH</dd></div>
-            <div className="line"><dt>Webhooks verified<small>PayPal&apos;s signature, cert host on an exact list of 4</small></dt><dd className="word">every delivery</dd></div>
+            <div className="line"><dt>Webhooks the sample store acts on<small>only after PayPal&apos;s verify call says SUCCESS; cert host on an exact list of 4</small></dt><dd className="word">Verified only</dd></div>
+            <div className="line"><dt>Webhooks the receiver records<small>every arrival, each marked verified, failed or not checked</small></dt><dd className="word">All, marked</dd></div>
             <div className="line"><dt>Verdicts<small>no evidence reads INCONCLUSIVE, never OK</small></dt><dd className="word">On evidence only</dd></div>
           </dl>
           <div className="bar-mid" aria-hidden="true" />
