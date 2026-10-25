@@ -3,6 +3,7 @@ import {
   AttemptLimiter,
   SESSION_COOKIE,
   clientIp,
+  limiterKey,
   parsePasscodeHash,
   readCookie,
   sessionCookieHeader,
@@ -43,17 +44,53 @@ describe("session secret", () => {
 });
 
 describe("clientIp", () => {
-  it("prefers Vercel's own forwarded-for, then x-real-ip, then x-forwarded-for", () => {
-    expect(clientIp(new Headers({ "x-vercel-forwarded-for": "203.0.113.7", "x-forwarded-for": "198.51.100.1" }))).toBe("203.0.113.7");
-    expect(clientIp(new Headers({ "x-real-ip": "203.0.113.8", "x-forwarded-for": "198.51.100.1" }))).toBe("203.0.113.8");
-    expect(clientIp(new Headers({ "x-forwarded-for": "198.51.100.1, 10.0.0.1" }))).toBe("198.51.100.1");
-    expect(clientIp(new Headers({ "x-forwarded-for": "2001:db8::1" }))).toBe("2001:db8::1");
+  it("reads Vercel's own header", () => {
+    expect(clientIp(new Headers({ "x-vercel-forwarded-for": "203.0.113.7" }))).toBe("203.0.113.7");
   });
 
-  it("puts anything that is not an address in one shared bucket", () => {
+  // M2 (audit 2026-10-25): headers a client can set are never a fallback.
+  it("never reads X-Forwarded-For or X-Real-IP, with or without Vercel's header", () => {
+    expect(clientIp(new Headers({ "x-forwarded-for": "198.51.100.1" }))).toBe("unknown");
+    expect(clientIp(new Headers({ "x-real-ip": "198.51.100.1" }))).toBe("unknown");
+    expect(
+      clientIp(new Headers({ "x-vercel-forwarded-for": "203.0.113.7", "x-forwarded-for": "198.51.100.1", "x-real-ip": "198.51.100.2" })),
+    ).toBe("203.0.113.7");
+  });
+
+  it("puts anything that is not exactly one address in one shared bucket", () => {
     expect(clientIp(new Headers())).toBe("unknown");
-    expect(clientIp(new Headers({ "x-forwarded-for": "<script>" }))).toBe("unknown");
+    expect(clientIp(new Headers({ "x-vercel-forwarded-for": "<script>" }))).toBe("unknown");
     expect(clientIp(new Headers({ "x-vercel-forwarded-for": "a".repeat(60) }))).toBe("unknown");
+    expect(clientIp(new Headers({ "x-vercel-forwarded-for": "198.51.100.1, 203.0.113.7" }))).toBe("unknown");
+    expect(clientIp(new Headers({ "x-vercel-forwarded-for": "999.1.1.1" }))).toBe("unknown");
+  });
+});
+
+describe("limiterKey counts IPv6 by /64 (M2)", () => {
+  it("puts every address in one /64 in the same bucket", () => {
+    const keys = ["2001:db8:1:2::1", "2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:0DB8:0001:0002:0:0:0:9", "2001:db8:1:2::1%eth0"].map(limiterKey);
+    expect(new Set(keys)).toEqual(new Set(["2001:db8:1:2::/64"]));
+  });
+
+  it("keeps neighboring /64s apart", () => {
+    expect(limiterKey("2001:db8:1:3::1")).toBe("2001:db8:1:3::/64");
+    expect(limiterKey("::1")).toBe("0:0:0:0::/64");
+    expect(limiterKey("2001:db8::")).toBe("2001:db8:0:0::/64");
+  });
+
+  it("counts an IPv4 address mapped into IPv6 as the IPv4 address", () => {
+    expect(limiterKey("::ffff:203.0.113.7")).toBe("203.0.113.7");
+    expect(limiterKey("::ffff:cb00:7107")).toBe("203.0.113.7");
+  });
+
+  it("keeps IPv4 as the full address", () => {
+    expect(limiterKey("203.0.113.7")).toBe("203.0.113.7");
+  });
+
+  it("refuses malformed IPv6", () => {
+    for (const bad of ["2001:db8::1::2", "2001:db8:1:2:3:4:5:6:7", "2001:db8:::1", "gggg::1", ""]) {
+      expect(limiterKey(bad), bad).toBe("unknown");
+    }
   });
 });
 
@@ -67,35 +104,45 @@ describe("AttemptLimiter", () => {
       expect(l.check("203.0.113.1")).toMatchObject({ allowed: true, ipLeft: 5 - i });
       l.recordFailure("203.0.113.1");
     }
-    expect(l.check("203.0.113.1")).toMatchObject({ allowed: false, reason: "ip" });
+    expect(l.check("203.0.113.1")).toMatchObject({ allowed: false, retryAfterS: 3600 });
     expect(l.check("203.0.113.2")).toMatchObject({ allowed: true });
     now += 3_600_000;
     expect(l.check("203.0.113.1")).toMatchObject({ allowed: true, ipLeft: 5 });
   });
 
-  it("closes for everyone once the global ceiling is reached", () => {
+  // R-036: the global ceiling used to close the gate for everyone.
+  it("refuses no one at or past the global ceiling, and keeps counting", () => {
     const l = new AttemptLimiter(limits, () => T0);
-    for (let i = 0; i < 50; i += 1) l.recordFailure(`198.51.100.${i}`);
-    expect(l.check("203.0.113.99")).toMatchObject({ allowed: false, reason: "global" });
+    const crossed: boolean[] = [];
+    for (let i = 0; i < 60; i += 1) crossed.push(l.recordFailure(`198.51.100.${i}`));
+    expect(l.check("203.0.113.99")).toEqual({ allowed: true, ipLeft: 5 });
+    expect(l.globalFailures).toBe(60);
+    // Reported once, on the failure that reaches the ceiling.
+    expect(crossed.filter(Boolean)).toHaveLength(1);
+    expect(crossed.indexOf(true)).toBe(49);
   });
 
-  it("clears an IP on success but never lowers the global count", () => {
-    const l = new AttemptLimiter({ ...limits, global: 6 }, () => T0);
+  it("still locks one address past the global ceiling", () => {
+    const l = new AttemptLimiter(limits, () => T0);
+    for (let i = 0; i < 50; i += 1) l.recordFailure(`198.51.100.${i}`);
+    for (let i = 0; i < 5; i += 1) l.recordFailure("203.0.113.1");
+    expect(l.check("203.0.113.1")).toMatchObject({ allowed: false });
+  });
+
+  it("clears an address on success but never lowers the global count", () => {
+    const l = new AttemptLimiter(limits, () => T0);
     for (let i = 0; i < 4; i += 1) l.recordFailure("203.0.113.1");
     l.recordSuccess("203.0.113.1");
     expect(l.check("203.0.113.1")).toMatchObject({ allowed: true, ipLeft: 5 });
-    l.recordFailure("203.0.113.2");
-    l.recordFailure("203.0.113.2");
-    expect(l.check("203.0.113.3")).toMatchObject({ allowed: false, reason: "global" });
+    expect(l.globalFailures).toBe(4);
   });
 
   it("keeps memory bounded under a flood of distinct IPs, and keeps counting", () => {
-    // Only reachable with a huge global ceiling; at the default 50 the gate closes first.
-    const l = new AttemptLimiter({ ...limits, global: 1_000_000 }, () => T0);
+    const l = new AttemptLimiter(limits, () => T0);
     for (let i = 0; i < 12_000; i += 1) l.recordFailure(`10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`);
     expect(l.trackedIps).toBeLessThanOrEqual(10_000);
     for (let i = 0; i < 5; i += 1) l.recordFailure("203.0.113.5");
-    expect(l.check("203.0.113.5")).toMatchObject({ allowed: false, reason: "ip" });
+    expect(l.check("203.0.113.5")).toMatchObject({ allowed: false });
   });
 
   it("only stores an IP once it fails, not for asking", () => {

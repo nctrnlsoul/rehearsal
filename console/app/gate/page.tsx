@@ -18,10 +18,6 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
       const m = n(q.m, 60);
       return { kind: "wait", title: "Locked after too many wrong tries", detail: `This network can try again in ${m ?? 60} min. Replays still work while you wait.` };
     }
-    case "busy": {
-      const m = n(q.m, 60);
-      return { kind: "wait", title: "The gate is closed for everyone for now", detail: `Too many wrong passcodes arrived from all networks together. It reopens in ${m ?? 60} min.` };
-    }
     case "refused":
       return { kind: "stop", title: "That request was refused", detail: "It did not arrive as a post from this page. Reload the page and try again. Refused requests do not count as wrong tries." };
     case "closed":
