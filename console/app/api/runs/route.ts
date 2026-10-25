@@ -40,13 +40,17 @@ export async function POST(req: Request): Promise<Response> {
     startWorker: ({ runId, scenario, digest, config, db }) => {
       const token = env["REHEARSAL_STORE_TOKEN"]?.trim() ?? "";
       if (token.length < MIN_STORE_TOKEN_CHARS) log(`run ${runId}: no usable store token, so deliveries will not be read`);
+      // Built here, before after(): a bad credential then throws inside the
+      // hand-off, which cancels the start and gives its quota back.
+      const seller = new PaypalClient(credentialsFor("seller", env), { label: "seller", log, minIntervalMs: THROTTLE_MS });
+      const buyer = new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, minIntervalMs: THROTTLE_MS });
       after(() =>
         runScenarioWorker(
           { runId, scenario, digest },
           {
             db,
-            seller: new PaypalClient(credentialsFor("seller", env), { label: "seller", log, minIntervalMs: THROTTLE_MS }),
-            buyer: new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, minIntervalMs: THROTTLE_MS }),
+            seller,
+            buyer,
             readStore: token.length >= MIN_STORE_TOKEN_CHARS ? storeStateReader({ origin: config.storeOrigin, token }) : null,
             now: () => new Date(),
             sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

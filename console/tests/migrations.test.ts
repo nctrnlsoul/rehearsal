@@ -123,7 +123,13 @@ describe("verify files", () => {
         "create function public.console_extra() returns int language sql security definer set search_path = '' as 'select 1'",
         /FUNCTION WRONG: console_extra\(\)/,
       ],
-      ["grant select on public.console_runs to public", /GRANT WRONG/],
+      ["grant select on public.console_runs to public", /PUBLIC holds a privilege on console_runs/],
+      // Second verifier, D1 to D5: each passed every verify file before.
+      ["grant select (id, status) on public.console_runs to anon", /console_runs has column-level grants/],
+      ["grant update (kind) on public.console_run_events to service_role", /console_run_events has column-level grants/],
+      ["grant maintain on public.console_counters to anon", /console_counters grants something beyond service_role/],
+      ["create table public.console_extra_p (id int) partition by range (id)", /RLS MISSING on console_extra_p/],
+      ["create view public.console_peek as select id, session_hash from public.console_runs", /console_peek is a view/],
     ] as const;
     for (const [ddl, error] of open) {
       const db = await freshDb();
@@ -290,26 +296,32 @@ describe("the fence", () => {
   });
 
   // Verifier finding: the fence used to hold only after something polled. A
-  // server silent for 300 s could still save state and draw a purchase.
-  it("refuses a dead run's own next write even when nobody has polled", async () => {
+  // server silent for 300 s could still save state and draw a purchase. One
+  // fresh database per write, so each write's own reap is what refuses it
+  // (the second verifier found that one shared database let the first write
+  // reap the run for all the others).
+  const ID = "20261025000000-000001";
+  const writes: Array<[string, string]> = [
+    ["save_state", `select public.console_save_state('${ID}', '{"v":2}'::jsonb, '[]'::jsonb) as ok`],
+    ["heartbeat", `select public.console_heartbeat('${ID}') as ok`],
+    ["add_events", `select public.console_add_events('${ID}', '[{"kind":"note"}]'::jsonb) as ok`],
+    ["finish_run", `select public.console_finish_run('${ID}', 'complete', '') as ok`],
+    ["claim_purchase", `select (select count(*) from public.console_claim_purchase('${ID}')) = 1 as ok`],
+  ];
+  const deadRun = async (column: string, seconds: number) => {
+    const db = await freshDb();
+    await start(db, ID);
+    await db.query(`select public.console_mark_running('${ID}')`);
+    await db.exec(`insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)
+                   values ('O-1', 'C-1', 'T-1', '25.00', 'USD', now())`);
+    await age(db, ID, column, seconds);
+    return db;
+  };
+  it.each(writes)("refuses a dead run's own %s even when nobody has polled", async (_name, q) => {
     for (const [column, seconds] of [["heartbeat_at", 300], ["started_at", 900]] as const) {
-      const db = await freshDb();
-      const id = "20261025000000-000001";
-      await start(db, id);
-      await db.query(`select public.console_mark_running('${id}')`);
-      await db.exec(`insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)
-                     values ('O-1', 'C-1', 'T-1', '25.00', 'USD', now())`);
-      await age(db, id, column, seconds);
-      for (const q of [
-        `select public.console_save_state('${id}', '{"v":2}'::jsonb, '[]'::jsonb) as ok`,
-        `select public.console_heartbeat('${id}') as ok`,
-        `select public.console_add_events('${id}', '[{"kind":"note"}]'::jsonb) as ok`,
-        `select public.console_finish_run('${id}', 'complete', '') as ok`,
-      ]) {
-        expect(await one(db, q), `${column} ${q}`).toEqual({ ok: false });
-      }
-      expect((await db.query(`select * from public.console_claim_purchase('${id}')`)).rows).toEqual([]);
-      expect(await status(db, id)).toBe("abandoned");
+      const db = await deadRun(column, seconds);
+      expect(await one(db, q), column).toEqual({ ok: false });
+      expect(await status(db, ID)).toBe("abandoned");
       expect(await one(db, "select available from public.console_bank_counts()")).toEqual({ available: 1 });
     }
   });
@@ -419,13 +431,13 @@ describe("daily quotas", () => {
 
 describe("the gate counters (slot taken first, a right passcode gives back only its own)", () => {
   const take = (db: PGlite, key: string, perIp = 5) =>
-    one<{ allowed: boolean; ip_left: number; retry_after_s: number }>(db, `select * from public.console_gate_take('${key}', ${perIp}, 3600)`);
+    one<{ allowed: boolean; ip_left: number; retry_after_s: number; since: unknown }>(db, `select * from public.console_gate_take('${key}', ${perIp}, 3600)`);
   const fail = (db: PGlite, global = 50) =>
     one<{ hit: boolean }>(db, `select public.console_gate_fail(${global}, 3600) as hit`).then((r) => r.hit);
 
   it("allows 5 tries per address, then refuses for the rest of the hour without counting more", async () => {
     const db = await freshDb();
-    for (let i = 1; i <= 5; i += 1) expect(await take(db, H("1"))).toEqual({ allowed: true, ip_left: 5 - i, retry_after_s: 0 });
+    for (let i = 1; i <= 5; i += 1) expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 5 - i, retry_after_s: 0 });
     const locked = await take(db, H("1"));
     expect(locked.allowed).toBe(false);
     expect(locked.retry_after_s).toBeGreaterThan(3500);
@@ -453,14 +465,29 @@ describe("the gate counters (slot taken first, a right passcode gives back only 
 
   it("gives back exactly one slot on a release, never more, and never below zero", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 5; i += 1) await take(db, H("1"));
-    await db.query(`select public.console_gate_release('${H("1")}')`);
+    let since: unknown = null;
+    for (let i = 0; i < 5; i += 1) since = (await take(db, H("1"))).since;
+    await db.query(`select public.console_gate_release('${H("1")}', $1)`, [since]);
     expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 0 });
     expect(await take(db, H("1"))).toMatchObject({ allowed: false });
-    await take(db, H("2"));
-    for (let i = 0; i < 3; i += 1) await db.query(`select public.console_gate_release('${H("2")}')`);
+    const s2 = (await take(db, H("2"))).since;
+    for (let i = 0; i < 3; i += 1) await db.query(`select public.console_gate_release('${H("2")}', $1)`, [s2]);
     const c = await one<{ count: number }>(db, `select count from public.console_counters where key = '${H("2")}'`);
     expect(c.count).toBe(0);
+  });
+
+  // Second verifier, D6: the hour ended while a judge's passcode was being
+  // hashed, a guesser's try opened a new window, and the judge's release then
+  // took that new window's count to zero: 6 tries against a limit of 5.
+  it("gives nothing back when the window the slot was taken in has already ended", async () => {
+    const db = await freshDb();
+    for (let i = 0; i < 4; i += 1) await take(db, H("1"));
+    const judge = await take(db, H("1"));
+    await db.exec(`update public.console_counters set window_start = window_start - interval '3600 seconds' where scope = 'gate_ip'`);
+    expect(await take(db, H("1"))).toMatchObject({ allowed: true, ip_left: 4 });
+    await db.query(`select public.console_gate_release('${H("1")}', $1)`, [judge.since]);
+    for (let i = 0; i < 4; i += 1) expect(await take(db, H("1"))).toMatchObject({ allowed: true });
+    expect(await take(db, H("1"))).toMatchObject({ allowed: false });
   });
 
   it("treats a per-address limit under 1 as locked", async () => {

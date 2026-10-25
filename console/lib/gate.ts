@@ -119,7 +119,7 @@ export type LimiterConfig = {
 export const DEFAULT_LIMITS: LimiterConfig = { perIp: 5, global: 50, windowMs: 60 * 60 * 1000 };
 
 export type LimitCheck =
-  | { readonly allowed: true; readonly ipLeft: number }
+  | { readonly allowed: true; readonly ipLeft: number; readonly since: string }
   | { readonly allowed: false; readonly retryAfterS: number };
 
 /**
@@ -144,8 +144,8 @@ export type AttemptStore = {
   take(bucket: string): Promise<LimitCheck>;
   /** Counts a wrong try toward the global ceiling. True on the one that reaches it, so the caller logs it once. */
   recordFailure(): Promise<boolean>;
-  /** A correct passcode gives back the slot its own take used. Never more than that one. */
-  release(bucket: string): Promise<void>;
+  /** A correct passcode gives back the slot its own take used, in the window it was taken in. Never more. */
+  release(bucket: string, since: string): Promise<void>;
 };
 
 /**
@@ -171,7 +171,9 @@ export function dbAttemptStore(
       // answer, and an unreadable answer about a lockout is never "allowed".
       const row = Array.isArray(rows) && rows.length === 1 ? (rows[0] as Record<string, unknown> | null) : null;
       if (row === null || typeof row !== "object" || typeof row["allowed"] !== "boolean") throw new Error("gate take returned an unreadable answer");
-      if (row["allowed"] === true && typeof row["ip_left"] === "number") return { allowed: true, ipLeft: row["ip_left"] };
+      if (row["allowed"] === true && typeof row["ip_left"] === "number" && typeof row["since"] === "string") {
+        return { allowed: true, ipLeft: row["ip_left"], since: row["since"] };
+      }
       if (row["allowed"] === false && typeof row["retry_after_s"] === "number") {
         return { allowed: false, retryAfterS: row["retry_after_s"] };
       }
@@ -182,8 +184,8 @@ export function dbAttemptStore(
       if (typeof hit !== "boolean") throw new Error("gate failure count returned an unreadable answer");
       return hit;
     },
-    async release(bucket) {
-      await db.rpc("console_gate_release", { p_key: key(bucket) });
+    async release(bucket, since) {
+      await db.rpc("console_gate_release", { p_key: key(bucket), p_since: since });
     },
   };
 }

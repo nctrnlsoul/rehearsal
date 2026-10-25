@@ -13,6 +13,7 @@ declare
   ok boolean;
   k text := repeat('d', 64);
   r record;
+  v_since timestamptz;
 begin
   foreach t in array array['console_plans', 'console_counters'] loop
     if not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -48,7 +49,7 @@ begin
     'public.console_daily_used(text, text)',
     'public.console_gate_take(text, integer, integer)',
     'public.console_gate_fail(integer, integer)',
-    'public.console_gate_release(text)'] loop
+    'public.console_gate_release(text, timestamptz)'] loop
     select not p.prosecdef and p.proconfig = array['search_path=""'] into ok
       from pg_proc p where p.oid = f::regprocedure;
     if ok is distinct from true then
@@ -88,8 +89,14 @@ begin
     if r.allowed then
       raise exception 'GATE BROKEN: a sixth try within the hour was allowed';
     end if;
-    -- A correct passcode gives back one slot, never more.
-    perform public.console_gate_release(k);
+    -- A correct passcode gives back one slot, never more, and only in its own window.
+    select c.window_start into v_since from public.console_counters c where c.scope = 'gate_ip' and c.key = k;
+    perform public.console_gate_release(k, v_since - interval '1 hour');
+    select * into r from public.console_gate_take(k, 5, 3600);
+    if r.allowed then
+      raise exception 'GATE BROKEN: a release for another window gave a slot back';
+    end if;
+    perform public.console_gate_release(k, v_since);
     select * into r from public.console_gate_take(k, 5, 3600);
     if not r.allowed or r.ip_left <> 0 then
       raise exception 'GATE BROKEN: a release did not give back exactly one slot';

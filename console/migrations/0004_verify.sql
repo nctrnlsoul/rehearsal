@@ -4,12 +4,13 @@
 -- Expected: the DO block finishes without raising, then one row:
 --   start_run_check = 'ok'
 -- Failures raise RLS MISSING, POLICY PRESENT, FUNCTION WRONG, GRANT WRONG,
--- START BROKEN or CANCEL BROKEN. The functional checks run inside a
+-- UNEXPECTED OBJECT, START BROKEN or CANCEL BROKEN. The functional checks run inside a
 -- subtransaction that rolls back on purpose.
 --
--- The sweep finds every console_ table, sequence and function by name in the
--- catalog, not from a list, so one added later and left open is caught here
--- even if its own verify file forgets it.
+-- The sweep finds every console_ table, partitioned table, view, sequence and
+-- function by name in the catalog, not from a list, so one added later and left
+-- open is caught here even if its own verify file forgets it. It reads column
+-- grants and the raw ACL too, not only has_table_privilege.
 
 do $$
 declare
@@ -19,31 +20,50 @@ declare
   b text;
   c text;
 begin
-  for rec in select c.oid, c.relname, c.relkind, c.relrowsecurity
+  for rec in select c.oid, c.relname, c.relkind, c.relrowsecurity, c.relacl, c.relowner
                from pg_class c join pg_namespace n on n.oid = c.relnamespace
-              where n.nspname = 'public' and c.relname like 'console\_%' and c.relkind in ('r', 'S') loop
-    if rec.relkind = 'r' then
-      if not rec.relrowsecurity then
-        raise exception 'RLS MISSING on %', rec.relname;
-      end if;
-      if exists (select 1 from pg_policies where schemaname = 'public' and tablename = rec.relname) then
-        raise exception 'POLICY PRESENT on %: it must have none', rec.relname;
-      end if;
+              where n.nspname = 'public' and c.relname like 'console\_%'
+                and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S') loop
+    -- The console reads its tables only through functions. A view runs as its
+    -- owner and skips RLS, so a console_ view would expose rows to whoever can
+    -- select from it.
+    if rec.relkind in ('v', 'm', 'f') then
+      raise exception 'UNEXPECTED OBJECT: % is a view or foreign table; the console reads only through functions', rec.relname;
+    end if;
+    if rec.relkind in ('r', 'p') and not rec.relrowsecurity then
+      raise exception 'RLS MISSING on %', rec.relname;
+    end if;
+    if rec.relkind in ('r', 'p') and exists (select 1 from pg_policies where schemaname = 'public' and tablename = rec.relname) then
+      raise exception 'POLICY PRESENT on %: it must have none', rec.relname;
+    end if;
+    if exists (select 1 from aclexplode(coalesce(rec.relacl, '{}'::aclitem[])) x where x.grantee = 0) then
+      raise exception 'GRANT WRONG: PUBLIC holds a privilege on %', rec.relname;
+    end if;
+    -- has_table_privilege ignores column grants, so they are refused outright.
+    if exists (select 1 from pg_attribute a where a.attrelid = rec.oid and not a.attisdropped and a.attacl is not null) then
+      raise exception 'GRANT WRONG: % has column-level grants', rec.relname;
+    end if;
+    -- Read from the ACL itself too, so a privilege no list here names (MAINTAIN
+    -- on Postgres 17+, or anything later) is still refused.
+    if rec.relkind <> 'S'
+       and exists (select 1 from aclexplode(coalesce(rec.relacl, '{}'::aclitem[])) x
+                    where x.grantee <> rec.relowner
+                      and (x.grantee <> 'service_role'::regrole
+                           or x.privilege_type not in ('SELECT', 'INSERT', 'UPDATE'))) then
+      raise exception 'GRANT WRONG: % grants something beyond service_role select, insert, update', rec.relname;
+    end if;
+    if rec.relkind in ('r', 'p') then
+      -- Also through role membership, which the ACL alone does not show.
       if has_table_privilege('anon', rec.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
          or has_table_privilege('authenticated', rec.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
          or has_table_privilege('service_role', rec.oid, 'DELETE,TRUNCATE,REFERENCES,TRIGGER') then
         raise exception 'GRANT WRONG: % grants more than service_role select, insert, update', rec.relname;
       end if;
-    else
-      if has_sequence_privilege('anon', rec.oid, 'USAGE,SELECT,UPDATE')
-         or has_sequence_privilege('authenticated', rec.oid, 'USAGE,SELECT,UPDATE')
-         or has_sequence_privilege('service_role', rec.oid, 'USAGE,SELECT,UPDATE') then
-        raise exception 'GRANT WRONG: sequence % is usable from the API', rec.relname;
-      end if;
-    end if;
-    if exists (select 1 from aclexplode(coalesce((select relacl from pg_class where oid = rec.oid), '{}'::aclitem[])) x
-                where x.grantee = 0) then
-      raise exception 'GRANT WRONG: PUBLIC holds a privilege on %', rec.relname;
+    elsif exists (select 1 from aclexplode(coalesce(rec.relacl, '{}'::aclitem[])) x where x.grantee <> rec.relowner)
+          or has_sequence_privilege('anon', rec.oid, 'USAGE,SELECT,UPDATE')
+          or has_sequence_privilege('authenticated', rec.oid, 'USAGE,SELECT,UPDATE')
+          or has_sequence_privilege('service_role', rec.oid, 'USAGE,SELECT,UPDATE') then
+      raise exception 'GRANT WRONG: sequence % is usable from the API', rec.relname;
     end if;
   end loop;
 

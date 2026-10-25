@@ -6,6 +6,7 @@ import { SESSION_COOKIE, signSession } from "../lib/gate";
 import {
   HOSTED_FINDER_CLASSES,
   PLAN_BODY_MAX_BYTES,
+  type FinderDeps,
   type RunsDeps,
   handleBankGet,
   handleFinderPost,
@@ -467,6 +468,38 @@ describe("GET /api/bank", () => {
 });
 
 describe("no route", () => {
+  // Second verifier: the check below covered only refusals. These are the
+  // answers a judge actually gets.
+  it("echoes the session secret, the database key or the database URL when it succeeds", async () => {
+    const h = await harness();
+    await h.addPurchase();
+    const planned = await h.plan(req("/api/plan", { body: { description: "a candle shop" } }));
+    const dry = await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: DISPUTE!.plan } }));
+    const started = await h.runs(req("/api/runs", { body: runBody(DISPUTE!) }));
+    const startedText = await started.text();
+    const runId = String((JSON.parse(startedText) as Record<string, unknown>)["runId"]);
+    const read = await h.get(req(`/api/runs/${runId}`), runId);
+    const bank = await h.bank(req("/api/bank"));
+    const f = await harness();
+    const finder = await handleFinderPost(req("/api/finder", { body: { classId: "overdue-invoice", confirm: true } }), {
+      env: ENV,
+      db: createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: f.rest.fetch }),
+      now: () => T0,
+      paypalReady: true,
+      generate: async () => ({ text: "{}" }),
+      startFinder: () => {},
+    });
+    const responses = [planned, dry, started, read, bank, finder];
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 202, 200, 200, 202]);
+    for (const r of responses) {
+      const text = r === started ? startedText : await r.text();
+      expect(text).not.toContain(SECRET);
+      expect(text).not.toContain(TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY);
+      expect(text).not.toContain(TEST_DB_ENV.SUPABASE_URL);
+      expect(text).not.toContain("supabase.co");
+    }
+  });
+
   it("echoes the session secret, the database key or a store value", async () => {
     const h = await harness();
     h.rest.down = true;
@@ -502,7 +535,7 @@ describe("POST /api/finder", () => {
     const h = await harness(env);
     const startedFinders: Array<{ runId: string; classId: string }> = [];
     const generate: GenerateFn = async () => ({ text: "{}" });
-    const post = (r: Request, over: Partial<{ paypalReady: boolean; generate: GenerateFn | null }> = {}) =>
+    const post = (r: Request, over: Partial<{ paypalReady: boolean; generate: GenerateFn | null; startFinder: FinderDeps["startFinder"] }> = {}) =>
       handleFinderPost(r, {
         env,
         db: createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: h.rest.fetch }),
@@ -546,6 +579,24 @@ describe("POST /api/finder", () => {
     expect((await off.post(req("/api/finder", { body }))).status).toBe(503);
     expect(await h.used("runs_global")).toBe(0);
     expect(await h.used("model_global")).toBe(0);
+  });
+
+  // Second verifier: the finder's hand-off was untested; it could skip the
+  // cancel and nothing noticed.
+  it("gives the run and the model call back when the worker cannot be handed the class", async () => {
+    const h = await finderHarness();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const body = { classId: "overdue-invoice", confirm: true };
+    const r = await h.post(req("/api/finder", { body }), {
+      startFinder: () => {
+        throw new Error("bad credential");
+      },
+    });
+    expect(r.status).toBe(503);
+    expect(await h.used("runs_global")).toBe(0);
+    expect(await h.used("model_global")).toBe(0);
+    expect((await h.pg.query<{ status: string }>("select status from public.console_runs")).rows).toEqual([{ status: "abandoned" }]);
+    expect((await h.post(req("/api/finder", { body }))).status).toBe(202);
   });
 
   it("spends neither the run nor the model call when the model quota is full", async () => {

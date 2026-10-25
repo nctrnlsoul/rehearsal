@@ -292,7 +292,9 @@ describe("POST /api/gate", () => {
       { allowed: true, ip_left: 5 },
       null,
       // Verifier finding: only the first row used to be read, so a second row saying "refused" was ignored.
-      [{ allowed: true, ip_left: 5, retry_after_s: 0 }, { allowed: false, ip_left: 0, retry_after_s: 3600 }],
+      [{ allowed: true, ip_left: 5, retry_after_s: 0, since: "2026-10-24T12:00:00Z" }, { allowed: false, ip_left: 0, retry_after_s: 3600, since: null }],
+      // Allowed, but with no window to give the slot back into.
+      [{ allowed: true, ip_left: 5, retry_after_s: 0 }],
     ]) {
       const db = { rpc: async () => answer };
       const res = await handleGatePost(post(form(PASS)), { env: ENV, attempts: dbAttemptStore(db, SECRET), now: () => T0 });

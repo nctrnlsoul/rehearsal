@@ -157,11 +157,12 @@ $$;
 --     "unknown" bucket) never resets the guesser's count.
 -- -------------------------------------------------------------------------
 
--- Allowed: the slot is taken and ip_left is what remains after it. Refused:
--- nothing changes and retry_after_s says when the window ends. Concurrent
--- calls for one key queue on the row, and each re-reads the count it sees.
+-- Allowed: the slot is taken, ip_left is what remains after it, and since
+-- names the window it was taken in (the release needs it). Refused: nothing
+-- changes and retry_after_s says when the window ends. Concurrent calls for
+-- one key queue on the row, and each re-reads the count it sees.
 create or replace function public.console_gate_take(p_key text, p_per_ip integer, p_window_s integer)
-returns table (allowed boolean, ip_left integer, retry_after_s integer)
+returns table (allowed boolean, ip_left integer, retry_after_s integer, since timestamptz)
 language plpgsql
 security invoker
 set search_path = ''
@@ -172,7 +173,7 @@ declare
   v_since timestamptz;
 begin
   if p_per_ip is null or p_per_ip < 1 then
-    return query select false, 0, p_window_s;
+    return query select false, 0, p_window_s, null::timestamptz;
     return;
   end if;
 
@@ -182,10 +183,10 @@ begin
     set count = case when now() - c.window_start >= v_window then 1 else c.count + 1 end,
         window_start = case when now() - c.window_start >= v_window then now() else c.window_start end
     where now() - c.window_start >= v_window or c.count < p_per_ip
-  returning c.count into v_count;
+  returning c.count, c.window_start into v_count, v_since;
 
   if v_count is not null then
-    return query select true, p_per_ip - v_count, 0;
+    return query select true, p_per_ip - v_count, 0, v_since;
     return;
   end if;
 
@@ -193,7 +194,7 @@ begin
     from public.console_counters c
    where c.scope = 'gate_ip' and c.key = p_key;
   return query select false, 0,
-    greatest(1, ceil(extract(epoch from (v_since + v_window - now())))::integer);
+    greatest(1, ceil(extract(epoch from (v_since + v_window - now())))::integer), null::timestamptz;
 end;
 $$;
 
@@ -220,10 +221,11 @@ begin
 end;
 $$;
 
--- The slot a correct passcode's try took, given back. Never below zero. It
--- cannot hand anyone a try they did not spend: the gate route releases at
--- most once, after the take its own request made.
-create or replace function public.console_gate_release(p_key text)
+-- The slot a correct passcode's try took, given back, and only inside the
+-- window it was taken in (p_since, from the take). If that window ended while
+-- the passcode was being hashed, a new window has its own count, which this
+-- try never added to, so nothing is given back. Never below zero.
+create or replace function public.console_gate_release(p_key text, p_since timestamptz)
 returns void
 language sql
 security invoker
@@ -231,7 +233,7 @@ set search_path = ''
 as $$
   update public.console_counters
      set count = count - 1
-   where scope = 'gate_ip' and key = p_key and count > 0;
+   where scope = 'gate_ip' and key = p_key and window_start = p_since and count > 0;
 $$;
 
 revoke all on function public.console_save_plan(text, text, jsonb, text) from public, anon, authenticated;
@@ -242,11 +244,11 @@ revoke all on function public.console_take_daily(text[], text[], integer[]) from
 revoke all on function public.console_daily_used(text, text) from public, anon, authenticated;
 revoke all on function public.console_gate_take(text, integer, integer) from public, anon, authenticated;
 revoke all on function public.console_gate_fail(integer, integer) from public, anon, authenticated;
-revoke all on function public.console_gate_release(text) from public, anon, authenticated;
+revoke all on function public.console_gate_release(text, timestamptz) from public, anon, authenticated;
 grant execute on function public.console_take_daily(text[], text[], integer[]) to service_role;
 grant execute on function public.console_daily_used(text, text) to service_role;
 grant execute on function public.console_gate_take(text, integer, integer) to service_role;
 grant execute on function public.console_gate_fail(integer, integer) to service_role;
-grant execute on function public.console_gate_release(text) to service_role;
+grant execute on function public.console_gate_release(text, timestamptz) to service_role;
 
 notify pgrst, 'reload schema';

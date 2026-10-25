@@ -114,7 +114,7 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   }
 
   try {
-    await attempts.release(ip);
+    await attempts.release(ip, check.since);
   } catch (e) {
     // The passcode was right; a slot not given back only means one fewer try later, never more.
     console.error(`gate: slot could not be given back (${e instanceof Error ? e.name : "error"})`);

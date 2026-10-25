@@ -40,13 +40,17 @@ export async function POST(req: Request): Promise<Response> {
     generate: key === "" ? null : anthropicGenerator({ apiKey: key, model }),
     startFinder: ({ runId, classId, config, db, generate }) => {
       const token = env["REHEARSAL_STORE_TOKEN"]?.trim() ?? "";
+      // Built here, before after(): a bad credential then throws inside the
+      // hand-off, which cancels the start and gives its quota back.
+      const seller = new PaypalClient(credentialsFor("seller", env), { label: "seller", log, minIntervalMs: THROTTLE_MS });
+      const buyer = new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, minIntervalMs: THROTTLE_MS });
       after(() =>
         runFinderWorker(
           { runId, classId },
           {
             db,
-            seller: new PaypalClient(credentialsFor("seller", env), { label: "seller", log, minIntervalMs: THROTTLE_MS }),
-            buyer: new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, minIntervalMs: THROTTLE_MS }),
+            seller,
+            buyer,
             // The finder's verdict rests on the store's records; without a token it is INCONCLUSIVE.
             readStore: token.length >= MIN_STORE_TOKEN_CHARS ? storeStateReader({ origin: config.storeOrigin, token }) : null,
             now: () => new Date(),
