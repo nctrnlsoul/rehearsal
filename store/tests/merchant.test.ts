@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Db, StoreRow } from "../lib/db";
 import {
   DEDUPE_BY_EVENT_ID,
+  MAX_FIELD_CHARS,
   MAX_REASON_CHARS,
   actionFor,
   certHostOf,
@@ -21,11 +22,14 @@ const captureEvent = (eventId: string, captureId = "CAP-1", amount = "54.00") =>
 function fakeDb() {
   const inserted: Array<Omit<StoreRow, "receivedAtMs">> = [];
   const db: Db = {
-    async hasEvent(eventId) {
-      // Mirrors the real lookup: only a verified, non-refused row counts as seen.
-      return inserted.some(
-        (r) => r.eventId === eventId && r.verified === true && r.action !== "refused",
+    async recordOnce(event) {
+      // Mirrors store_record_event: only a verified, non-refused row counts as seen.
+      const seen = inserted.some(
+        (r) => r.eventId === event.eventId && r.verified === true && r.action !== "refused",
       );
+      const action = seen ? "duplicate_ignored" : event.action;
+      inserted.push({ ...event, action, verified: true, reason: null });
+      return action;
     },
     async insert(row) {
       inserted.push(row);
@@ -171,7 +175,7 @@ describe("signature enforcement", () => {
     expect(action).toBe("refused");
     expect(inserted[0]!.action).toBe("refused");
     expect(inserted[0]!.reason).toBe("missing paypal-transmission-sig");
-    expect(summarise(inserted.map((r) => ({ ...r, receivedAtMs: 0 }))).orders[0]!.fulfilmentCount).toBe(0);
+    expect(summarise(inserted.map((r) => ({ ...r, receivedAtMs: 0 }))).orders).toEqual([]);
   });
 
   it("never fulfils when it could not check at all, and records why", async () => {
@@ -217,20 +221,65 @@ describe("signature enforcement", () => {
     ]);
   });
 
-  it("records the cert host on a refusal and on an acted-on event alike", async () => {
+  it("records the cert host on an acted-on event, never on a refusal", async () => {
     const { db, inserted } = fakeDb();
-    await recordRefusal(db, "body is not JSON", "api.sandbox.paypal.com");
     await handleEvent(db, captureEvent("WH-BAD"), {
       verified: false,
-      detail: "paypal-cert-url host certs.evil.test is not paypal.com",
+      detail: "paypal-cert-url host certs.evil.test is not a PayPal API host",
       certHost: "certs.evil.test",
     });
     await handleEvent(db, captureEvent("WH-GOOD"), { verified: true, certHost: "api.sandbox.paypal.com" });
     expect(inserted.map((r) => [r.action, r.certHost])).toEqual([
-      ["refused", "api.sandbox.paypal.com"],
-      ["refused", "certs.evil.test"],
+      ["refused", null],
       ["fulfilled", "api.sandbox.paypal.com"],
     ]);
+    // The refusal still says what the request claimed, inside its bounded reason.
+    expect(inserted[0]!.reason).toContain("certs.evil.test");
+  });
+
+  // H1 (audit 2026-10-25): a refused delivery copied every field the caller
+  // sent, so one anonymous POST could store about a megabyte.
+  it("records a refused event as its reason only, whatever the caller sent", async () => {
+    const { db, inserted } = fakeDb();
+    const huge = "x".repeat(900_000);
+    await handleEvent(
+      db,
+      { id: huge, event_type: huge, resource: { id: huge, amount: { value: huge, currency_code: huge } } },
+      { verified: false, detail: "missing paypal-transmission-id", certHost: "api.sandbox.paypal.com" },
+    );
+    expect(inserted).toEqual([
+      {
+        eventId: null,
+        eventType: "UNKNOWN",
+        captureId: null,
+        amount: null,
+        currency: null,
+        action: "refused",
+        verified: false,
+        reason: "missing paypal-transmission-id",
+        certHost: null,
+      },
+    ]);
+    expect(JSON.stringify(inserted).length).toBeLessThan(400);
+  });
+
+  it("records an overlong field of a verified event as absent, never stores it", async () => {
+    const { db, inserted } = fakeDb();
+    const long = "y".repeat(MAX_FIELD_CHARS + 1);
+    const ok = "z".repeat(MAX_FIELD_CHARS);
+    await handleEvent(
+      db,
+      { id: ok, event_type: long, resource: { id: long, amount: { value: long, currency_code: long } } },
+      { verified: true },
+    );
+    expect(inserted[0]).toMatchObject({
+      eventId: ok,
+      eventType: "UNKNOWN",
+      captureId: null,
+      amount: null,
+      currency: null,
+      action: "ignored",
+    });
   });
 
   it("records no cert host when the caller had none", async () => {
@@ -256,7 +305,8 @@ describe("signature enforcement", () => {
     await handleEvent(db, captureEvent("WH-FORGED"), { verified: false });
     expect(inserted).toHaveLength(1);
     expect(inserted[0]!.verified).toBe(false);
-    expect(inserted[0]!.eventId).toBe("WH-FORGED");
+    // Visible as a refusal with its reason; the claimed id is not kept (H1).
+    expect(inserted[0]!).toMatchObject({ action: "refused", eventId: null, reason: "signature did not verify" });
   });
 
   it("acts only on a verified event", async () => {
@@ -297,6 +347,26 @@ describe("summarise", () => {
     certHost: null,
     receivedAtMs: 0,
     ...over,
+  });
+
+  // L1 (audit 2026-10-25): a forged row recorded before H1 carried its own
+  // amount and currency, and the first one seen set the order's.
+  it("takes an order's amount and currency from verified rows only", () => {
+    const state = summarise([
+      row({ action: "refused", verified: false, amount: "999999.00", currency: "XXX", eventId: "FORGED" }),
+      row({ action: "refused", verified: null, amount: "1.00", currency: "YYY", eventId: "UNCHECKED" }),
+      row({}),
+    ]);
+    expect(state.orders).toEqual([
+      expect.objectContaining({ captureId: "CAP-1", amount: "54.00", currency: "USD", fulfilmentCount: 1 }),
+    ]);
+  });
+
+  it("lists no order for a capture that only forged rows name", () => {
+    const state = summarise([row({ action: "refused", verified: false, captureId: "CAP-FAKE" })]);
+    expect(state.orders).toEqual([]);
+    // The refusal is still visible as a delivery, for the finder.
+    expect(state.deliveries[0]).toMatchObject({ eventId: "WH-1", refused: 1 });
   });
 
   it("groups by capture and counts each action", () => {

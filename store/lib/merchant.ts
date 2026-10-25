@@ -1,4 +1,4 @@
-import type { Db, StoreAction, StoreRow } from "./db";
+import type { Db, StoreAction, StoreRow, VerifiedAction } from "./db";
 
 /**
  * The merchant app's own logic: what a typical small shop does when PayPal
@@ -25,8 +25,16 @@ export type ParsedEvent = {
   currency: string | null;
 };
 
+/**
+ * Longest event field the store records. PayPal ids, types, amounts and
+ * currency codes are all far shorter; anything longer did not come from PayPal
+ * and is recorded as absent rather than stored. Migration 0004 holds the same
+ * line in the database.
+ */
+export const MAX_FIELD_CHARS = 128;
+
 const str = (v: unknown): string | null =>
-  typeof v === "string" && v.trim() !== "" ? v : null;
+  typeof v === "string" && v.trim() !== "" && v.length <= MAX_FIELD_CHARS ? v : null;
 
 const obj = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -56,7 +64,7 @@ export function readEvent(body: unknown): ParsedEvent {
   };
 }
 
-export function actionFor(eventType: string): StoreAction {
+export function actionFor(eventType: string): VerifiedAction {
   switch (eventType) {
     case "PAYMENT.CAPTURE.COMPLETED":
       return "fulfilled";
@@ -103,22 +111,27 @@ export function certHostOf(certUrl: string | null): string | null {
  * a body that is not JSON. Without a row it would be invisible, and a refused
  * delivery would look exactly like one that never arrived.
  */
-export async function recordRefusal(
-  db: Db,
-  reason: string,
-  certHost: string | null = null,
-): Promise<void> {
-  await db.insert({
+export async function recordRefusal(db: Db, reason: string): Promise<void> {
+  await db.insert(refusedRow(null, reason));
+}
+
+/**
+ * A refused row keeps the reason and nothing the request claimed. The endpoint
+ * is public, so every other field would be whatever an anonymous caller chose
+ * to send, at whatever size, and none of it is evidence of anything.
+ */
+function refusedRow(verified: boolean | null, reason: string): Omit<StoreRow, "receivedAtMs"> {
+  return {
     eventId: null,
     eventType: "UNKNOWN",
     captureId: null,
     amount: null,
     currency: null,
     action: "refused",
-    verified: null,
+    verified,
     reason: cleanReason(reason),
-    certHost,
-  });
+    certHost: null,
+  };
 }
 
 export async function handleEvent(
@@ -142,29 +155,20 @@ export async function handleEvent(
   if (opts.verified !== true) {
     const why =
       opts.detail ?? (opts.verified === false ? "signature did not verify" : "could not verify");
-    await db.insert({
-      ...parsed,
-      action: "refused",
-      verified: opts.verified,
-      reason: cleanReason(why),
-      certHost,
-    });
+    await db.insert(refusedRow(opts.verified, why));
     return "refused";
   }
 
-  if (dedupe && parsed.eventId !== null && (await db.hasEvent(parsed.eventId))) {
-    // Recorded rather than dropped, so a duplicate is visible as handled.
-    await db.insert({
-      ...parsed,
-      action: "duplicate_ignored",
-      verified: opts.verified,
-      reason: null,
-      certHost,
-    });
-    return "duplicate_ignored";
+  const action = actionFor(parsed.eventType);
+
+  // The check and the insert are one atomic call, so two deliveries of one
+  // event arriving together cannot both act. A duplicate is still recorded
+  // rather than dropped, so it is visible as handled.
+  if (dedupe && parsed.eventId !== null) {
+    return db.recordOnce({ ...parsed, eventId: parsed.eventId, action, certHost });
   }
 
-  const action = actionFor(parsed.eventType);
+  // The planted bug's path, and the path for an event with no id to dedupe on.
   await db.insert({ ...parsed, action, verified: opts.verified, reason: null, certHost });
   return action;
 }
@@ -218,7 +222,11 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
   const byCapture = new Map<string, OrderState>();
 
   for (const row of rows) {
-    if (row.captureId === null) continue;
+    // Orders are built from verified rows only (audit 2026-10-25 L1). A refused
+    // row carries whatever its sender claimed, so it must not set an order's
+    // amount or currency, or make an order appear at all. Rows written before
+    // refused rows stopped carrying fields (H1) are still in the table.
+    if (row.captureId === null || row.verified !== true) continue;
     const current =
       byCapture.get(row.captureId) ??
       {

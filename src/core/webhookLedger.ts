@@ -48,7 +48,33 @@ export type ReconcileOptions = {
    * lost event from one it simply cannot see.
    */
   readonly ledgerVerified?: boolean;
+  /**
+   * True when the receiver holds credentials and so marks every row verified
+   * or not (see receiverVerifies). Then only verified rows count as arrivals
+   * (audit 2026-10-25 L2): the receiver's endpoint is public, so an unverified
+   * row with an expected event id is anyone's POST, not PayPal's delivery.
+   */
+  readonly verifiedOnly?: boolean;
 };
+
+/**
+ * Whether the receiver verifies signatures, read from the row it recorded for
+ * our own unsigned self-test POST. A receiver with credentials records that
+ * POST as verified=false (it lacks PayPal's headers); one without records
+ * verified=null. No row at all proves nothing, so it is not "verifies".
+ */
+export function receiverVerifies(probe: { readonly verified: boolean | null } | undefined): boolean {
+  return probe !== undefined && probe.verified !== null;
+}
+
+/** The rows for one event id that count as its arrivals under the same rule as reconcile. */
+export function arrivalsOf<T extends { readonly eventId: string | null; readonly verified: boolean | null }>(
+  rows: readonly T[],
+  eventId: string,
+  verifiedOnly: boolean,
+): T[] {
+  return rows.filter((r) => r.eventId === eventId && (!verifiedOnly || r.verified === true));
+}
 
 export function reconcile(
   expected: readonly Expectation[],
@@ -56,6 +82,9 @@ export function reconcile(
   options: ReconcileOptions = {},
 ): LedgerReport {
   const notes: string[] = [];
+  const verifiedOnly = options.verifiedOnly === true;
+  const uncounted = verifiedOnly ? arrivals.filter((a) => a.verified !== true).length : 0;
+  arrivals = verifiedOnly ? arrivals.filter((a) => a.verified === true) : arrivals;
   const instanceIds = [...new Set(arrivals.map((a) => a.instanceId))].sort();
   const ledgerVerified = options.ledgerVerified === true;
   // Two independent reasons the ledger may be partial: it spans instances, or it
@@ -117,6 +146,11 @@ export function reconcile(
   }
   if (matched.some((m) => m.verified === null)) {
     notes.push("receiver did not verify signatures, so verification is unproven for these events");
+  }
+  if (uncounted > 0) {
+    notes.push(
+      `${uncounted} unverified arrival(s) not counted: the receiver verifies signatures, so only verified rows are evidence of a PayPal delivery`,
+    );
   }
   if (unexpected.length > 0) {
     notes.push(`${unexpected.length} arrival(s) matched no expectation`);

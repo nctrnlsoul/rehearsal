@@ -11,6 +11,9 @@ import { DEDUPE_BY_EVENT_ID, summarise } from "../../../../lib/merchant";
  */
 
 export const runtime = "nodejs";
+
+/** Shortest shared secret this endpoint will accept as configured. */
+const MIN_TOKEN_CHARS = 32;
 export const dynamic = "force-dynamic";
 export const preferredRegion = ["iad1"];
 
@@ -24,6 +27,12 @@ export async function GET(req: Request): Promise<Response> {
   const expected = process.env["REHEARSAL_STORE_TOKEN"];
   // Fail closed: an unset token locks the endpoint rather than opening it.
   if (expected === undefined || expected.trim() === "") {
+    return Response.json({ error: "store not configured" }, { status: 503 });
+  }
+  // A short shared secret can be guessed, so it locks the endpoint too (audit
+  // 2026-10-25 L5). The log names the length rule, never the value.
+  if (expected.trim().length < MIN_TOKEN_CHARS) {
+    console.error(`REHEARSAL_STORE_TOKEN is shorter than ${MIN_TOKEN_CHARS} characters`);
     return Response.json({ error: "store not configured" }, { status: 503 });
   }
 

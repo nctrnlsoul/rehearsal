@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "../app/api/store/state/route";
 
 /**
@@ -6,7 +6,7 @@ import { GET } from "../app/api/store/state/route";
  * function over a Request, so this needs no server and no Supabase project.
  */
 
-const TOKEN = "test-only-store-token";
+const TOKEN = "test-only-store-token-32-characters-long";
 const BASE = "https://store.test/api/store/state";
 
 let saved: Record<string, string | undefined>;
@@ -52,6 +52,23 @@ describe("store state endpoint gates", () => {
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ error: "store not configured" });
     }
+  });
+
+  // L5 (audit 2026-10-25): a short shared secret is guessable, so it is a misconfiguration.
+  it("locks itself when the token is under 32 characters, even for a caller who sends it", async () => {
+    const short = "s".repeat(31);
+    process.env["REHEARSAL_STORE_TOKEN"] = short;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await get("", `Bearer ${short}`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "store not configured" });
+  });
+
+  it("accepts a token of exactly 32 characters", async () => {
+    const exact = "e".repeat(32);
+    process.env["REHEARSAL_STORE_TOKEN"] = exact;
+    const res = await get("", `Bearer ${exact}`);
+    expect(await res.json()).not.toEqual({ error: "store not configured" });
   });
 
   it("checks auth before the query, so an anonymous caller learns nothing", async () => {

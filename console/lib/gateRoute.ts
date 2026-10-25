@@ -74,12 +74,14 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   const secret = sessionSecret(deps.env);
   if (hash === null || secret === null) return seeOther("/gate?e=closed");
 
-  // Refused before the passcode is hashed, so a locked-out caller costs no scrypt work.
+  // Refused before the passcode is hashed, so a locked-out caller costs no
+  // scrypt work. Only the caller's own count refuses: past the global ceiling
+  // the right passcode still opens the gate (R-036).
   const ip = clientIp(req.headers);
   const check = deps.limiter.check(ip);
   if (!check.allowed) {
     const minutes = Math.max(1, Math.ceil(check.retryAfterS / 60));
-    return seeOther(`/gate?e=${check.reason === "global" ? "busy" : "locked"}&m=${minutes}`);
+    return seeOther(`/gate?e=locked&m=${minutes}`);
   }
 
   const passcode = new URLSearchParams(body).get("passcode") ?? "";
@@ -87,7 +89,9 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   // Checked before hashing: scrypt never runs on an empty or oversized input.
   const ok = passcode !== "" && passcode.length <= PASSCODE_MAX_CHARS && verify(passcode, hash);
   if (!ok) {
-    deps.limiter.recordFailure(ip);
+    if (deps.limiter.recordFailure(ip)) {
+      console.warn("gate: wrong passcodes from all addresses reached the global ceiling this window");
+    }
     return seeOther(`/gate?e=wrong&left=${Math.max(0, check.ipLeft - 1)}`);
   }
 

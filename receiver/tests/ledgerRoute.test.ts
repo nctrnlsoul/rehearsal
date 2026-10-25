@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "../app/api/paypal/ledger/route";
 
 /**
@@ -6,7 +6,7 @@ import { GET } from "../app/api/paypal/ledger/route";
  * function over a Request, so this needs no server and no Supabase project.
  */
 
-const TOKEN = "test-only-receiver-token";
+const TOKEN = "test-only-receiver-token-32-characters-long";
 const URL_BASE = "https://receiver.test/api/paypal/ledger";
 
 let saved: Record<string, string | undefined>;
@@ -60,6 +60,23 @@ describe("ledger read endpoint gates", () => {
 
   // Auth is checked before anything else, so an unauthenticated caller cannot
   // probe the endpoint's configuration through its error codes.
+  // L5 (audit 2026-10-25): a short shared secret is guessable, so it is a misconfiguration.
+  it("locks itself when the token is under 32 characters, even for a caller who sends it", async () => {
+    const short = "s".repeat(31);
+    process.env["REHEARSAL_RECEIVER_TOKEN"] = short;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await get("", `Bearer ${short}`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "receiver not configured" });
+  });
+
+  it("accepts a token of exactly 32 characters", async () => {
+    const exact = "e".repeat(32);
+    process.env["REHEARSAL_RECEIVER_TOKEN"] = exact;
+    const res = await get("", `Bearer ${exact}`);
+    expect(await res.json()).not.toEqual({ error: "receiver not configured" });
+  });
+
   it("checks auth before validating the query", async () => {
     expect((await get("?since=not-a-timestamp", null)).status).toBe(401);
   });

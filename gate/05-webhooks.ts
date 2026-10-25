@@ -4,7 +4,13 @@ import { assertAllowedEventTarget } from "../src/core/eventTarget";
 import { seedOf, senderBatchId } from "../src/core/idempotency";
 import { fromMinor, splitPartial, toMinor } from "../src/core/money";
 import { classify } from "../src/core/outcome";
-import { type Arrival, type Expectation, reconcile } from "../src/core/webhookLedger";
+import {
+  type Arrival,
+  type Expectation,
+  arrivalsOf,
+  receiverVerifies,
+  reconcile,
+} from "../src/core/webhookLedger";
 import { CURRENCY, cardOrderBody, unclaimedReceiver } from "./_fixtures";
 import { errorSummary, pick, runGate, saveState, sleep } from "./_harness";
 
@@ -127,9 +133,11 @@ await runGate({
     ctx.log(`ledger self-test POST returned http ${probe.status}`);
 
     let ledgerVerified = false;
+    let probeRow: LedgerRow | undefined;
     for (let attempt = 1; attempt <= 3 && !ledgerVerified; attempt += 1) {
       const snap = await readLedger();
-      ledgerVerified = snap.rows.some((r) => r.eventId === probeId);
+      probeRow = snap.rows.find((r) => r.eventId === probeId);
+      ledgerVerified = probeRow !== undefined;
       ctx.log(
         `ledger self-test read ${attempt}: instance ${snap.instanceId}, probe ${ledgerVerified ? "VISIBLE" : "not visible"}`,
       );
@@ -143,6 +151,16 @@ await runGate({
         qualifier: "BLOCKED",
       };
     }
+
+    // With credentials the receiver marks every row verified or not, and then
+    // only verified rows count: its endpoint is public, so an unverified row
+    // carrying an expected event id could be anyone's POST.
+    const verifiedOnly = receiverVerifies(probeRow);
+    ctx.log(
+      verifiedOnly
+        ? "receiver verifies signatures: only verified rows count as arrivals"
+        : "receiver does not verify signatures: every row counts, and verification is unproven",
+    );
 
     const client = new PaypalClient(credentialsFor("seller"), {
       label: "seller",
@@ -319,14 +337,14 @@ await runGate({
           verified: r.verified,
           instanceId: r.instanceId,
         }));
-      const have = new Set(arrivals.map((a) => a.eventId));
+      const have = new Set(arrivals.filter((a) => !verifiedOnly || a.verified === true).map((a) => a.eventId));
       const outstanding = expected.filter((e) => !have.has(e.eventId)).length;
       ctx.log(`receiver has ${arrivals.length} row(s), ${outstanding} expected event(s) outstanding`);
       if (outstanding === 0) break;
       await sleep(5000);
     }
 
-    const report = reconcile(expected, arrivals, { ledgerVerified });
+    const report = reconcile(expected, arrivals, { ledgerVerified, verifiedOnly });
     for (const m of report.matched) {
       ctx.log(`  arrived ${m.eventType} ${m.eventId} after ${m.latencyMs}ms verified=${m.verified}`);
     }
@@ -352,7 +370,7 @@ await runGate({
       };
     }
 
-    const beforeCount = arrivals.filter((a) => a.eventId === resendTarget.eventId).length;
+    const beforeCount = arrivalsOf(arrivals, resendTarget.eventId, verifiedOnly).length;
     const resend = await client.call({
       method: "POST",
       path: `/v1/notifications/webhooks-events/${resendTarget.eventId}/resend`,
@@ -373,7 +391,7 @@ await runGate({
     const resendDeadline = Date.now() + RESEND_POLL_BUDGET_MS;
     while (Date.now() < resendDeadline) {
       const snap = await readLedger();
-      afterCount = snap.rows.filter((r) => r.eventId === resendTarget.eventId).length;
+      afterCount = arrivalsOf(snap.rows, resendTarget.eventId, verifiedOnly).length;
       ctx.log(`resent event seen ${afterCount} time(s), was ${beforeCount}`);
       if (afterCount > beforeCount) break;
       await sleep(5000);

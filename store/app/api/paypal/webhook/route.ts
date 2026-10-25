@@ -1,5 +1,6 @@
 import { createDb, readConfig } from "../../../../lib/db";
 import { certHostOf, handleEvent, recordRefusal } from "../../../../lib/merchant";
+import { readBodyCapped } from "../../../../lib/body";
 import { verifySignature } from "../../../../lib/verify";
 
 /**
@@ -41,16 +42,16 @@ export async function POST(req: Request): Promise<Response> {
   // not the row could be written: recording is evidence, never a way in.
   const refuse = async (status: number, reason: string): Promise<Response> => {
     try {
-      await recordRefusal(db, reason, certHost);
+      await recordRefusal(db, reason);
     } catch (e) {
       console.error(`store could not record a refusal: ${(e as Error).message}`);
     }
     return Response.json({ ok: false }, { status });
   };
 
-  const raw = await req.text();
-  if (raw.length > MAX_BODY_BYTES) {
-    return refuse(413, `body over ${MAX_BODY_BYTES} characters`);
+  const raw = await readBodyCapped(req, MAX_BODY_BYTES);
+  if (raw === null) {
+    return refuse(413, `body over ${MAX_BODY_BYTES} bytes`);
   }
 
   let event: unknown;
@@ -63,13 +64,7 @@ export async function POST(req: Request): Promise<Response> {
   // This endpoint is public, so the signature is the only thing distinguishing
   // PayPal from anyone else. An event that does not verify is recorded and
   // ignored, never acted on.
-  const selfOrigin = new URL(req.url).origin;
-  const { verified, detail } = await verifySignature(
-    req.headers,
-    event,
-    process.env,
-    selfOrigin,
-  );
+  const { verified, detail } = await verifySignature(req.headers, event, process.env);
 
   try {
     await handleEvent(db, event, { verified, detail, certHost });

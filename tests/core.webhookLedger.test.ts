@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { type Arrival, type Expectation, reconcile } from "../src/core/webhookLedger";
+import {
+  type Arrival,
+  type Expectation,
+  arrivalsOf,
+  receiverVerifies,
+  reconcile,
+} from "../src/core/webhookLedger";
 
 const T = 1_700_000_000_000;
 
@@ -107,5 +113,66 @@ describe("reconcile with an unproved ledger", () => {
 
   it("still fails an empty expectation set, which proves nothing either way", () => {
     expect(reconcile([], []).verdict).toBe("fail");
+  });
+});
+
+// L2 (audit 2026-10-25): the receiver's endpoint is public, so when it verifies
+// signatures an unverified row with an expected event id is anyone's POST.
+describe("reconcile when the receiver verifies signatures", () => {
+  const forged = (id: string, at: number, verified: boolean | null = false): Arrival => ({
+    ...arr(id, at),
+    verified,
+  });
+  const strict = (e: readonly Expectation[], a: readonly Arrival[]) =>
+    reconcile(e, a, { ledgerVerified: true, verifiedOnly: true });
+
+  it("does not count a forged row as the expected event arriving", () => {
+    const r = strict([exp("a")], [forged("a", T + 10)]);
+    expect(r.verdict).toBe("fail");
+    expect(r.matched).toEqual([]);
+    expect(r.missing.map((m) => m.eventId)).toEqual(["a"]);
+    expect(r.notes.join(" ")).toMatch(/1 unverified arrival\(s\) not counted/);
+  });
+
+  it("does not let a forged copy set the latency or count as a redelivery", () => {
+    const r = strict([exp("a")], [forged("a", T + 1), arr("a", T + 900), forged("a", T + 950, null)]);
+    expect(r.verdict).toBe("pass");
+    expect(r.matched).toEqual([expect.objectContaining({ eventId: "a", latencyMs: 900, verified: true, duplicates: 0 })]);
+    expect(r.duplicateCount).toBe(0);
+  });
+
+  it("does not list forged rows as unexpected arrivals", () => {
+    expect(strict([exp("a")], [arr("a", T + 5), forged("junk", T + 6)]).unexpected).toEqual([]);
+  });
+
+  it("without the option, behaves as before for a receiver that cannot verify", () => {
+    const r = rec([exp("a")], [forged("a", T + 10, null)]);
+    expect(r.verdict).toBe("pass");
+    expect(r.matched[0]!.verified).toBeNull();
+  });
+});
+
+describe("receiverVerifies reads the self-test row", () => {
+  it("is true when the receiver marked our unsigned probe false", () => {
+    expect(receiverVerifies({ verified: false })).toBe(true);
+  });
+  it("is false when it recorded verified null, or when there is no row", () => {
+    expect(receiverVerifies({ verified: null })).toBe(false);
+    expect(receiverVerifies(undefined)).toBe(false);
+  });
+});
+
+describe("arrivalsOf counts a resend under the same rule", () => {
+  const rows = [
+    { eventId: "a", verified: true },
+    { eventId: "a", verified: false },
+    { eventId: "a", verified: null },
+    { eventId: "b", verified: true },
+  ];
+  it("counts verified rows only when the receiver verifies", () => {
+    expect(arrivalsOf(rows, "a", true)).toHaveLength(1);
+  });
+  it("counts every row for the id when it does not", () => {
+    expect(arrivalsOf(rows, "a", false)).toHaveLength(3);
   });
 });

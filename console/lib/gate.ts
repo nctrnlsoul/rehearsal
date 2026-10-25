@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { isIPv4, isIPv6 } from "node:net";
 
 /**
  * The judge gate (R-034). Pure functions plus one injectable attempt store, so
@@ -42,22 +43,74 @@ export function sessionSecret(env: Env): string | null {
 }
 
 /**
- * The caller's IP as Vercel reports it. Vercel overwrites X-Forwarded-For with
- * the real client address and does not forward external values (its request
- * headers docs); x-vercel-forwarded-for is the same value, read first because a
- * proxy in front of Vercel could overwrite the other. With none present every
- * such caller shares one bucket, which can only make the lockout stricter.
+ * The caller's address as Vercel reports it, and only as Vercel reports it.
+ *
+ * Vercel's request-headers docs: it overwrites X-Forwarded-For and does not
+ * forward external values, and x-vercel-forwarded-for carries the same address
+ * even where a proxy in front could rewrite X-Forwarded-For. So that is the one
+ * header read here. X-Forwarded-For and X-Real-IP are never a fallback: off
+ * Vercel, or if Vercel ever stopped setting its header, they are whatever the
+ * client typed, and a fresh value per try would dodge the limit (audit
+ * 2026-10-25 M2). With no usable value every such caller shares one bucket,
+ * which can only make the lockout stricter.
  */
 export function clientIp(headers: Headers): string {
-  const first = (v: string | null) => (v ?? "").split(",")[0]!.trim();
-  const ip = first(headers.get("x-vercel-forwarded-for")) || first(headers.get("x-real-ip")) || first(headers.get("x-forwarded-for"));
-  return /^[0-9a-fA-F:.]{2,45}$/.test(ip) ? ip : "unknown";
+  return limiterKey((headers.get("x-vercel-forwarded-for") ?? "").trim());
+}
+
+/**
+ * The bucket one address counts against. IPv4 is the address itself. IPv6 is
+ * its /64: one subscriber is routinely handed a whole /64, so counting each
+ * full address gave one person 2^64 sets of tries (audit 2026-10-25 M2). An
+ * IPv4 address mapped into IPv6 counts as the IPv4 address. Anything that is
+ * not exactly one address is "unknown".
+ */
+export function limiterKey(raw: string): string {
+  if (isIPv4(raw)) return raw;
+  const addr = raw.split("%")[0]!;
+  if (!isIPv6(addr)) return "unknown";
+  const groups = expandIPv6(addr);
+  if (groups === null) return "unknown";
+  if (groups.slice(0, 6).join(":") === "0:0:0:0:0:65535") {
+    return [groups[6]! >> 8, groups[6]! & 255, groups[7]! >> 8, groups[7]! & 255].join(".");
+  }
+  return `${groups.slice(0, 4).map((g) => g.toString(16)).join(":")}::/64`;
+}
+
+/** Eight 16-bit groups, or null. Takes "::" and a dotted IPv4 tail, which isIPv6 accepts. */
+function expandIPv6(addr: string): number[] | null {
+  const halves = addr.split("::");
+  if (halves.length > 2) return null;
+  const parse = (part: string): number[] | null => {
+    if (part === "") return [];
+    const out: number[] = [];
+    for (const g of part.split(":")) {
+      if (g.includes(".")) {
+        if (!isIPv4(g)) return null;
+        const [a, b, c, d] = g.split(".").map(Number) as [number, number, number, number];
+        out.push((a << 8) | b, (c << 8) | d);
+      } else {
+        if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+        out.push(parseInt(g, 16));
+      }
+    }
+    return out;
+  };
+  const head = parse(halves[0]!);
+  const tail = halves.length === 2 ? parse(halves[1]!) : [];
+  if (head === null || tail === null) return null;
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return null;
+  return [...head, ...new Array<number>(fill).fill(0), ...tail];
 }
 
 export type LimiterConfig = {
-  /** Wrong passcodes one IP may send per window before it is locked out. */
+  /** Wrong passcodes one address (IPv6: one /64) may send per window before it is locked out. */
   readonly perIp: number;
-  /** Wrong passcodes from all IPs together per window before the gate closes for everyone. */
+  /**
+   * Wrong passcodes from all addresses together per window that count as an
+   * attack in progress. Crossing it is logged; it refuses no one (R-036).
+   */
   readonly global: number;
   readonly windowMs: number;
 };
@@ -68,10 +121,16 @@ export const DEFAULT_LIMITS: LimiterConfig = { perIp: 5, global: 50, windowMs: 6
 
 export type LimitCheck =
   | { readonly allowed: true; readonly ipLeft: number }
-  | { readonly allowed: false; readonly reason: "ip" | "global"; readonly retryAfterS: number };
+  | { readonly allowed: false; readonly retryAfterS: number };
 
 /**
- * Counts wrong passcodes per IP and in total, in fixed windows.
+ * Counts wrong passcodes per address and in total, in fixed windows.
+ *
+ * Only the per-address count refuses anyone. The total used to close the gate
+ * for everyone at its ceiling, so about 10 addresses could lock every judge
+ * out for an hour. R-036: a correct passcode passes past the ceiling, and
+ * failures keep counting. What bounds a many-address guesser now is the
+ * per-address limit plus the Vercel WAF rate limit on POST /api/gate.
  *
  * Held in memory, so it counts per server instance. Stage A puts nothing of
  * value behind the gate, which makes that acceptable for now; Stage B moves the
@@ -89,9 +148,10 @@ export class AttemptLimiter {
   }
 
   /**
-   * Expired entries go, so a flood of distinct IPs cannot grow memory without
-   * bound. An IP is stored only when it fails, and the global ceiling closes the
-   * gate long before this many could fail in one window at the default limits.
+   * Expired entries go, so a flood of distinct addresses cannot grow memory
+   * without bound. An address is stored only when it fails. Reaching this many
+   * in one window means a flood far past the global ceiling; the WAF rate limit
+   * is meant to stop that long before.
    */
   #prune(): void {
     if (this.#byIp.size < MAX_TRACKED_IPS) return;
@@ -107,25 +167,28 @@ export class AttemptLimiter {
 
   check(ip: string): LimitCheck {
     const now = this.#now();
-    this.#global = this.#fresh(this.#global);
-    if (this.#global.count >= this.#cfg.global) {
-      return { allowed: false, reason: "global", retryAfterS: Math.ceil((this.#global.since + this.#cfg.windowMs - now) / 1000) };
-    }
-    // Read only: an IP is stored once it fails, not merely for asking.
+    // Read only: an address is stored once it fails, not merely for asking.
     const mine = this.#fresh(this.#byIp.get(ip) ?? { count: 0, since: now });
     if (mine.count >= this.#cfg.perIp) {
-      return { allowed: false, reason: "ip", retryAfterS: Math.ceil((mine.since + this.#cfg.windowMs - now) / 1000) };
+      return { allowed: false, retryAfterS: Math.ceil((mine.since + this.#cfg.windowMs - now) / 1000) };
     }
     return { allowed: true, ipLeft: this.#cfg.perIp - mine.count };
   }
 
-  recordFailure(ip: string): void {
+  /** True on the one failure that reaches the global ceiling, so the caller can log it once. */
+  recordFailure(ip: string): boolean {
     const now = this.#now();
     this.#global = this.#fresh(this.#global);
     this.#global = { ...this.#global, count: this.#global.count + 1 };
     this.#prune();
     const mine = this.#fresh(this.#byIp.get(ip) ?? { count: 0, since: now });
     this.#byIp.set(ip, { ...mine, count: mine.count + 1 });
+    return this.#global.count === this.#cfg.global;
+  }
+
+  /** Wrong passcodes from everyone in the current window. Read-only. */
+  get globalFailures(): number {
+    return this.#fresh(this.#global).count;
   }
 
   /** How many IPs are being counted. Read-only; exists so the memory bound is testable. */
@@ -133,7 +196,7 @@ export class AttemptLimiter {
     return this.#byIp.size;
   }
 
-  /** A correct passcode clears that IP's count; it never lowers the global one. */
+  /** A correct passcode clears that address's count; it never lowers the global one. */
   recordSuccess(ip: string): void {
     this.#byIp.delete(ip);
   }

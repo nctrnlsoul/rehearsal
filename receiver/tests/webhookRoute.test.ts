@@ -99,3 +99,56 @@ describe("the receiver bounds what it will read", () => {
     expect(paypalCalls).toEqual([]);
   });
 });
+
+// The audit's probe (H1, 2026-10-25): one unauthenticated POST, just under the
+// body cap, stored about 990 KB in the ledger.
+describe("the receiver bounds what it stores", () => {
+  it("an unsigned near-cap event stores a row of a few hundred bytes", async () => {
+    const pad = "A".repeat(300_000);
+    const body = JSON.stringify({ id: pad, event_type: pad, resource: { id: pad } });
+    expect(body.length).toBeGreaterThan(900_000);
+    expect(body.length).toBeLessThan(1_000_000);
+    const res = await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body,
+        headers: { ...headers(`https://${"h".repeat(240)}.test/c`), "paypal-transmission-id": pad },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ event_id: null, event_type: null, resource_id: null, transmission_id: null });
+    expect(String(rows[0]!["verify_detail"]).length).toBeLessThanOrEqual(300);
+    expect(JSON.stringify(rows[0]).length).toBeLessThan(700);
+    expect(paypalCalls).toEqual([]);
+  });
+
+  it("keeps ids of up to 128 characters", async () => {
+    const id = "W".repeat(128);
+    await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body: JSON.stringify({ id, event_type: "PAYMENT.CAPTURE.COMPLETED", resource: { id: "CAP-1" } }),
+        headers: headers("https://www.paypal.com/c"),
+      }),
+    );
+    expect(rows[0]).toMatchObject({ event_id: id, event_type: "PAYMENT.CAPTURE.COMPLETED", resource_id: "CAP-1" });
+  });
+});
+
+describe("the body cap is in bytes (L6)", () => {
+  it("refuses multibyte text over a megabyte with 413, records nothing and calls nobody", async () => {
+    const body = JSON.stringify({ id: "WH-1", note: "é".repeat(600_000) });
+    expect(body.length).toBeLessThan(1_000_000);
+    const res = await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body,
+        headers: headers("https://api.sandbox.paypal.com/c"),
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(rows).toEqual([]);
+    expect(paypalCalls).toEqual([]);
+  });
+});

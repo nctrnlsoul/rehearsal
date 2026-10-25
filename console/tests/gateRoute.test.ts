@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AttemptLimiter, SESSION_COOKIE, verifySession } from "../lib/gate";
 import { MAX_BODY_BYTES, handleGatePost } from "../lib/gateRoute";
 import { hasValidSession } from "../lib/session";
@@ -66,13 +66,61 @@ describe("POST /api/gate", () => {
     expect(res.headers.get("location")).toBe("/live");
   });
 
-  it("closes for everyone at the global ceiling, even for the right passcode", async () => {
+  // R-036: about 10 addresses x 5 wrong tries used to close the gate for every judge.
+  it("lets the right passcode in past the global ceiling", async () => {
     // A small ceiling keeps this fast: each wrong try is a real scrypt hash.
-    const { deps } = harness(ENV, 3);
-    for (let i = 0; i < 3; i += 1) await handleGatePost(post(form("x"), { "x-vercel-forwarded-for": `198.51.100.${i}` }), deps);
+    const { deps, limiter } = harness(ENV, 3);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 4; i += 1) await handleGatePost(post(form("x"), { "x-vercel-forwarded-for": `198.51.100.${i}` }), deps);
+    expect(limiter.globalFailures).toBe(4);
+    expect(warn).toHaveBeenCalledTimes(1);
     const res = await handleGatePost(post(form(PASS), { "x-vercel-forwarded-for": "203.0.113.200" }), deps);
-    expect(res.headers.get("location")).toBe("/gate?e=busy&m=60");
+    expect(res.headers.get("location")).toBe("/live");
+    expect(res.headers.get("set-cookie")).not.toBeNull();
+  });
+
+  it("past the global ceiling, a wrong passcode is still wrong and still counted", async () => {
+    const { deps, limiter } = harness(ENV, 3);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 3; i += 1) await handleGatePost(post(form("x"), { "x-vercel-forwarded-for": `198.51.100.${i}` }), deps);
+    const res = await handleGatePost(post(form("still not it"), { "x-vercel-forwarded-for": "203.0.113.201" }), deps);
+    expect(res.headers.get("location")).toBe("/gate?e=wrong&left=4");
+    expect(limiter.globalFailures).toBe(4);
+  });
+
+  // M2 (audit 2026-10-25): a client that sets a fresh X-Forwarded-For on every
+  // try must still be counted as one caller.
+  it("a spoofed X-Forwarded-For cannot dodge the per-address limit", async () => {
+    const { deps } = harness();
+    for (let i = 0; i < 5; i += 1) {
+      await handleGatePost(post(form("not it"), { "x-forwarded-for": `198.51.100.${i}`, "x-real-ip": `198.51.100.${100 + i}` }), deps);
+    }
+    const res = await handleGatePost(post(form(PASS), { "x-forwarded-for": "192.0.2.77", "x-real-ip": "192.0.2.78" }), deps);
+    expect(res.headers.get("location")).toBe("/gate?e=locked&m=60");
     expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("with no Vercel header, spoofed forwarding headers all share one bucket", async () => {
+    const { deps } = harness();
+    const bare = (passcode: string, i: number) => {
+      const req = post(form(passcode), { "x-forwarded-for": `198.51.100.${i}` });
+      req.headers.delete("x-vercel-forwarded-for");
+      return req;
+    };
+    for (let i = 0; i < 5; i += 1) await handleGatePost(bare("not it", i), deps);
+    const res = await handleGatePost(bare(PASS, 99), deps);
+    expect(res.headers.get("location")).toBe("/gate?e=locked&m=60");
+  });
+
+  it("counts one IPv6 /64 as one caller", async () => {
+    const { deps } = harness();
+    for (let i = 0; i < 5; i += 1) {
+      await handleGatePost(post(form("not it"), { "x-vercel-forwarded-for": `2001:db8:aa:bb::${i + 1}` }), deps);
+    }
+    const res = await handleGatePost(post(form(PASS), { "x-vercel-forwarded-for": "2001:db8:aa:bb:ffff::1" }), deps);
+    expect(res.headers.get("location")).toBe("/gate?e=locked&m=60");
+    const next = await handleGatePost(post(form(PASS), { "x-vercel-forwarded-for": "2001:db8:aa:bc::1" }), deps);
+    expect(next.headers.get("location")).toBe("/live");
   });
 
   it("stays closed without a valid hash or secret, and opens nothing", async () => {
