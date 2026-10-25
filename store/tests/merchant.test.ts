@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Db, StoreRow } from "../lib/db";
 import {
   DEDUPE_BY_EVENT_ID,
+  MAX_FIELD_CHARS,
   MAX_REASON_CHARS,
   actionFor,
   certHostOf,
@@ -171,7 +172,7 @@ describe("signature enforcement", () => {
     expect(action).toBe("refused");
     expect(inserted[0]!.action).toBe("refused");
     expect(inserted[0]!.reason).toBe("missing paypal-transmission-sig");
-    expect(summarise(inserted.map((r) => ({ ...r, receivedAtMs: 0 }))).orders[0]!.fulfilmentCount).toBe(0);
+    expect(summarise(inserted.map((r) => ({ ...r, receivedAtMs: 0 }))).orders).toEqual([]);
   });
 
   it("never fulfils when it could not check at all, and records why", async () => {
@@ -217,20 +218,65 @@ describe("signature enforcement", () => {
     ]);
   });
 
-  it("records the cert host on a refusal and on an acted-on event alike", async () => {
+  it("records the cert host on an acted-on event, never on a refusal", async () => {
     const { db, inserted } = fakeDb();
-    await recordRefusal(db, "body is not JSON", "api.sandbox.paypal.com");
     await handleEvent(db, captureEvent("WH-BAD"), {
       verified: false,
-      detail: "paypal-cert-url host certs.evil.test is not paypal.com",
+      detail: "paypal-cert-url host certs.evil.test is not a PayPal API host",
       certHost: "certs.evil.test",
     });
     await handleEvent(db, captureEvent("WH-GOOD"), { verified: true, certHost: "api.sandbox.paypal.com" });
     expect(inserted.map((r) => [r.action, r.certHost])).toEqual([
-      ["refused", "api.sandbox.paypal.com"],
-      ["refused", "certs.evil.test"],
+      ["refused", null],
       ["fulfilled", "api.sandbox.paypal.com"],
     ]);
+    // The refusal still says what the request claimed, inside its bounded reason.
+    expect(inserted[0]!.reason).toContain("certs.evil.test");
+  });
+
+  // H1 (audit 2026-10-25): a refused delivery copied every field the caller
+  // sent, so one anonymous POST could store about a megabyte.
+  it("records a refused event as its reason only, whatever the caller sent", async () => {
+    const { db, inserted } = fakeDb();
+    const huge = "x".repeat(900_000);
+    await handleEvent(
+      db,
+      { id: huge, event_type: huge, resource: { id: huge, amount: { value: huge, currency_code: huge } } },
+      { verified: false, detail: "missing paypal-transmission-id", certHost: "api.sandbox.paypal.com" },
+    );
+    expect(inserted).toEqual([
+      {
+        eventId: null,
+        eventType: "UNKNOWN",
+        captureId: null,
+        amount: null,
+        currency: null,
+        action: "refused",
+        verified: false,
+        reason: "missing paypal-transmission-id",
+        certHost: null,
+      },
+    ]);
+    expect(JSON.stringify(inserted).length).toBeLessThan(400);
+  });
+
+  it("records an overlong field of a verified event as absent, never stores it", async () => {
+    const { db, inserted } = fakeDb();
+    const long = "y".repeat(MAX_FIELD_CHARS + 1);
+    const ok = "z".repeat(MAX_FIELD_CHARS);
+    await handleEvent(
+      db,
+      { id: ok, event_type: long, resource: { id: long, amount: { value: long, currency_code: long } } },
+      { verified: true },
+    );
+    expect(inserted[0]).toMatchObject({
+      eventId: ok,
+      eventType: "UNKNOWN",
+      captureId: null,
+      amount: null,
+      currency: null,
+      action: "ignored",
+    });
   });
 
   it("records no cert host when the caller had none", async () => {
@@ -256,7 +302,8 @@ describe("signature enforcement", () => {
     await handleEvent(db, captureEvent("WH-FORGED"), { verified: false });
     expect(inserted).toHaveLength(1);
     expect(inserted[0]!.verified).toBe(false);
-    expect(inserted[0]!.eventId).toBe("WH-FORGED");
+    // Visible as a refusal with its reason; the claimed id is not kept (H1).
+    expect(inserted[0]!).toMatchObject({ action: "refused", eventId: null, reason: "signature did not verify" });
   });
 
   it("acts only on a verified event", async () => {

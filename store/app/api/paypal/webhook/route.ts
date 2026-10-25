@@ -41,7 +41,7 @@ export async function POST(req: Request): Promise<Response> {
   // not the row could be written: recording is evidence, never a way in.
   const refuse = async (status: number, reason: string): Promise<Response> => {
     try {
-      await recordRefusal(db, reason, certHost);
+      await recordRefusal(db, reason);
     } catch (e) {
       console.error(`store could not record a refusal: ${(e as Error).message}`);
     }

@@ -69,7 +69,7 @@ describe("every refusal leaves a row with its reason", () => {
     const res = await post(JSON.stringify(capture));
     expect(res.status).toBe(401);
     expect(inserts).toHaveLength(1);
-    expect(inserts[0]).toMatchObject({ event_id: "WH-1", action: "refused", verified: false });
+    expect(inserts[0]).toMatchObject({ event_id: null, action: "refused", verified: false });
     expect(String(inserts[0]!["reason"])).toMatch(/^missing paypal-transmission-id/);
     expect(paypalCalls).toEqual([]);
   });
@@ -82,8 +82,8 @@ describe("every refusal leaves a row with its reason", () => {
     expect(res.status).toBe(401);
     expect(inserts[0]).toMatchObject({ action: "refused", verified: false });
     expect(inserts[0]!["reason"]).toBe("paypal-cert-url host certs.evil.test is not a PayPal API host");
-    // What the refused request claimed is kept, for comparison with real deliveries.
-    expect(inserts[0]!["cert_host"]).toBe("certs.evil.test");
+    // The reason names the host; the row keeps nothing else the caller sent.
+    expect(inserts[0]!["cert_host"]).toBeNull();
     expect(paypalCalls).toEqual([]);
   });
 
@@ -92,7 +92,7 @@ describe("every refusal leaves a row with its reason", () => {
     expect(inserts[0]!["cert_host"]).toBeNull();
   });
 
-  it("a body that is not JSON: 400, refused with no event id, cert host kept", async () => {
+  it("a body that is not JSON: 400, refused with its reason only", async () => {
     const res = await post("{ not json", signedLooking());
     expect(res.status).toBe(400);
     expect(inserts).toEqual([
@@ -105,7 +105,7 @@ describe("every refusal leaves a row with its reason", () => {
         action: "refused",
         verified: null,
         reason: "body is not JSON",
-        cert_host: "api.sandbox.paypal.com",
+        cert_host: null,
       },
     ]);
   });
@@ -124,6 +124,24 @@ describe("every refusal leaves a row with its reason", () => {
     expect((await post("x".repeat(1_000_001))).status).toBe(413);
     const unsigned = await post(JSON.stringify(capture));
     expect(unsigned.status).toBeGreaterThanOrEqual(400);
+  });
+
+  // The audit's probe (H1, 2026-10-25): one unauthenticated POST, just under
+  // the body cap, stored about 990 KB because the refused row copied its fields.
+  it("an unsigned near-cap event stores a row of a few hundred bytes", async () => {
+    const pad = "A".repeat(240_000);
+    const body = JSON.stringify({
+      id: pad,
+      event_type: pad,
+      resource: { id: pad, amount: { value: pad, currency_code: "USD" } },
+    });
+    expect(body.length).toBeGreaterThan(950_000);
+    expect(body.length).toBeLessThan(1_000_000);
+    const res = await post(body, signedLooking({ "paypal-transmission-sig": "" }));
+    expect(res.status).toBe(401);
+    expect(inserts).toHaveLength(1);
+    expect(JSON.stringify(inserts[0]).length).toBeLessThan(400);
+    expect(paypalCalls).toEqual([]);
   });
 
   it("never records a refused event as fulfilled", async () => {

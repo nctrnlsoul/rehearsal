@@ -22,8 +22,22 @@ export const maxDuration = 15;
 const SANDBOX_HOST = "api-m.sandbox.paypal.com";
 const MAX_BODY_BYTES = 1_000_000;
 
+/**
+ * Longest id or type the ledger records. PayPal's are far shorter; anything
+ * longer did not come from PayPal and is recorded as absent. Migration 0003
+ * holds the same line in the database.
+ */
+const MAX_FIELD_CHARS = 128;
+/** The detail is our own text, but it can quote a cert host of up to 253 characters. */
+const MAX_DETAIL_CHARS = 300;
+
 function str(v: unknown): string | null {
-  return typeof v === "string" && v.trim() !== "" ? v : null;
+  return typeof v === "string" && v.trim() !== "" && v.length <= MAX_FIELD_CHARS ? v : null;
+}
+
+function detailOf(raw: string): string {
+  const flat = raw.replace(/[\p{Cc}\p{Cf}]+/gu, " ").trim();
+  return Array.from(flat).slice(0, MAX_DETAIL_CHARS).join("");
 }
 
 async function verify(
@@ -124,9 +138,9 @@ export async function POST(req: Request): Promise<Response> {
       eventType: str(e["event_type"]),
       receivedAtMs: Date.now(),
       verified,
-      verifyDetail: detail,
+      verifyDetail: detailOf(detail),
       resourceId: str((e["resource"] as Record<string, unknown> | undefined)?.["id"]),
-      transmissionId: req.headers.get("paypal-transmission-id"),
+      transmissionId: str(req.headers.get("paypal-transmission-id")),
     });
   } catch (err) {
     console.error(`ledger insert failed: ${(err as Error).message}`);

@@ -25,8 +25,16 @@ export type ParsedEvent = {
   currency: string | null;
 };
 
+/**
+ * Longest event field the store records. PayPal ids, types, amounts and
+ * currency codes are all far shorter; anything longer did not come from PayPal
+ * and is recorded as absent rather than stored. Migration 0004 holds the same
+ * line in the database.
+ */
+export const MAX_FIELD_CHARS = 128;
+
 const str = (v: unknown): string | null =>
-  typeof v === "string" && v.trim() !== "" ? v : null;
+  typeof v === "string" && v.trim() !== "" && v.length <= MAX_FIELD_CHARS ? v : null;
 
 const obj = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -103,22 +111,27 @@ export function certHostOf(certUrl: string | null): string | null {
  * a body that is not JSON. Without a row it would be invisible, and a refused
  * delivery would look exactly like one that never arrived.
  */
-export async function recordRefusal(
-  db: Db,
-  reason: string,
-  certHost: string | null = null,
-): Promise<void> {
-  await db.insert({
+export async function recordRefusal(db: Db, reason: string): Promise<void> {
+  await db.insert(refusedRow(null, reason));
+}
+
+/**
+ * A refused row keeps the reason and nothing the request claimed. The endpoint
+ * is public, so every other field would be whatever an anonymous caller chose
+ * to send, at whatever size, and none of it is evidence of anything.
+ */
+function refusedRow(verified: boolean | null, reason: string): Omit<StoreRow, "receivedAtMs"> {
+  return {
     eventId: null,
     eventType: "UNKNOWN",
     captureId: null,
     amount: null,
     currency: null,
     action: "refused",
-    verified: null,
+    verified,
     reason: cleanReason(reason),
-    certHost,
-  });
+    certHost: null,
+  };
 }
 
 export async function handleEvent(
@@ -142,13 +155,7 @@ export async function handleEvent(
   if (opts.verified !== true) {
     const why =
       opts.detail ?? (opts.verified === false ? "signature did not verify" : "could not verify");
-    await db.insert({
-      ...parsed,
-      action: "refused",
-      verified: opts.verified,
-      reason: cleanReason(why),
-      certHost,
-    });
+    await db.insert(refusedRow(opts.verified, why));
     return "refused";
   }
 
