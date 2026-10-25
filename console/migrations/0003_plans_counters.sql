@@ -25,6 +25,31 @@ revoke all on public.console_plans from anon, authenticated;
 -- A plan never changes once saved: changing it would be a different plan.
 grant select, insert on public.console_plans to service_role;
 
+create or replace function public.console_save_plan(p_session_hash text, p_description text, p_scenario jsonb, p_sha text)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $$
+  insert into public.console_plans (session_hash, description, scenario, sha256)
+  values (p_session_hash, p_description, p_scenario, p_sha)
+  returning id;
+$$;
+
+-- Any session may load any plan: every judge holds the same passcode, so
+-- there is no per-judge boundary to keep. The session hash is not returned.
+create or replace function public.console_get_plan(p_id uuid)
+returns jsonb
+language sql
+security invoker
+set search_path = ''
+stable
+as $$
+  select jsonb_build_object('id', id, 'description', description, 'scenario', scenario,
+                            'sha256', sha256, 'created_at', created_at)
+    from public.console_plans where id = p_id;
+$$;
+
 -- One row per (scope, key): the count in the current window. Daily scopes use
 -- the UTC day; the gate scopes use an hour that starts at the first failure,
 -- exactly as the in-memory limiter did. Keys are HMACs, never raw addresses.
@@ -195,6 +220,10 @@ as $$
    where scope = 'gate_ip' and key = p_key;
 $$;
 
+revoke all on function public.console_save_plan(text, text, jsonb, text) from public, anon, authenticated;
+revoke all on function public.console_get_plan(uuid) from public, anon, authenticated;
+grant execute on function public.console_save_plan(text, text, jsonb, text) to service_role;
+grant execute on function public.console_get_plan(uuid) to service_role;
 revoke all on function public.console_take_daily(text[], text[], integer[]) from public, anon, authenticated;
 revoke all on function public.console_daily_used(text, text) from public, anon, authenticated;
 revoke all on function public.console_gate_check(text, integer, integer) from public, anon, authenticated;

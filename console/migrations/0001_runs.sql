@@ -241,6 +241,54 @@ begin
 end;
 $$;
 
+-- What a poll reads: the run and its events after a cursor. It reaps first, so
+-- a run whose server died reads as abandoned on the very next poll. The
+-- session and address hashes are never returned. 'now' is the database's
+-- clock, so "last contact 12 s ago" is measured on one clock.
+create or replace function public.console_read_run(p_id text, p_after bigint, p_limit integer)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  r public.console_runs%rowtype;
+  v_events jsonb;
+begin
+  perform public.console_reap_runs();
+  select * into r from public.console_runs where id = p_id;
+  if not found then
+    return null;
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'seq', e.seq, 'at', e.at, 'kind', e.kind, 'step_id', e.step_id, 'data', e.data) order by e.seq), '[]'::jsonb)
+    into v_events
+    from (select * from public.console_run_events
+           where run_id = p_id and seq > coalesce(p_after, 0)
+           order by seq
+           limit least(greatest(coalesce(p_limit, 200), 1), 200)) e;
+  return jsonb_build_object(
+    'run', jsonb_build_object(
+      'id', r.id, 'kind', r.kind, 'plan_source', r.plan_source, 'plan_id', r.plan_id,
+      'scenario_sha256', r.scenario_sha256, 'status', r.status, 'state', r.state,
+      'halt_reason', r.halt_reason, 'created_at', r.created_at, 'started_at', r.started_at,
+      'heartbeat_at', r.heartbeat_at, 'finished_at', r.finished_at),
+    'events', v_events,
+    'now', now());
+end;
+$$;
+
+-- The run holding the one active slot, so a refused start can link to it.
+create or replace function public.console_active_run()
+returns text
+language sql
+security invoker
+set search_path = ''
+stable
+as $$
+  select id from public.console_runs where status in ('queued', 'running') limit 1;
+$$;
+
 -- A new function is executable by PUBLIC, and Supabase's default privileges
 -- also grant it to anon and authenticated. Neither may call these.
 revoke all on function public.console_mark_running(text) from public, anon, authenticated;
@@ -249,6 +297,10 @@ revoke all on function public.console_heartbeat(text) from public, anon, authent
 revoke all on function public.console_add_events(text, jsonb) from public, anon, authenticated;
 revoke all on function public.console_finish_run(text, text, text) from public, anon, authenticated;
 revoke all on function public.console_reap_runs() from public, anon, authenticated;
+revoke all on function public.console_read_run(text, bigint, integer) from public, anon, authenticated;
+revoke all on function public.console_active_run() from public, anon, authenticated;
+grant execute on function public.console_read_run(text, bigint, integer) to service_role;
+grant execute on function public.console_active_run() to service_role;
 grant execute on function public.console_mark_running(text) to service_role;
 grant execute on function public.console_save_state(text, jsonb, jsonb) to service_role;
 grant execute on function public.console_heartbeat(text) to service_role;

@@ -42,6 +42,8 @@ begin
   end if;
 
   foreach f in array array[
+    'public.console_save_plan(text, text, jsonb, text)',
+    'public.console_get_plan(uuid)',
     'public.console_take_daily(text[], text[], integer[])',
     'public.console_daily_used(text, text)',
     'public.console_gate_check(text, integer, integer)',

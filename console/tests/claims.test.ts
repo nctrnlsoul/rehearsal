@@ -69,12 +69,18 @@ describe("webhook claim", () => {
 });
 
 describe("gate lockout claim", () => {
-  it("names an address or /64, an hour, and per-instance counting, as the code does", () => {
+  it("names an address or /64, an hour, and one shared count, as the code does", () => {
     expect(gate).not.toContain("lock a network out");
-    expect(gate).toContain("5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted by each server instance on its own.");
+    expect(gate).not.toContain("counted by each server instance on its own");
+    expect(gate).toContain("5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.");
     expect(DEFAULT_LIMITS.perIp).toBe(5);
     expect(DEFAULT_LIMITS.windowMs).toBe(60 * 60 * 1000);
-    expect(read("console", "app", "api", "gate", "route.ts")).toContain("const limiter = new AttemptLimiter();");
+    // One place: the route counts through the database store, never in memory.
+    const route = read("console", "app", "api", "gate", "route.ts");
+    expect(route).toContain("dbAttemptStore(db, secret)");
+    expect(read("console", "lib", "gate.ts")).not.toMatch(/new Map</);
+    const sqlFile = read("console", "migrations", "0003_plans_counters.sql");
+    expect(sqlFile).toContain("function public.console_gate_check");
   });
 
   it("never says a network is locked, since the key is an address", () => {

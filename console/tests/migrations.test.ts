@@ -400,3 +400,56 @@ describe("the gate counters (same rules as AttemptLimiter)", () => {
     await expect(fail(db, "203.0.113.7")).rejects.toThrow(/console_counters_key_shape/);
   });
 });
+
+describe("reads", () => {
+  it("console_read_run reaps first, returns events after the cursor, and never the hashes", async () => {
+    const db = await freshDb();
+    const id = "20261025000000-000001";
+    await start(db, id);
+    await db.query(`select public.console_mark_running('${id}')`);
+    await db.query(`select public.console_add_events('${id}', '[{"kind":"note"},{"kind":"note"}]'::jsonb)`);
+    const all = await one<{ v: { run: Record<string, unknown>; events: Array<{ seq: number }>; now: string } }>(
+      db, `select public.console_read_run('${id}', 0, 200) as v`);
+    expect(all.v.run["status"]).toBe("running");
+    expect(all.v.run).not.toHaveProperty("session_hash");
+    expect(all.v.run).not.toHaveProperty("ip_hash");
+    expect(all.v.events).toHaveLength(3);
+    const after = await one<{ v: { events: unknown[] } }>(
+      db, `select public.console_read_run('${id}', ${all.v.events[1]!.seq}, 200) as v`);
+    expect(after.v.events).toHaveLength(1);
+    await age(db, id, "heartbeat_at", 91);
+    const dead = await one<{ v: { run: { status: string } } }>(db, `select public.console_read_run('${id}', 0, 200) as v`);
+    expect(dead.v.run.status).toBe("abandoned");
+    expect(await one(db, "select public.console_read_run('20261025000000-999999', 0, 200) as v")).toEqual({ v: null });
+  });
+
+  it("console_read_run caps a page at 200 events", async () => {
+    const db = await freshDb();
+    const id = "20261025000000-000001";
+    await start(db, id);
+    await db.query(`select public.console_mark_running('${id}')`);
+    const batch = JSON.stringify(Array.from({ length: 250 }, () => ({ kind: "note" })));
+    await db.query(`select public.console_add_events('${id}', '${batch}'::jsonb)`);
+    const page = await one<{ n: number }>(db, `select jsonb_array_length(public.console_read_run('${id}', 0, 100000) -> 'events') as n`);
+    expect(page.n).toBe(200);
+  });
+
+  it("console_active_run names the run holding the slot, and nothing once it is done", async () => {
+    const db = await freshDb();
+    expect(await one(db, "select public.console_active_run() as id")).toEqual({ id: null });
+    await start(db, "20261025000000-000001");
+    expect(await one(db, "select public.console_active_run() as id")).toEqual({ id: "20261025000000-000001" });
+    await db.exec("update public.console_runs set status = 'complete'");
+    expect(await one(db, "select public.console_active_run() as id")).toEqual({ id: null });
+  });
+
+  it("a saved plan reads back exactly, without its session hash", async () => {
+    const db = await freshDb();
+    const saved = await one<{ id: string }>(
+      db, `select public.console_save_plan('${H("b")}', 'a candle shop', '{"name":"x","steps":[]}'::jsonb, '${H("a")}') as id`);
+    const got = await one<{ v: Record<string, unknown> }>(db, `select public.console_get_plan('${saved.id}') as v`);
+    expect(got.v).toMatchObject({ id: saved.id, description: "a candle shop", scenario: { name: "x", steps: [] }, sha256: H("a") });
+    expect(got.v).not.toHaveProperty("session_hash");
+    expect(await one(db, "select public.console_get_plan('00000000-0000-0000-0000-000000000000') as v")).toEqual({ v: null });
+  });
+});

@@ -22,6 +22,8 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
       return { kind: "stop", title: "That request was refused", detail: "It did not arrive as a post from this page. Reload the page and try again. Refused requests do not count as wrong tries." };
     case "closed":
       return { kind: "stop", title: "The gate is not configured", detail: "This deployment has no passcode set, so it stays shut. Replays still work." };
+    case "unavailable":
+      return { kind: "stop", title: "The gate cannot count tries right now", detail: "Wrong tries are counted in this console's database, and it did not answer, so the gate stays shut rather than take a guess it cannot count. Replays still work. Try again in a minute." };
     default:
       return null;
   }
@@ -62,7 +64,7 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
             )}
             <button className="btn btn-primary" type="submit">Unlock</button>
           </form>
-          <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. 5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted by each server instance on its own.</p>
+          <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. 5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.</p>
         </section>
       </main>
       <SiteFooter>REHEARSAL · judge gate</SiteFooter>

@@ -50,7 +50,9 @@ begin
     'public.console_heartbeat(text)',
     'public.console_add_events(text, jsonb)',
     'public.console_finish_run(text, text, text)',
-    'public.console_reap_runs()'] loop
+    'public.console_reap_runs()',
+    'public.console_read_run(text, bigint, integer)',
+    'public.console_active_run()'] loop
     select not p.prosecdef and p.proconfig = array['search_path=""']
       into ok
       from pg_proc p where p.oid = f::regprocedure;
