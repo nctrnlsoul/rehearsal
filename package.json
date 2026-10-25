@@ -25,6 +25,7 @@
     "bank:confirm": "tsx bin/rehearsal.ts bank:confirm",
     "bank:set-txn": "tsx bin/rehearsal.ts bank:set-txn",
     "bank:list": "tsx bin/rehearsal.ts bank:list",
+    "bank:export-hosted": "tsx bin/rehearsal.ts bank:export-hosted",
     "find": "tsx bin/rehearsal.ts find",
     "evals": "tsx evals/run.ts"
   },

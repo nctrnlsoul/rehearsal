@@ -29,6 +29,8 @@ import {
   attachTransactionId,
   availablePurchases,
   confirmCapture,
+  exportForHosted,
+  hostedInsertSql,
   markExpired,
 } from "../src/core/purchaseBank";
 import { assertAllowedEventTarget, webhookHandlerUrl } from "../src/core/eventTarget";
@@ -583,6 +585,43 @@ function bankSetTxn(rest: string[]): void {
   bankList();
 }
 
+/**
+ * Moves ready purchases to the hosted console's bank (Stage B). Writes a SQL
+ * file to paste into the CONSOLE's Supabase SQL editor, rather than calling
+ * that database, so its service key never has to live on this machine. The
+ * local bank is written first, with the moved purchases marked used: if the
+ * file is never run they are burned, but they can never be disputed from both
+ * banks.
+ */
+function bankExportHosted(rest: string[]): void {
+  const flags = args(rest);
+  const raw = flags["count"] ?? "1";
+  if (!/^\d+$/.test(raw)) {
+    console.error("usage: rehearsal bank:export-hosted [--count 1] [--out bank/hosted-<time>.sql]");
+    process.exit(1);
+  }
+  const nowIso = new Date().toISOString();
+  const store = bankStore();
+  const moved = exportForHosted(store.read(), Number(raw), nowIso);
+  if (!moved.ok) {
+    console.error(moved.error);
+    process.exit(1);
+  }
+  const sql = hostedInsertSql(moved.value.moved, nowIso);
+  if (!sql.ok) {
+    console.error(`${sql.error}; nothing was moved`);
+    process.exit(1);
+  }
+  const out = resolve(flags["out"] ?? `bank/hosted-${nowIso.replace(/[:.]/g, "-")}.sql`);
+  store.write(moved.value.bank);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, sql.value, "utf8");
+  for (const p of moved.value.moved) console.log(`moved order ${p.orderId} (${p.currency} ${p.amount}); marked used here`);
+  console.log(`SQL written to ${out}`);
+  console.log("Next: paste it into the SQL editor of the CONSOLE's Supabase project and run it. Its last line prints the hosted bank's counts.");
+  bankList();
+}
+
 function bankList(): void {
   const bank = bankStore().read();
   console.log("");
@@ -615,6 +654,7 @@ function usage(): void {
   console.log("  rehearsal bank:confirm                   capture approved orders and find buyer txn ids");
   console.log("  rehearsal bank:set-txn --order <id> --txn <id>   supply a buyer txn id by hand");
   console.log("  rehearsal bank:list                      show the purchase bank");
+  console.log("  rehearsal bank:export-hosted [--count 1] move ready purchases to the console's bank, as SQL");
 }
 
 const [, , command, ...rest] = process.argv;
@@ -643,6 +683,9 @@ switch (command) {
     break;
   case "bank:list":
     bankList();
+    break;
+  case "bank:export-hosted":
+    bankExportHosted(rest);
     break;
   default:
     usage();

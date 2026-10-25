@@ -6,7 +6,10 @@ import {
   availablePurchases,
   claimPurchase,
   confirmCapture,
+  MOVED_TO_HOSTED,
   emptyBank,
+  exportForHosted,
+  hostedInsertSql,
   markExpired,
 } from "../src/core/purchaseBank";
 
@@ -183,4 +186,66 @@ describe("claimPurchase", () => {
     expect(availablePurchases(corrupt)).toHaveLength(0);
     expect(claimPurchase(corrupt, "run-1", T).ok).toBe(false);
   });
+});
+
+describe("exportForHosted and hostedInsertSql (Stage B bank move)", () => {
+  const ready = (orderId: string, createdAt: string) =>
+    ({
+      id: orderId,
+      orderId,
+      captureId: `CAP-${orderId}`,
+      buyerTransactionId: `TXN-${orderId}`,
+      amount: "25.00",
+      currency: "USD",
+      status: "available",
+      createdAt,
+      approvalUrl: null,
+      usedByRunId: null,
+      usedAt: null,
+    }) as const;
+  const bank = () => ({
+    version: 1 as const,
+    purchases: [ready("O-NEW", "2026-10-25T10:00:00Z"), ready("O-OLD", "2026-10-24T10:00:00Z"), { ...ready("O-WAIT", "2026-10-23T10:00:00Z"), status: "awaiting_approval" as const, captureId: null, buyerTransactionId: null }],
+  });
+
+  it("moves the oldest ready purchases and marks them used locally, so the local bank can never draw them", () => {
+    const r = exportForHosted(bank(), 1, "2026-10-25T12:00:00Z");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.moved.map((p) => p.orderId)).toEqual(["O-OLD"]);
+    const old = r.value.bank.purchases.find((p) => p.orderId === "O-OLD")!;
+    expect(old).toMatchObject({ status: "used", usedByRunId: MOVED_TO_HOSTED, usedAt: "2026-10-25T12:00:00Z" });
+    expect(availablePurchases(r.value.bank).map((p) => p.orderId)).toEqual(["O-NEW"]);
+  });
+
+  it("never moves a purchase that is not ready, and refuses when none is", () => {
+    const r = exportForHosted(bank(), 10, "2026-10-25T12:00:00Z");
+    expect(r.ok && r.value.moved.map((p) => p.orderId)).toEqual(["O-OLD", "O-NEW"]);
+    const empty = exportForHosted({ version: 1, purchases: [] }, 1, "2026-10-25T12:00:00Z");
+    expect(empty.ok).toBe(false);
+    expect(exportForHosted(bank(), 0, "2026-10-25T12:00:00Z").ok).toBe(false);
+  });
+
+  it("writes an insert that skips orders already moved", () => {
+    const r = exportForHosted(bank(), 2, "2026-10-25T12:00:00Z");
+    if (!r.ok) throw new Error(r.error);
+    const sql = hostedInsertSql(r.value.moved, "2026-10-25T12:00:00Z");
+    expect(sql.ok).toBe(true);
+    if (!sql.ok) return;
+    expect(sql.value).toContain("insert into public.console_purchases");
+    expect(sql.value).toContain("('O-OLD', 'CAP-O-OLD', 'TXN-O-OLD', '25.00', 'USD', '2026-10-24T10:00:00.000Z'::timestamptz)");
+    expect(sql.value).toContain("on conflict (order_id) do nothing;");
+    expect(sql.value).toContain("CONSOLE's own Supabase project");
+  });
+
+  it("refuses any id that is not plain letters, digits and dashes, so nothing can reach the SQL", () => {
+    for (const bad of ["O'1", "O-1); drop table x; --", "O 1", "", "x".repeat(129)]) {
+      const p = { ...ready("O-1", "2026-10-24T10:00:00Z"), orderId: bad };
+      expect(hostedInsertSql([p], "now").ok, bad).toBe(false);
+    }
+    expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), buyerTransactionId: "T'1" }], "now").ok).toBe(false);
+    expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), amount: "1e3" }], "now").ok).toBe(false);
+    expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), createdAt: "not a time" }], "now").ok).toBe(false);
+  });
+
 });

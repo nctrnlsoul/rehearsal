@@ -15,7 +15,7 @@ export { type Caps, DEFAULT_CAPS, capsFromEnv } from "../../src/core/caps";
 export { normalizeOrigin, webhookHandlerUrl } from "../../src/core/eventTarget";
 export type { Scenario, Step } from "../../src/core/scenario";
 export { type RunState, type StepRecord, summarize } from "../../src/core/runState";
-export type { Purchase } from "../../src/core/purchaseBank";
+export { type Purchase, exportForHosted, hostedInsertSql } from "../../src/core/purchaseBank";
 export { fromMinor, toMinor } from "../../src/core/money";
 export { PaypalClient } from "../../src/adapters/paypal";
 export { credentialsFor, MissingCredentialError } from "../../src/adapters/env";
