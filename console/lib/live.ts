@@ -12,7 +12,9 @@ import {
   scenarioDigest,
 } from "./engine";
 import { SESSION_COOKIE, clientIp, hashedKey, readCookie, sessionSecret, verifiedSessionId } from "./gate";
-import { type HostedConfig, hostedConfig, hostedGate, liveRunsEnabled } from "./hosted";
+import { HOSTED_FINDER_CLASSES, type HostedConfig, hostedConfig, hostedGate, liveRunsEnabled } from "./hosted";
+
+export { HOSTED_FINDER_CLASSES };
 import { PLANS } from "./replays";
 
 /**
@@ -360,6 +362,58 @@ export async function handleRunsPost(req: Request, deps: RunsDeps): Promise<Resp
     if (started !== "started") throw new Error("start came back unreadable");
 
     deps.startWorker({ runId, scenario: dry.scenario, digest: dry.sha256, config: s.config, db: s.db });
+    return json(202, { runId });
+  } catch {
+    return NOT_READY();
+  }
+}
+
+// ------------------------------------------------------------------ POST /api/finder
+
+export type FinderDeps = LiveDeps & {
+  readonly paypalReady: boolean;
+  /** The model. Null when no key is configured, which refuses before any quota is spent. */
+  readonly generate: GenerateFn | null;
+  readonly startFinder: (args: { runId: string; classId: string; config: HostedConfig; db: ConsoleDb; generate: GenerateFn }) => void;
+};
+
+/** One finder class per request (R-028). It spends one run and one model call, together or not at all. */
+export async function handleFinderPost(req: Request, deps: FinderDeps): Promise<Response> {
+  const s = setup(req, deps, { write: true });
+  if (!s.ok) return s.response;
+  const body = await readBody(req, SMALL_BODY_MAX_BYTES, ["classId", "confirm"]);
+  if (!body.ok) return body.response;
+  const { classId, confirm } = body.value;
+  if (confirm !== true) return refuse(400, "Nothing ran: confirm was not true.");
+  if (typeof classId !== "string" || !HOSTED_FINDER_CLASSES.includes(classId)) {
+    return refuse(400, "That is not a finder class this console runs.", { classes: HOSTED_FINDER_CLASSES });
+  }
+  if (deps.generate === null || !deps.paypalReady) return NOT_READY();
+
+  try {
+    const runId = newRunId(new Date(deps.now()));
+    const started = await s.db.rpc("console_start_run", {
+      p_id: runId,
+      p_kind: "finder",
+      p_plan_source: "finder",
+      p_plan_id: classId,
+      p_sha: null,
+      p_session_hash: s.who.sessionHash,
+      p_ip_hash: s.who.ipHash,
+      p_limit_global: s.config.runLimits.global,
+      p_limit_session: s.config.runLimits.session,
+      p_limit_ip: s.config.runLimits.ip,
+      p_model_limits: [s.config.modelLimits.global, s.config.modelLimits.session, s.config.modelLimits.ip],
+    });
+    if (started === "busy") {
+      const active = await s.db.rpc("console_active_run", {});
+      return refuse(409, "Another live run is going. Watch it, then start yours.", {
+        activeRunId: typeof active === "string" && RUN_ID_PATTERN.test(active) ? active : null,
+      });
+    }
+    if (typeof started === "string" && started in QUOTA_COPY) return quotaRefusal(started);
+    if (started !== "started") throw new Error("start came back unreadable");
+    deps.startFinder({ runId, classId, config: s.config, db: s.db, generate: deps.generate });
     return json(202, { runId });
   } catch {
     return NOT_READY();

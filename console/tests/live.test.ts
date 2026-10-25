@@ -4,8 +4,10 @@ import { createDb } from "../lib/db";
 import type { GenerateFn, Scenario } from "../lib/engine";
 import { SESSION_COOKIE, signSession } from "../lib/gate";
 import {
+  HOSTED_FINDER_CLASSES,
   PLAN_BODY_MAX_BYTES,
   handleBankGet,
+  handleFinderPost,
   handleDryRunPost,
   handlePlanPost,
   handleRunGet,
@@ -447,3 +449,63 @@ describe("no route", () => {
   });
 });
 
+
+describe("POST /api/finder", () => {
+  const finderHarness = async (env: Record<string, string | undefined> = ENV) => {
+    const h = await harness(env);
+    const startedFinders: Array<{ runId: string; classId: string }> = [];
+    const generate: GenerateFn = async () => ({ text: "{}" });
+    const post = (r: Request, over: Partial<{ paypalReady: boolean; generate: GenerateFn | null }> = {}) =>
+      handleFinderPost(r, {
+        env,
+        db: createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: h.rest.fetch }),
+        now: () => T0,
+        paypalReady: true,
+        generate,
+        startFinder: (a) => startedFinders.push({ runId: a.runId, classId: a.classId }),
+        ...over,
+      });
+    return { ...h, post, startedFinders };
+  };
+
+  it("runs only the supported, template-backed classes that need no bank", () => {
+    expect(HOSTED_FINDER_CLASSES).toEqual(["duplicate-webhook", "refund-after-partial", "unclaimed-payout", "overdue-invoice"]);
+  });
+
+  it("starts one class, spending one run and one model call", async () => {
+    const h = await finderHarness();
+    const r = await h.post(req("/api/finder", { body: { classId: "overdue-invoice", confirm: true } }));
+    expect(r.status).toBe(202);
+    expect(h.startedFinders).toEqual([{ runId: (await bodyOf(r))["runId"], classId: "overdue-invoice" }]);
+    expect(await h.used("runs_global")).toBe(1);
+    expect(await h.used("model_global")).toBe(1);
+  });
+
+  it("refuses an unknown or unsupported class, and more than one class", async () => {
+    const h = await finderHarness();
+    for (const classId of ["dispute-on-refunded-order", "nope", ["overdue-invoice", "unclaimed-payout"], 1]) {
+      expect((await h.post(req("/api/finder", { body: { classId, confirm: true } }))).status, JSON.stringify(classId)).toBe(400);
+    }
+    expect((await h.post(req("/api/finder", { body: { classId: "overdue-invoice" } }))).status).toBe(400);
+    expect(h.startedFinders).toEqual([]);
+  });
+
+  it("spends nothing without a model key or PayPal credentials, or with the kill switch off", async () => {
+    const h = await finderHarness();
+    const body = { classId: "overdue-invoice", confirm: true };
+    expect((await h.post(req("/api/finder", { body }), { generate: null })).status).toBe(503);
+    expect((await h.post(req("/api/finder", { body }), { paypalReady: false })).status).toBe(503);
+    const off = await finderHarness({ ...ENV, CONSOLE_LIVE_RUNS: undefined });
+    expect((await off.post(req("/api/finder", { body }))).status).toBe(503);
+    expect(await h.used("runs_global")).toBe(0);
+    expect(await h.used("model_global")).toBe(0);
+  });
+
+  it("spends neither the run nor the model call when the model quota is full", async () => {
+    const h = await finderHarness({ ...ENV, CONSOLE_MAX_MODEL_CALLS_PER_SESSION: "0" });
+    const r = await h.post(req("/api/finder", { body: { classId: "overdue-invoice", confirm: true } }));
+    expect(r.status).toBe(429);
+    expect((await bodyOf(r))["limit"]).toBe("model_session");
+    expect(await h.used("runs_global")).toBe(0);
+  });
+});

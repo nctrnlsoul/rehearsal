@@ -8,7 +8,10 @@
 -- behind: no row, and no quota spent.
 --
 -- Returns 'started', 'busy' (a run is already going), or the name of the
--- first daily quota that is full: 'runs_global', 'runs_session' or 'runs_ip'.
+-- first daily quota that is full: 'runs_global', 'runs_session' or 'runs_ip',
+-- or, for a finder run, 'model_global', 'model_session' or 'model_ip'. A
+-- finder run plans its class with one model call, so it takes a run and a
+-- model call together: all six quotas in one take, or none.
 
 create or replace function public.console_start_run(
   p_id             text,
@@ -20,7 +23,9 @@ create or replace function public.console_start_run(
   p_ip_hash        text,
   p_limit_global   integer,
   p_limit_session  integer,
-  p_limit_ip       integer
+  p_limit_ip       integer,
+  -- global, session, IP. Required for a finder run, refused for any other.
+  p_model_limits   integer[] default null
 ) returns text
 language plpgsql
 security invoker
@@ -39,10 +44,24 @@ begin
     return 'busy';
   end if;
 
-  v_full := public.console_take_daily(
-    array['runs_global', 'runs_session', 'runs_ip'],
-    array['all', p_session_hash, p_ip_hash],
-    array[p_limit_global, p_limit_session, p_limit_ip]);
+  if (p_kind = 'finder') <> (p_model_limits is not null) then
+    raise exception 'console_start_run: a finder run takes model limits, and only a finder run does';
+  end if;
+  if p_model_limits is not null and coalesce(array_length(p_model_limits, 1), 0) <> 3 then
+    raise exception 'console_start_run: model limits are global, session, IP';
+  end if;
+
+  if p_kind = 'finder' then
+    v_full := public.console_take_daily(
+      array['runs_global', 'runs_session', 'runs_ip', 'model_global', 'model_session', 'model_ip'],
+      array['all', p_session_hash, p_ip_hash, 'all', p_session_hash, p_ip_hash],
+      array[p_limit_global, p_limit_session, p_limit_ip, p_model_limits[1], p_model_limits[2], p_model_limits[3]]);
+  else
+    v_full := public.console_take_daily(
+      array['runs_global', 'runs_session', 'runs_ip'],
+      array['all', p_session_hash, p_ip_hash],
+      array[p_limit_global, p_limit_session, p_limit_ip]);
+  end if;
   if v_full is not null then
     return v_full;
   end if;
@@ -53,9 +72,9 @@ begin
 end;
 $$;
 
-revoke all on function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer)
+revoke all on function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])
   from public, anon, authenticated;
-grant execute on function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer)
+grant execute on function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])
   to service_role;
 
 notify pgrst, 'reload schema';

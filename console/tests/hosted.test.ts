@@ -165,8 +165,8 @@ describe("hostedGate", () => {
 });
 
 describe("the run route's duration", () => {
-  it("is exported as exactly 800 from the route file itself (R-030)", () => {
-    const route = readFileSync(join(__dirname, "..", "app", "api", "runs", "route.ts"), "utf8");
+  it.each(["runs", "finder"])("is exported as exactly 800 from the %s route file itself (R-030)", (name) => {
+    const route = readFileSync(join(__dirname, "..", "app", "api", name, "route.ts"), "utf8");
     expect(route).toMatch(/^export const maxDuration = 800;$/m);
     expect(route.match(/export const maxDuration/g)).toHaveLength(1);
   });

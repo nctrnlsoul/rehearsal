@@ -420,3 +420,33 @@ describe("the live timeline, past the gate", () => {
     await ctx.close();
   });
 });
+
+describe("the hosted finder, past the gate", () => {
+  it("lists the four hosted classes and enables Run this class", async () => {
+    const { ctx, page, watch } = await unlocked();
+    await page.getByRole("radio", { name: "Find an edge case" }).click();
+    await expect(page.locator(".plan-option").count()).resolves.toBe(4);
+    await expect(page.locator(".go .btn-primary").innerText()).resolves.toBe("Run this class");
+    await expect(page.locator(".go .btn-primary").isEnabled()).resolves.toBe(true);
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+
+  it("shows a finder run's verdict with its evidence, as the lab report does", async () => {
+    await db.pg.query(
+      `insert into public.console_runs (id, kind, plan_source, plan_id, scenario_sha256, session_hash, ip_hash, status, created_at, started_at, heartbeat_at, finished_at)
+       values ('20261025180000-e2e004', 'finder', 'finder', 'overdue-invoice', null, $1, $1, 'complete', now(), now(), now(), now())`,
+      ["b".repeat(64)],
+    );
+    await db.pg.query(
+      `insert into public.console_run_events (run_id, kind, data) values ('20261025180000-e2e004', 'note', $1::jsonb)`,
+      [JSON.stringify({ finding: { class_id: "overdue-invoice", verdict: "ok", title: "An invoice already past its due date", expected: "the invoice to read as overdue", actual: "sent; PayPal reads it as OVERDUE", likely_fix: "none needed", skipped: null } })],
+    );
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e004", 200);
+    await page.waitForSelector(".finding");
+    await expect(page.locator(".finding").innerText()).resolves.toMatch(/OK[\s\S]*An invoice already past its due date[\s\S]*Observed[\s\S]*OVERDUE/);
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-finder-1440.png"), fullPage: true });
+    await ctx.close();
+  });
+});

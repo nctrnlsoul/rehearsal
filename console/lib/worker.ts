@@ -1,6 +1,10 @@
 import type { ConsoleDb } from "./db";
 import {
+  AiBudgetTracker,
+  type Caps,
   type ClaimResult,
+  DEFAULT_FINDER_DESCRIPTION,
+  type GenerateFn,
   type HandlerRegistry,
   type PaypalClient,
   type Purchase,
@@ -8,9 +12,16 @@ import {
   type Scenario,
   type StepHandler,
   type StoreSnapshot,
+  aiBudgetFromEnv,
+  cleanModelText,
   defaultHandlers,
   executeScenario,
+  finderDepsFrom,
+  normalizeOrigin,
+  runFinder,
+  scenarioDigest,
   summarize,
+  webhookHandlerUrl,
 } from "./engine";
 import { type RunEvent, type SeenDeliveries, deliveryEvents, stateEvents } from "./events";
 import { DELIVERY_POLL_S, DELIVERY_WAIT_S, STEP_MARGIN_S, worstCaseOf } from "./hosted";
@@ -102,11 +113,23 @@ function purchaseFrom(rows: unknown, runId: string, nowIso: string): ClaimResult
   return { ok: true, purchase };
 }
 
-export async function runScenarioWorker(
-  args: { runId: string; scenario: Scenario; digest: string },
+/** What a tracked run's body hands back: the final state, and anything it learned to record. */
+type WorkResult = { readonly state: RunState | null; readonly events?: readonly RunEvent[] };
+
+/** Runs one scenario through the engine with this run's fenced saves, claims and time guard. */
+type Execute = (scenario: Scenario, digest: string) => Promise<RunState>;
+
+/**
+ * Everything a hosted run does around its body: marks it running, saves every
+ * state change fenced, claims purchases through the database, polls the store
+ * and heartbeats beside the body, waits for late deliveries, then finishes.
+ */
+async function runTracked(
+  runId: string,
   deps: WorkerDeps,
+  opts: { readonly deliveryWaitS: number },
+  body: (execute: Execute) => Promise<WorkResult>,
 ): Promise<void> {
-  const { runId } = args;
   const iso = () => deps.now().toISOString();
   const rpcOk = async (name: "console_save_state" | "console_add_events" | "console_heartbeat", params: Record<string, unknown>) =>
     (await deps.db.rpc(name, { p_id: runId, ...params })) === true;
@@ -119,7 +142,6 @@ export async function runScenarioWorker(
 
   let prev: RunState | null = null;
   let fenced = false;
-  let finished: RunState | null = null;
 
   const persist = async (s: RunState) => {
     if (fenced) throw new FencedError();
@@ -133,17 +155,33 @@ export async function runScenarioWorker(
   const claimPurchase = async (rid: string): Promise<ClaimResult> =>
     purchaseFrom(await deps.db.rpc("console_claim_purchase", { p_run_id: rid }), rid, iso());
 
-  // The delivery poller runs beside the steps and heartbeats while it waits,
+  const execute: Execute = (scenario, digest) =>
+    executeScenario(
+      { scenario, runId, resume: null, webhookMode: "reuse-only", scenarioDigest: digest },
+      {
+        seller: deps.seller,
+        buyer: deps.buyer,
+        claimPurchase,
+        persist,
+        now: deps.now,
+        sleep: deps.sleep,
+        log: deps.log,
+        env: deps.env,
+        handlers: timeGuarded(deps.handlers ?? defaultHandlers, deps.deadlineMs, deps.now),
+      },
+    );
+
+  // The delivery poller runs beside the body and heartbeats while it waits,
   // so a dispute step's two-minute poll never looks like a dead server.
   const seen: SeenDeliveries = new Map();
-  let stepsDone = false;
+  let bodyDone = false;
   let waitUntilMs = Number.POSITIVE_INFINITY;
   let storeReadFailures = 0;
   const poll = async () => {
     for (;;) {
       if (fenced) return;
       const nowMs = deps.now().getTime();
-      if (stepsDone && nowMs >= waitUntilMs) return;
+      if (bodyDone && nowMs >= waitUntilMs) return;
       if (nowMs >= deps.deadlineMs - FINISH_MARGIN_MS) return;
       let events: RunEvent[] = [];
       if (deps.readStore !== null) {
@@ -169,52 +207,113 @@ export async function runScenarioWorker(
   };
   const poller = poll();
 
+  let result: WorkResult;
   try {
-    finished = await executeScenario(
-      { scenario: args.scenario, runId, resume: null, webhookMode: "reuse-only", scenarioDigest: args.digest },
-      {
-        seller: deps.seller,
-        buyer: deps.buyer,
-        claimPurchase,
-        persist,
-        now: deps.now,
-        sleep: deps.sleep,
-        log: deps.log,
-        env: deps.env,
-        handlers: timeGuarded(deps.handlers ?? defaultHandlers, deps.deadlineMs, deps.now),
-      },
-    );
+    result = await body(execute);
   } catch (e) {
-    stepsDone = true;
+    bodyDone = true;
     waitUntilMs = 0;
     await poller;
     if (e instanceof FencedError || fenced) {
       deps.log(`run ${runId} stopped: the database no longer lists it as running`);
       return;
     }
-    // The name only: a message can carry a PayPal or database body.
+    // The name only: a message can carry a PayPal, model or database body.
     deps.log(`run ${runId} failed: ${e instanceof Error ? e.name : typeof e}`);
     await finishQuietly(deps, runId, "failed", "the run stopped on an internal error; a step it had started may have written to PayPal");
     return;
   }
 
-  stepsDone = true;
-  waitUntilMs = Math.min(deps.now().getTime() + DELIVERY_WAIT_S * 1000, deps.deadlineMs - FINISH_MARGIN_MS);
-  if (!fenced) {
-    await rpcOk("console_add_events", { p_events: [{ kind: "deliveries_wait_started", data: { seconds: DELIVERY_WAIT_S } }] }).catch(() => false);
+  bodyDone = true;
+  if (opts.deliveryWaitS > 0) {
+    waitUntilMs = Math.min(deps.now().getTime() + opts.deliveryWaitS * 1000, deps.deadlineMs - FINISH_MARGIN_MS);
+    if (!fenced) {
+      await rpcOk("console_add_events", { p_events: [{ kind: "deliveries_wait_started", data: { seconds: opts.deliveryWaitS } }] }).catch(() => false);
+    }
+  } else {
+    waitUntilMs = 0;
   }
   await poller;
   if (fenced) return;
-  await rpcOk("console_add_events", {
-    p_events: [{ kind: "deliveries_wait_ended", data: { events_seen: [...seen.keys()].filter((k) => k.startsWith("event:")).length } }],
-  }).catch(() => false);
+  const closing: RunEvent[] = [...(result.events ?? [])];
+  if (opts.deliveryWaitS > 0) {
+    closing.push({ kind: "deliveries_wait_ended", data: { events_seen: [...seen.keys()].filter((k) => k.startsWith("event:")).length } });
+  }
+  if (closing.length > 0) await rpcOk("console_add_events", { p_events: closing }).catch(() => false);
 
-  const summary = summarize(finished);
-  if (finished.halted || !summary.complete) {
-    await finishQuietly(deps, runId, "halted", finished.haltReason ?? "the run ended with steps that did not run");
+  const state = result.state;
+  if (state === null) {
+    await finishQuietly(deps, runId, "halted", "nothing ran");
+  } else if (state.halted || !summarize(state).complete) {
+    await finishQuietly(deps, runId, "halted", state.haltReason ?? "the run ended with steps that did not run");
   } else {
     await finishQuietly(deps, runId, "complete", "");
   }
+}
+
+export async function runScenarioWorker(args: { runId: string; scenario: Scenario; digest: string }, deps: WorkerDeps): Promise<void> {
+  await runTracked(args.runId, deps, { deliveryWaitS: DELIVERY_WAIT_S }, async (execute) => ({
+    state: await execute(args.scenario, args.digest),
+  }));
+}
+
+export type FinderWorkerDeps = WorkerDeps & {
+  readonly generate: GenerateFn;
+  readonly caps: Caps;
+  readonly storeOrigin: string;
+};
+
+const MAX_FINDING_CHARS = 300;
+
+/**
+ * One finder class, hosted (R-028: one class per request). The engine's finder
+ * plans the class's fixed template with one model call, runs it reuse-only,
+ * and reads the verdict from the store's own records (R-012). The finder
+ * waits for its own evidence, so there is no second delivery wait here.
+ */
+export async function runFinderWorker(args: { runId: string; classId: string }, deps: FinderWorkerDeps): Promise<void> {
+  const origins = [normalizeOrigin(deps.storeOrigin)];
+  await runTracked(args.runId, deps, { deliveryWaitS: 0 }, async (execute) => {
+    let last: RunState | null = null;
+    const results = await runFinder(
+      { description: DEFAULT_FINDER_DESCRIPTION, only: args.classId, webhookTarget: webhookHandlerUrl(origins[0]!) },
+      finderDepsFrom({
+        generate: deps.generate,
+        budget: new AiBudgetTracker({ ...aiBudgetFromEnv(deps.env), maxCallsPerRun: 1 }),
+        caps: deps.caps,
+        allowedEventOrigins: origins,
+        run: async (scenario) => {
+          last = await execute(scenario, scenarioDigest(scenario));
+          return last;
+        },
+        readStore:
+          deps.readStore ??
+          (async () => {
+            throw new Error("no store token");
+          }),
+        // No hosted class draws on the bank. Reporting none keeps any class that
+        // would need one skipped, rather than reaching for a purchase it was not given.
+        bankAvailable: () => 0,
+        log: deps.log,
+        now: deps.now,
+        sleep: deps.sleep,
+      }),
+    );
+    const r = results[0];
+    const finding =
+      r === undefined
+        ? null
+        : {
+            class_id: r.classId,
+            verdict: r.finding.verdict,
+            title: cleanModelText(r.finding.title, MAX_FINDING_CHARS),
+            expected: cleanModelText(r.finding.expected, MAX_FINDING_CHARS),
+            actual: cleanModelText(r.finding.actual, MAX_FINDING_CHARS),
+            likely_fix: cleanModelText(r.finding.likelyFix, MAX_FINDING_CHARS),
+            skipped: r.skipped === null ? null : cleanModelText(r.skipped, MAX_FINDING_CHARS),
+          };
+    return { state: last, events: finding === null ? [] : [{ kind: "note", data: { finding } }] };
+  });
 }
 
 /** A failed finish is left to the reaper, which will mark the run abandoned. */

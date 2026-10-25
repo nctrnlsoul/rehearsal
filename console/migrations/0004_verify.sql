@@ -7,7 +7,7 @@
 
 do $$
 declare
-  f text := 'public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer)';
+  f text := 'public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[])';
   ok boolean;
   a text;
   b text;

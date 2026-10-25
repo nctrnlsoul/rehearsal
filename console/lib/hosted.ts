@@ -1,4 +1,4 @@
-import { type Caps, capsFromEnv, eventOriginsFromEnv, gateScenario, normalizeOrigin, type Scenario } from "./engine";
+import { type Caps, FAILURE_CLASSES, capsFromEnv, eventOriginsFromEnv, gateScenario, normalizeOrigin, type Scenario } from "./engine";
 
 /**
  * Everything that makes a hosted run smaller than a local one (R-039). The
@@ -151,3 +151,10 @@ export function hostedGate(candidate: unknown, config: HostedConfig): HostedGate
   }
   return { ok: true, scenario: g.scenario, budgetS };
 }
+
+/** The finder classes a hosted request may run: supported, with a fixed template, and no bank draw. */
+export const HOSTED_FINDER: ReadonlyArray<{ readonly id: string; readonly title: string }> = FAILURE_CLASSES.filter(
+  (c) => c.supported && c.template !== null && !c.needsBankedPurchase,
+).map((c) => ({ id: c.id, title: c.title }));
+
+export const HOSTED_FINDER_CLASSES: readonly string[] = HOSTED_FINDER.map((c) => c.id);

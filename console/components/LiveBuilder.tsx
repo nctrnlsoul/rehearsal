@@ -12,6 +12,7 @@ import { Mark } from "./chrome";
  */
 
 export type PlanChoice = { readonly plan: string; readonly name: string; readonly description: string | null };
+export type FinderChoice = { readonly id: string; readonly title: string };
 
 type DryRun = {
   ok: boolean;
@@ -29,7 +30,7 @@ type Problem = { text: string; link?: { href: string; label: string } };
 const DESCRIPTION_MAX = 2000;
 
 /** Only this console's own routes, which run every check; the type allows nothing else. */
-async function post(route: "dry-run" | "plan" | "runs", body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+async function post(route: "dry-run" | "plan" | "runs" | "finder", body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
   const res = await fetch(`/api/${route}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -57,9 +58,10 @@ function problemOf(status: number, json: Record<string, unknown>): Problem {
   return { text: [error ?? `The console answered ${status}.`, ...reasons.slice(0, 3)].join(" ") };
 }
 
-export function LiveBuilder({ plans }: { plans: readonly PlanChoice[] }) {
+export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; finder: readonly FinderChoice[] }) {
   const router = useRouter();
-  const [mode, setMode] = useState<"recorded" | "describe">("recorded");
+  const [mode, setMode] = useState<"recorded" | "describe" | "finder">("recorded");
+  const [finderClass, setFinderClass] = useState(finder[0]?.id ?? "");
   const [chosen, setChosen] = useState(plans[0]?.plan ?? "");
   const [description, setDescription] = useState("");
   const [picked, setPicked] = useState<Picked | null>(null);
@@ -113,7 +115,20 @@ export function LiveBuilder({ plans }: { plans: readonly PlanChoice[] }) {
     setProblem(problemOf(status, json));
   };
 
-  const runnable = picked !== null && picked.dry.ok && picked.dry.sha256 !== null && busy === null;
+  const findIt = async () => {
+    setBusy("run");
+    setProblem(null);
+    const { status, json } = await post("finder", { classId: finderClass, confirm: true });
+    if (status === 202 && typeof json["runId"] === "string") {
+      router.push(`/live/${json["runId"]}`);
+      return;
+    }
+    setBusy(null);
+    setProblem(problemOf(status, json));
+  };
+
+  const runnable =
+    mode === "finder" ? finderClass !== "" && busy === null : picked !== null && picked.dry.ok && picked.dry.sha256 !== null && busy === null;
   const chars = Array.from(description.trim()).length;
 
   return (
@@ -123,8 +138,21 @@ export function LiveBuilder({ plans }: { plans: readonly PlanChoice[] }) {
         <div className="modes" role="radiogroup" aria-label="Plan source">
           <button type="button" role="radio" aria-checked={mode === "recorded"} className={`speed${mode === "recorded" ? " on" : ""}`} onClick={() => setMode("recorded")}>A recorded plan</button>
           <button type="button" role="radio" aria-checked={mode === "describe"} className={`speed${mode === "describe" ? " on" : ""}`} onClick={() => { setMode("describe"); setPicked(null); setProblem(null); }}>Describe a business</button>
+          <button type="button" role="radio" aria-checked={mode === "finder"} className={`speed${mode === "finder" ? " on" : ""}`} onClick={() => { setMode("finder"); setPicked(null); setProblem(null); }}>Find an edge case</button>
         </div>
-        {mode === "recorded" ? (
+        {mode === "finder" ? (
+          <fieldset className="plans">
+            <legend className="sr">Finder classes</legend>
+            {finder.map((c) => (
+              <label key={c.id} className="plan-option">
+                <input type="radio" name="finder" value={c.id} checked={finderClass === c.id} onChange={() => setFinderClass(c.id)} />
+                <span className="nm">{c.title}</span>
+                <span className="id mono">{c.id}</span>
+              </label>
+            ))}
+            <p className="note">One class per run. The model fills that class&apos;s fixed template (it may change values, never steps), the run reuses the store&apos;s webhook, and the verdict comes from the store&apos;s own records. 1 model call and 1 live run.</p>
+          </fieldset>
+        ) : mode === "recorded" ? (
           <fieldset className="plans">
             <legend className="sr">Recorded plans</legend>
             {plans.map((p) => (
@@ -154,7 +182,9 @@ export function LiveBuilder({ plans }: { plans: readonly PlanChoice[] }) {
         {problem !== null && (
           <p className="problem"><Mark kind="stop">{problem.text}</Mark>{problem.link !== undefined && <> <Link href={problem.link.href}>{problem.link.label}</Link></>}</p>
         )}
-        {picked === null && busy === null && problem === null && <p className="note">{mode === "recorded" ? "Choose a plan." : "Describe a business to get a plan."}</p>}
+        {picked === null && busy === null && problem === null && (
+          <p className="note">{mode === "recorded" ? "Choose a plan." : mode === "describe" ? "Describe a business to get a plan." : "The finder plans its class when the run starts, so its exact steps show on the run's timeline."}</p>
+        )}
         {picked !== null && (
           <>
             <p className="name">{picked.name}</p>
@@ -178,11 +208,17 @@ export function LiveBuilder({ plans }: { plans: readonly PlanChoice[] }) {
 
       <section className="go" aria-labelledby="go-h">
         <h2 id="go-h" className="label">3 · Run that, and only that</h2>
-        <button type="button" className="btn btn-primary" onClick={() => void runIt()} disabled={!runnable} aria-describedby="go-note">
-          {busy === "run" ? "Starting…" : "Run this exact plan"}
+        <button type="button" className="btn btn-primary" onClick={() => void (mode === "finder" ? findIt() : runIt())} disabled={!runnable} aria-describedby="go-note">
+          {busy === "run" ? "Starting…" : mode === "finder" ? "Run this class" : "Run this exact plan"}
         </button>
         <p id="go-note" className="note">
-          {runnable ? <>Sends the plan id and digest <span className="mono">{picked!.dry.sha256!.slice(0, 12)}</span>. The server reloads the plan and refuses if anything differs.</> : "Enabled once the plan above passes every check."}
+          {mode === "finder" ? (
+            "Runs the one class chosen above."
+          ) : runnable ? (
+            <>Sends the plan id and digest <span className="mono">{picked!.dry.sha256!.slice(0, 12)}</span>. The server reloads the plan and refuses if anything differs.</>
+          ) : (
+            "Enabled once the plan above passes every check."
+          )}
         </p>
       </section>
     </div>

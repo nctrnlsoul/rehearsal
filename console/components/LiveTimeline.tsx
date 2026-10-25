@@ -286,7 +286,7 @@ function Board({ view, lostForS }: { view: LiveView; lostForS: number | null }) 
         {view.storeUnread && <p className="detail">The store&apos;s state endpoint could not be read at least once, so a delivery may show late or not at all.</p>}
       </div>
       {rows.length === 0 ? (
-        <p className="note">No step has started yet.</p>
+        <p className="note">{view.settled ? "No step ran." : "No step has started yet."}</p>
       ) : (
         <>
           <div className="lanes-head" aria-hidden="true">
@@ -301,7 +301,27 @@ function Board({ view, lostForS }: { view: LiveView; lostForS: number | null }) 
           </div>
         </>
       )}
+      {view.finding !== null && <Finding finding={view.finding} />}
       <Ledger view={view} />
+    </section>
+  );
+}
+
+/** The finder's verdict as the lab report gives it: a mark and a word, then the evidence. */
+function Finding({ finding }: { finding: NonNullable<LiveView["finding"]> }) {
+  const mark = finding.verdict === "bug" ? "bug" : finding.verdict === "ok" ? "ok" : "stop";
+  const word = finding.verdict === "bug" ? "BUG" : finding.verdict === "ok" ? "OK" : "INCONCLUSIVE";
+  return (
+    <section className="finding" aria-labelledby="finding-h">
+      <h3 id="finding-h" className="label">Finder verdict · {finding.classId}</h3>
+      <p className="verdict-line"><Mark kind={mark}>{word}</Mark> {finding.title}</p>
+      <dl className="facts">
+        <dt>Expected</dt><dd className="word">{finding.expected}</dd>
+        <dt>Observed</dt><dd className="word">{finding.actual}</dd>
+        <dt>Likely fix</dt><dd className="word">{finding.likelyFix}</dd>
+        {finding.skipped !== null && <><dt>Not run</dt><dd className="word">{finding.skipped}</dd></>}
+      </dl>
+      <p className="note">The verdict comes from the store&apos;s own records of this run&apos;s events. With no such record it says INCONCLUSIVE, never OK.</p>
     </section>
   );
 }

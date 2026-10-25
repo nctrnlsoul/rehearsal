@@ -144,3 +144,15 @@ describe("liveView", () => {
     expect(mergeEvents([a, b], [b, c]).map((e) => e.seq)).toEqual([a.seq, b.seq, c.seq]);
   });
 });
+
+describe("liveView finder verdicts", () => {
+  it("reads the verdict, and anything unexpected as inconclusive", () => {
+    const f = (verdict: unknown) =>
+      liveView(read("complete", [ev(100, "note", null, { finding: { class_id: "overdue-invoice", verdict, title: "t", expected: "e", actual: "a", likely_fix: "f", skipped: null } })])).finding;
+    expect(f("ok")).toMatchObject({ classId: "overdue-invoice", verdict: "ok", expected: "e" });
+    expect(f("bug")!.verdict).toBe("bug");
+    expect(f("OK")!.verdict).toBe("inconclusive");
+    expect(f(undefined)!.verdict).toBe("inconclusive");
+    expect(liveView(read("complete", [])).finding).toBeNull();
+  });
+});

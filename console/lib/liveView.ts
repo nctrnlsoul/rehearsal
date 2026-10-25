@@ -82,8 +82,20 @@ export type LedgerRow = {
   readonly firstSeenT: number;
 };
 
+/** The finder's verdict, from the store's own records (R-012). */
+export type LiveFinding = {
+  readonly classId: string;
+  readonly verdict: "bug" | "ok" | "inconclusive";
+  readonly title: string;
+  readonly expected: string;
+  readonly actual: string;
+  readonly likelyFix: string;
+  readonly skipped: string | null;
+};
+
 export type LiveView = {
   readonly phase: Phase;
+  readonly finding: LiveFinding | null;
   readonly headline: string;
   readonly detail: string | null;
   readonly elapsedS: number;
@@ -187,6 +199,7 @@ export function liveView(read: LiveRead): LiveView {
   const orders = new Map<string, LiveEvent>();
   const redeliveries = new Map<string, LiveEvent>();
   let storeUnread = false;
+  let finding: LiveFinding | null = null;
   for (const e of events) {
     if (e.kind === "delivery") {
       const id = str(e.data["event_id"]);
@@ -212,6 +225,21 @@ export function liveView(read: LiveRead): LiveView {
         if (capture !== null && !orders.has(capture)) orders.set(capture, e);
       }
       if ("store_read_failed" in e.data) storeUnread = true;
+      const f = e.data["finding"];
+      if (typeof f === "object" && f !== null) {
+        const r = f as Record<string, unknown>;
+        const verdict = r["verdict"];
+        finding = {
+          classId: str(r["class_id"]) ?? "unknown",
+          // Anything but the three verdicts reads as inconclusive, never as ok.
+          verdict: verdict === "bug" || verdict === "ok" ? verdict : "inconclusive",
+          title: str(r["title"]) ?? "",
+          expected: str(r["expected"]) ?? "",
+          actual: str(r["actual"]) ?? "",
+          likelyFix: str(r["likely_fix"]) ?? "",
+          skipped: str(r["skipped"]),
+        };
+      }
     }
   }
 
@@ -275,6 +303,7 @@ export function liveView(read: LiveRead): LiveView {
 
   return {
     phase,
+    finding,
     headline: HEADLINES[phase],
     detail,
     elapsedS: secs(t0, run.finished_at ?? now),

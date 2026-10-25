@@ -86,7 +86,7 @@ describe("verify files", () => {
 
   it("fail loudly when a function runs as its owner", async () => {
     const db = await freshDb();
-    await db.exec("alter function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer) security definer");
+    await db.exec("alter function public.console_start_run(text, text, text, text, text, text, text, integer, integer, integer, integer[]) security definer");
     await expect(db.exec(sql("0004_verify.sql"))).rejects.toThrow(/FUNCTION WRONG/);
   });
 
@@ -456,5 +456,36 @@ describe("reads", () => {
     expect(got.v).toMatchObject({ id: saved.id, description: "a candle shop", scenario: { name: "x", steps: [] }, sha256: H("a") });
     expect(got.v).not.toHaveProperty("session_hash");
     expect(await one(db, "select public.console_get_plan('00000000-0000-0000-0000-000000000000') as v")).toEqual({ v: null });
+  });
+});
+
+describe("console_start_run for a finder", () => {
+  const finder = (db: PGlite, id: string, model: string | null, limits: [number, number, number] = [20, 5, 5]) =>
+    one<{ out: string }>(
+      db,
+      `select public.console_start_run('${id}', 'finder', 'finder', 'duplicate-webhook', null, '${H("b")}', '${H("c")}',
+         ${limits[0]}, ${limits[1]}, ${limits[2]}, ${model === null ? "null" : `array[${model}]`}) as out`,
+    ).then((r) => r.out);
+
+  it("takes a run and a model call together", async () => {
+    const db = await freshDb();
+    expect(await finder(db, "20261025000000-000001", "30, 8, 8")).toBe("started");
+    expect(await one(db, "select public.console_daily_used('runs_global', 'all') as n")).toEqual({ n: 1 });
+    expect(await one(db, "select public.console_daily_used('model_global', 'all') as n")).toEqual({ n: 1 });
+  });
+
+  it("spends neither when the model quota is full", async () => {
+    const db = await freshDb();
+    expect(await finder(db, "20261025000000-000001", "30, 0, 8")).toBe("model_session");
+    expect(await one(db, "select public.console_daily_used('runs_global', 'all') as n")).toEqual({ n: 0 });
+    expect((await db.query("select * from public.console_runs")).rows).toEqual([]);
+  });
+
+  it("refuses a finder without model limits, and a scenario run with them", async () => {
+    const db = await freshDb();
+    await expect(finder(db, "20261025000000-000001", null)).rejects.toThrow(/finder run takes model limits/);
+    await expect(
+      db.query(`select public.console_start_run('20261025000000-000002', 'scenario', 'recorded', 'p', '${H("a")}', '${H("b")}', '${H("c")}', 20, 5, 5, array[30, 8, 8])`),
+    ).rejects.toThrow(/finder run takes model limits/);
   });
 });

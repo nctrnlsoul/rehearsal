@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SiteFooter, Topbar } from "../../components/chrome";
 import { LiveBuilder } from "../../components/LiveBuilder";
-import { HOSTED_CAPS, HOSTED_MODEL_LIMITS, HOSTED_RUN_LIMITS, TIME_BUDGET_S, liveRunsEnabled } from "../../lib/hosted";
+import { HOSTED_CAPS, HOSTED_FINDER, HOSTED_MODEL_LIMITS, HOSTED_RUN_LIMITS, TIME_BUDGET_S, liveRunsEnabled } from "../../lib/hosted";
 import { PLANS } from "../../lib/replays";
 import { SESSION_COOKIE, hasValidSession } from "../../lib/session";
 import "../runs/timeline.css";
@@ -35,7 +35,7 @@ export default async function LivePage() {
       <main>
         <div id="builder">
           {enabled ? (
-            <LiveBuilder plans={plans} />
+            <LiveBuilder plans={plans} finder={HOSTED_FINDER} />
           ) : (
             <section className="terminal" role="status">
               <h2>Live runs are paused on this deployment</h2>

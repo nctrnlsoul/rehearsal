@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { fakePaypal, scenarioWith } from "../../tests/helpers/fakePaypal";
 import { createDb } from "../lib/db";
 import { type HandlerRegistry, type StepHandler, type StoreSnapshot, defaultHandlers, scenarioDigest } from "../lib/engine";
-import { runScenarioWorker } from "../lib/worker";
+import { HOSTED_CAPS } from "../lib/hosted";
+import { runFinderWorker, runScenarioWorker } from "../lib/worker";
 import { freshDb } from "./pg";
 import { TEST_DB_ENV, postgrestOver } from "./postgrest";
 
@@ -276,5 +277,59 @@ describe("runScenarioWorker", () => {
     for (const e of await h.events()) {
       expect(JSON.stringify(e.data).length).toBeLessThan(1000);
     }
+  });
+});
+
+describe("runFinderWorker", () => {
+  const overdue = JSON.stringify({
+    version: 1,
+    name: "Overdue invoice",
+    profile: { name: "Test Shop" },
+    currency: "USD",
+    steps: [
+      { id: "invoice", kind: "invoice_create", needs: [], amount: "60.00", dueInDays: -7, itemName: "Wholesale candles" },
+      { id: "send", kind: "invoice_send", needs: ["invoice"], from: "invoice" },
+    ],
+  });
+
+  it("plans the class with one model call, runs it reuse-only, and records the verdict", async () => {
+    const calls: string[] = [];
+    const h = await harness({
+      handlers: {
+        invoice_create: async () => ({ kind: "success", detail: "invoice created", ids: { invoice_id: "INV2-E2E" } }),
+        invoice_send: async () => ({ kind: "success", detail: "sent; PayPal reads it as OVERDUE", ids: {} }),
+      },
+      readStore: async () => snapshot([]),
+    });
+    await runFinderWorker(
+      { runId: RUN, classId: "overdue-invoice" },
+      {
+        ...h.deps,
+        generate: async ({ prompt }) => {
+          calls.push(prompt);
+          return { text: overdue };
+        },
+        caps: HOSTED_CAPS,
+        storeOrigin: "https://rehearsal-store.vercel.app",
+      },
+    );
+    expect(calls).toHaveLength(1);
+    const finding = (await h.events()).find((e) => e.kind === "note" && "finding" in e.data)!;
+    expect(finding.data["finding"]).toMatchObject({ class_id: "overdue-invoice", verdict: "ok" });
+    const kinds = (await h.events()).map((e) => e.kind);
+    expect(kinds).not.toContain("deliveries_wait_started");
+    expect((await h.run()).status).toBe("complete");
+  });
+
+  it("finishes halted with an inconclusive verdict when the model's plan does not fit the template", async () => {
+    const h = await harness({ readStore: async () => snapshot([]) });
+    await runFinderWorker(
+      { runId: RUN, classId: "overdue-invoice" },
+      { ...h.deps, generate: async () => ({ text: "not a plan" }), caps: HOSTED_CAPS, storeOrigin: "https://rehearsal-store.vercel.app" },
+    );
+    expect(h.ran).toEqual([]);
+    const finding = (await h.events()).find((e) => e.kind === "note" && "finding" in e.data)!;
+    expect((finding.data["finding"] as Record<string, unknown>)["verdict"]).toBe("inconclusive");
+    expect((await h.run()).status).toBe("halted");
   });
 });
