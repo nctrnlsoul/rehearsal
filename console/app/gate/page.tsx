@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { Mark, SiteFooter, Topbar } from "../../components/chrome";
+import { HOSTED_CAPS, liveRunsEnabled } from "../../lib/hosted";
 import "./gate.css";
 
 const order = (i: number) => ({ "--i": i }) as CSSProperties;
@@ -31,6 +32,8 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
 
 export default async function GatePage({ searchParams }: { searchParams: Promise<Query> }) {
   const state = stateOf(await searchParams);
+  const live = liveRunsEnabled(process.env);
+  const usd = (minor: bigint) => `USD ${(Number(minor) / 100).toFixed(2)}`;
   return (
     <div className="s-gate">
       <a className="skip" href="#gate">Skip to the passcode</a>
@@ -42,8 +45,8 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
         </section>
         <dl className="inside arrive" style={order(1)} aria-label="What is behind the gate">
           <dt>PayPal host</dt><dd><span className="mono">api-m.sandbox.paypal.com</span><small>pinned in code; no setting can point it at live PayPal</small></dd>
-          <dt>Live runs</dt><dd>Arrive in Stage B<small>this deployment replays recorded runs only</small></dd>
-          <dt>Per run</dt><dd><span className="mono">USD 2,000.00</span> at most, <span className="mono">USD 500.00</span> per step</dd>
+          <dt>Live runs</dt><dd>{live ? "On" : "Paused on this deployment"}<small>{live ? "real sandbox calls, one run at a time" : "recorded runs still replay"}</small></dd>
+          <dt>Per run</dt><dd><span className="mono">{usd(HOSTED_CAPS.maxTotalMinor)}</span> at most, <span className="mono">{usd(HOSTED_CAPS.maxStepAmountMinor)}</span> per step</dd>
           <dt>Without a passcode</dt><dd>Recorded runs replay, each one labeled REPLAY</dd>
         </dl>
 

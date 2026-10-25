@@ -2,7 +2,7 @@
   "name": "rehearsal-console",
   "version": "0.0.0",
   "private": true,
-  "description": "REHEARSAL's web console. Stage A: replays of recorded runs and the judge gate, no live execution.",
+  "description": "REHEARSAL's web console: replays of recorded runs for everyone, and live sandbox runs behind the judge passcode.",
   "scripts": {
     "dev": "next dev",
     "prebuild": "node scripts/fetch-fonts.mjs",

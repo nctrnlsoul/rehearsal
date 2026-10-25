@@ -7,7 +7,7 @@ import "./build.css";
 const order = (i: number) => ({ "--i": i }) as CSSProperties;
 
 // The demo-line plan needs a banked purchase. This is the bank as it stood when
-// the plan was recorded; Stage B reads the live bank.
+// the plan was recorded; the live builder at /live reads the live bank.
 const BANK_AS_RECORDED = { usable: 0, on: "2026-10-24" };
 
 export default async function BuildPage({ searchParams }: { searchParams: Promise<{ plan?: string }> }) {
@@ -21,7 +21,7 @@ export default async function BuildPage({ searchParams }: { searchParams: Promis
   return (
     <div className="s-build">
       <a className="skip" href="#plan">Skip to the plan</a>
-      <ReplayBanner>Recorded planner outputs, saved by the CLI. Nothing on this page calls a model or PayPal; live planning and runs arrive in Stage B.</ReplayBanner>
+      <ReplayBanner>Recorded planner outputs, saved by the CLI. Nothing on this page calls a model or PayPal. Live planning and runs are behind the judge passcode, at /live.</ReplayBanner>
       <Topbar current="build" />
       <header className="page">
         <h1>Describe a business. Read exactly what it becomes. Then run that, and only that.</h1>
@@ -59,7 +59,7 @@ export default async function BuildPage({ searchParams }: { searchParams: Promis
               })}
             </ul>
           </nav>
-          <p className="note later">Planning from your own words calls the model once per plan, at most 4,000 output tokens and 60 seconds. It arrives with live runs in Stage B.</p>
+          <p className="note later">Planning from your own words calls the model once per plan, at most 4,000 output tokens and 60 seconds. It runs behind the judge passcode, at /live.</p>
         </section>
 
         <section className="arrive" style={order(1)} id="plan" aria-labelledby="plan-h">
@@ -112,7 +112,7 @@ export default async function BuildPage({ searchParams }: { searchParams: Promis
                 <div className="confirm">
                   <Link className="btn btn-primary" href="/live">Run this exact plan</Link>
                   <span className="digest">plan sha256 {plan.sha256}</span>
-                  <p className="note">A run records this digest, and a resume must present the same one. Live runs need the judge passcode and arrive in Stage B.</p>
+                  <p className="note">A run records this digest, and a resume must present the same one. Live runs need the judge passcode, at /live.</p>
                 </div>
               )}
             </div>

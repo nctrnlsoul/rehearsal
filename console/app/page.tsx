@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { SiteFooter, Topbar } from "../components/chrome";
 import facts from "../fixtures/facts.json";
+import { HOSTED_CAPS } from "../lib/hosted";
 import "./trust.css";
 
 const Dash = () => (
@@ -35,6 +36,7 @@ export default function TrustPage() {
             <div className="line"><dt>Largest run</dt><dd>USD 2,000.00</dd></div>
             <div className="line"><dt>Steps per run</dt><dd>30</dd></div>
             <div className="line"><dt>Disputes per run</dt><dd>2</dd></div>
+            <div className="line"><dt>Hosted here, behind the passcode<small>fixed in code; a setting can lower them, never raise them</small></dt><dd className="word">USD {(Number(HOSTED_CAPS.maxStepAmountMinor) / 100).toFixed(2)} a step, USD {(Number(HOSTED_CAPS.maxTotalMinor) / 100).toFixed(2)} a run, {HOSTED_CAPS.maxSteps} steps, {HOSTED_CAPS.maxDisputes} dispute</dd></div>
           </dl>
           <div className="bar-mid" aria-hidden="true" />
 
@@ -77,7 +79,7 @@ export default function TrustPage() {
 
           <div className="cta">
             <Link className="btn btn-primary" href="/build">Start a rehearsal</Link>
-            <span className="note">Opens the scenario builder. Live runs need the judge passcode and arrive in Stage B.</span>
+            <span className="note">Opens the scenario builder. Live runs are behind the judge passcode, at /live.</span>
           </div>
         </section>
       </main>

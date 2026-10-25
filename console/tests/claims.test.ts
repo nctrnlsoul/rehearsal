@@ -37,6 +37,20 @@ describe("caps claim", () => {
     expect(caps).toMatch(/maxDisputes: 2,/);
     for (const shown of ["USD 500.00", "USD 2,000.00", "<dd>30</dd>", "<dd>2</dd>"]) expect(trust).toContain(shown);
   });
+
+  it("shows the hosted caps from the constants the routes enforce, here and on the gate", () => {
+    expect(trust).toContain("HOSTED_CAPS.maxStepAmountMinor");
+    expect(trust).toContain("HOSTED_CAPS.maxTotalMinor");
+    expect(gate).toContain("usd(HOSTED_CAPS.maxTotalMinor)");
+    expect(gate).not.toContain("USD 2,000.00");
+    expect(gate).toContain("liveRunsEnabled(process.env)");
+  });
+
+  it("never says live runs are still to come", () => {
+    for (const page of ["page.tsx", "build/page.tsx", "finder/page.tsx", "gate/page.tsx", "runs/page.tsx", "live/page.tsx"]) {
+      expect(read("console", "app", ...page.split("/")), page).not.toMatch(/arrive in Stage B|Stage A/);
+    }
+  });
 });
 
 describe("webhook claim", () => {

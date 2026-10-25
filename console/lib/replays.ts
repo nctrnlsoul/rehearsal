@@ -3,7 +3,7 @@ import plansData from "../fixtures/plans.json";
 import runsData from "../fixtures/runs.json";
 
 /**
- * Recorded runs, replayed. Stage A has no live execution: every surface reads
+ * Recorded runs, replayed. These surfaces make no live call: every one reads
  * these fixtures, and every page that shows them says REPLAY. The math here is
  * pure so the timeline's layout is tested without a browser.
  */

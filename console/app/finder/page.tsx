@@ -137,7 +137,7 @@ export default function FinderPage() {
 
       <div className="actions">
         <Link className="btn btn-primary" href="/live">Run duplicate-webhook again</Link>
-        <span className="note">Live runs need the judge passcode and arrive in Stage B. These two runs took about 70 seconds and 2 minutes, mostly waiting on PayPal&apos;s redelivery.</span>
+        <span className="note">A live finder run needs the judge passcode, at /live. These two runs took about 70 seconds and 2 minutes, mostly waiting on PayPal&apos;s redelivery.</span>
       </div>
       <SiteFooter>REHEARSAL · edge-case finder · a recorded pass; the after-run cert host is not in our records, so it is not shown</SiteFooter>
     </div>

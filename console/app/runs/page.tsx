@@ -28,7 +28,7 @@ export default function RunsPage() {
           ))}
         </ul>
       </main>
-      <SiteFooter>REHEARSAL · replays · live runs arrive in Stage B</SiteFooter>
+      <SiteFooter>REHEARSAL · replays · live runs are behind the passcode</SiteFooter>
     </div>
   );
 }
