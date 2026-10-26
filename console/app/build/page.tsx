@@ -92,7 +92,7 @@ export default async function BuildPage({ searchParams }: { searchParams: Promis
                   <span className="mono">{s.currency} {grouped(plan.capsTotal)} of {grouped(PLAN_CAPS.perRun)}</span> per run; charges, invoices and recorded payments all count<br />
                   largest step <span className="mono">{s.currency} {grouped(plan.largestStep)} of {grouped(PLAN_CAPS.perStep)}</span> · <span className="mono">{s.steps.length} of {PLAN_CAPS.steps}</span> steps · <span className="mono">{totals.disputes} of {PLAN_CAPS.disputes}</span> disputes
                 </dd>
-                <dt>Event target</dt><dd>{s.webhook === undefined ? "none declared, so no webhook will be registered" : <>on the allowlist: <span className="mono">{s.webhook.target}</span></>}</dd>
+                <dt>Event target</dt><dd>{s.webhook === undefined ? "none declared by this plan; PayPal still delivers this account's events to every webhook registered on it" : <>on the allowlist: <span className="mono">{s.webhook.target}</span></>}</dd>
                 <dt>Purchase bank</dt>
                 <dd>{totals.disputes === 0 ? "not used by this plan" : <>needs <span className="mono">{totals.disputes}</span>, usable <span className="mono">{BANK_AS_RECORDED.usable}</span> as recorded on {BANK_AS_RECORDED.on}</>}</dd>
               </dl>

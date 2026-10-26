@@ -325,11 +325,13 @@ const accentElements = (page: Page) =>
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 describe("the live builder, past the gate", () => {
-  it("hydrates, refuses Tiny Bakery on its USD 120 step, and blocks the dispute plan on an empty bank", async () => {
+  it("hydrates, passes Tiny Bakery (R-043), and blocks the dispute plan on an empty bank", async () => {
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live", 200);
-    await expect(page.locator(".dry").innerText()).resolves.toContain("USD 120.00, over the per-step cap of USD 100.00");
-    await expect(page.locator(".go .btn-primary").isDisabled()).resolves.toBe(true);
+    await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("150 s"));
+    await expect(page.locator(".dry").innerText()).resolves.toContain("PayPal still delivers this account's events to every webhook registered on it");
+    await expect(page.locator(".dry").innerText()).resolves.not.toContain("per-step cap");
+    await expect(page.locator(".go .btn-primary").isDisabled()).resolves.toBe(false);
     await page.locator(".plan-option", { hasText: "Open Dispute" }).click();
     await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("BLOCKED"));
     await expect(page.locator(".go .btn-primary").isDisabled()).resolves.toBe(true);
@@ -370,6 +372,26 @@ describe("the live timeline, past the gate", () => {
       if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, `live-complete-${viewport.width}.png`), fullPage: true });
       await ctx.close();
     }
+  });
+
+  // R-044: with the store's own receive time the connector carries an exact latency.
+  it("draws an exact pair: the store's receive time on the card and an exact latency on the connector", async () => {
+    await seedRun(db.pg, "20261025180000-e2e005", "complete", [
+      { s: 0, kind: "run_started" },
+      { s: 1, kind: "step_started", step: "order", data: { kind: "card_order", attempt: 1 } },
+      { s: 5, kind: "step_finished", step: "order", data: { kind: "card_order", status: "succeeded", detail: "captured USD 25.00 by card", finished_at: iso(-120 + 4.2), ids: { capture_id: "CAP-E2E-4" } } },
+      { s: 15, kind: "delivery", data: { event_id: "WH-E2E-4", event_type: "PAYMENT.CAPTURE.COMPLETED", deliveries: 1, fulfilled: 1, duplicates_ignored: 0, other: 0, refused: 0, cert_hosts: ["api.sandbox.paypal.com"], capture_ids: ["CAP-E2E-4"], received_at: [iso(-120 + 11.6)] } },
+      { s: 119, kind: "run_finished", data: { status: "complete" } },
+    ]);
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e005", 200);
+    await page.waitForSelector("path.link.verified");
+    await expect(page.locator("g.pill text").first().textContent()).resolves.toBe("7 s");
+    await expect(page.locator(".delivery .env-head").first().innerText()).resolves.toContain("received");
+    await expect(page.locator(".ledger tbody tr").first().innerText()).resolves.toContain("order");
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-exact-1440.png"), fullPage: true });
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
   });
 
   it("draws a waiting delivery as the one live, accented connector, counting up", async () => {

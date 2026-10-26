@@ -40,7 +40,7 @@ export default async function LiveRunPage({ params }: { params: Promise<{ runId:
           </section>
           <section className="facts-block">
             <h2 className="label">How it is read</h2>
-            <p className="note">The server saves the run after every step. This page reads that record every 2 s. A delivery shows when the store&apos;s own state endpoint reports it, so its time is an upper bound.</p>
+            <p className="note">The server saves the run after every step. This page reads that record every 2 s. A delivery shows when the store&apos;s state endpoint reports it, at the time the store recorded receiving it, so a latency is exact to the second. A store that does not report that time shows when it was seen instead, marked &ldquo;within&rdquo;.</p>
           </section>
           <section className="facts-block">
             <p><Link href="/build">Back to the builder</Link></p>

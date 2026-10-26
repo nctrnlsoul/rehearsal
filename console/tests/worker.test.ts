@@ -111,6 +111,22 @@ describe("runScenarioWorker", () => {
     expect(order.data["order"]).toMatchObject({ capture_id: "CAP-1", fulfilled: 1 });
   });
 
+  // R-044: what the timeline needs to pair exactly, saved through the real SQL.
+  it("saves each step's source and finish time, and each delivery's capture ids and receive times", async () => {
+    const h = await harness({
+      readStore: async () =>
+        snapshot([{ eventId: "WH-1", eventType: "PAYMENT.CAPTURE.REFUNDED", fulfilled: 0, duplicatesIgnored: 0, other: 1, captureIds: ["ID-r1"], receivedAt: ["2026-10-25T18:00:03.500Z"] }]),
+    });
+    await work(h);
+    const events = await h.events();
+    const finished = Object.fromEntries(events.filter((e) => e.kind === "step_finished").map((e) => [e.step_id, e.data]));
+    expect(finished["o1"]).not.toHaveProperty("from");
+    expect(finished["r1"]).toMatchObject({ from: "o1", ids: { r1_id: "ID-r1" } });
+    for (const d of Object.values(finished)) expect(Date.parse(String((d as Record<string, unknown>)["finished_at"]))).toBeGreaterThanOrEqual(T0);
+    const delivery = events.find((e) => e.kind === "delivery")!;
+    expect(delivery.data).toMatchObject({ capture_ids: ["ID-r1"], received_at: ["2026-10-25T18:00:03.500Z"] });
+  });
+
   it("emits a delivery again when its count grows, and not when it does not", async () => {
     let reads = 0;
     const d = (n: number) => ({ eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: n - 1, other: 0 });

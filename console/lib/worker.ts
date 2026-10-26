@@ -142,10 +142,12 @@ async function runTracked(
 
   let prev: RunState | null = null;
   let fenced = false;
+  // Set once the scenario is known; read by every save after that.
+  let sources: ReadonlyMap<string, string> = new Map();
 
   const persist = async (s: RunState) => {
     if (fenced) throw new FencedError();
-    if (!(await rpcOk("console_save_state", { p_state: s, p_events: stateEvents(prev, s) }))) {
+    if (!(await rpcOk("console_save_state", { p_state: s, p_events: stateEvents(prev, s, sources) }))) {
       fenced = true;
       throw new FencedError();
     }
@@ -155,8 +157,9 @@ async function runTracked(
   const claimPurchase = async (rid: string): Promise<ClaimResult> =>
     purchaseFrom(await deps.db.rpc("console_claim_purchase", { p_run_id: rid }), rid, iso());
 
-  const execute: Execute = (scenario, digest) =>
-    executeScenario(
+  const execute: Execute = (scenario, digest) => {
+    sources = new Map(scenario.steps.flatMap((st) => ("from" in st && typeof st.from === "string" ? [[st.id, st.from] as const] : [])));
+    return executeScenario(
       { scenario, runId, resume: null, webhookMode: "reuse-only", scenarioDigest: digest },
       {
         seller: deps.seller,
@@ -170,6 +173,7 @@ async function runTracked(
         handlers: timeGuarded(deps.handlers ?? defaultHandlers, deps.deadlineMs, deps.now),
       },
     );
+  };
 
   // The delivery poller runs beside the body and heartbeats while it waits,
   // so a dispute step's two-minute poll never looks like a dead server.

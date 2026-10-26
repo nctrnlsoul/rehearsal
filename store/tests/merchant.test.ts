@@ -397,10 +397,10 @@ describe("summarise", () => {
       row({ eventId: "WH-3", action: "refused", verified: null, reason: "no webhook" }),
       row({ eventId: null }),
     ]);
-    const none = { refused: 0, refusalReasons: [], certHosts: [] };
+    const none = { refused: 0, refusalReasons: [], certHosts: [], receivedAt: [] };
     expect(state.deliveries).toEqual([
-      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 2, duplicatesIgnored: 0, other: 0, ...none },
-      { eventId: "WH-2", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: 1, other: 0, ...none },
+      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 2, duplicatesIgnored: 0, other: 0, ...none, captureIds: ["CAP-1"] },
+      { eventId: "WH-2", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: 1, other: 0, ...none, captureIds: ["CAP-2"] },
       {
         eventId: "WH-3",
         eventType: "PAYMENT.CAPTURE.COMPLETED",
@@ -410,8 +410,37 @@ describe("summarise", () => {
         refused: 3,
         refusalReasons: ["bad sig", "no webhook"],
         certHosts: [],
+        captureIds: [],
+        receivedAt: [],
       },
     ]);
+  });
+
+  // R-044: the console pairs a delivery to its call by these, with an exact latency.
+  it("gives each delivery its capture ids and receive times, earliest first, from verified rows only", () => {
+    const at = (s: string) => Date.parse(`2026-10-25T18:00:${s}Z`);
+    const state = summarise([
+      // Newest first, as the reader returns them.
+      row({ eventId: "WH-1", action: "duplicate_ignored", receivedAtMs: at("40.250") }),
+      row({ eventId: "WH-1", receivedAtMs: at("07.125") }),
+      row({ eventId: "WH-1", action: "refused", verified: false, captureId: "CAP-FORGED", receivedAtMs: at("01.000") }),
+      row({ eventId: "WH-1", action: "refused", verified: null, captureId: "CAP-UNCHECKED", receivedAtMs: at("02.000") }),
+      row({ eventId: "WH-2", eventType: "INVOICING.INVOICE.PAID", captureId: "INV2-AAAA", action: "ignored", receivedAtMs: at("09.000") }),
+      row({ eventId: "WH-3", receivedAtMs: 0 }),
+    ]);
+    const by = Object.fromEntries(state.deliveries.map((d) => [d.eventId, { captureIds: d.captureIds, receivedAt: d.receivedAt }]));
+    expect(by).toEqual({
+      "WH-1": { captureIds: ["CAP-1"], receivedAt: ["2026-10-25T18:00:07.125Z", "2026-10-25T18:00:40.250Z"] },
+      "WH-2": { captureIds: ["INV2-AAAA"], receivedAt: ["2026-10-25T18:00:09.000Z"] },
+      "WH-3": { captureIds: ["CAP-1"], receivedAt: [] },
+    });
+  });
+
+  it("keeps at most five capture ids and the five earliest receive times per event", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => row({ eventId: "WH-MANY", captureId: `CAP-${i}`, receivedAtMs: Date.parse("2026-10-25T18:00:00Z") + (8 - i) * 1000 }));
+    const d = summarise(rows).deliveries[0]!;
+    expect(d.captureIds).toEqual(["CAP-0", "CAP-1", "CAP-2", "CAP-3", "CAP-4"]);
+    expect(d.receivedAt).toEqual([1, 2, 3, 4, 5].map((s) => `2026-10-25T18:00:0${s}.000Z`));
   });
 
   // The question this answers: does a resend name the same cert host as the original?

@@ -267,11 +267,15 @@ describe("POST /api/dry-run", () => {
     expect((after["lines"] as string[]).length).toBeGreaterThan(0);
   });
 
-  it("shows Tiny Bakery as refused, naming its USD 120 step", async () => {
+  // R-043: Tiny Bakery runs hosted. It draws nothing from the bank.
+  it("passes Tiny Bakery with its own digest, no bank draw and a 150 s budget", async () => {
     const h = await harness();
     const b = await bodyOf(await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: BAKERY!.plan } })));
-    expect(b["ok"]).toBe(false);
-    expect((b["errors"] as string[]).join(" ")).toContain("USD 120.00");
+    expect(b).toMatchObject({ ok: true, sha256: BAKERY!.sha256, budgetS: 150, errors: [], bank: { needed: 0, short: false } });
+    // R-045: it declares no webhook, and the dry run no longer says that stops deliveries.
+    const lines = (b["lines"] as string[]).join(" | ");
+    expect(lines).toContain("none declared by this plan; PayPal still delivers this account's events to every webhook registered on it");
+    expect(lines).not.toMatch(/no events will be delivered/i);
   });
 
   it("finds no plan for an unknown id, a malformed uuid, or an unknown source", async () => {
@@ -378,10 +382,26 @@ describe("POST /api/runs", () => {
     expect(await h.used("runs_global")).toBe(0);
   });
 
-  it("refuses a plan over the hosted caps, and spends nothing", async () => {
+  it("starts Tiny Bakery, bound to its recorded digest", async () => {
     const h = await harness();
     const r = await h.runs(req("/api/runs", { body: runBody(BAKERY!) }));
+    expect(r.status).toBe(202);
+    expect(h.started[0]!.digest).toBe(BAKERY!.sha256);
+    expect(h.started[0]!.scenario.steps.map((s) => s.kind)).toEqual(["card_order", "card_order", "invoice_create", "invoice_send", "invoice_record_payment"]);
+  });
+
+  it("refuses a plan over the hosted caps, and spends nothing", async () => {
+    const h = await harness();
+    // Saved straight into the table: the planner route never saves a plan over the caps.
+    const over = { ...simpleScenario, steps: [{ id: "o", kind: "card_order", amount: "150.01", needs: [] }] };
+    const id = (await h.pg.query<{ id: string }>(
+      `select public.console_save_plan('${"b".repeat(64)}', 'a shop', $1::jsonb, '${"a".repeat(64)}') as id`,
+      [JSON.stringify(over)],
+    )).rows[0]!.id;
+    const r = await h.runs(req("/api/runs", { body: { source: "planned", planId: id, sha256: "a".repeat(64), confirm: true } }));
     expect(r.status).toBe(422);
+    expect(((await bodyOf(r))["reasons"] as string[]).join(" ")).toContain("USD 150.01, over the per-step cap of USD 150.00");
+    expect(h.started).toEqual([]);
     expect(await h.used("runs_global")).toBe(0);
   });
 

@@ -54,6 +54,24 @@ describe("caps claim", () => {
 });
 
 describe("webhook claim", () => {
+  // R-045: a plan with no webhook registers none, but PayPal still delivers the
+  // account's events to every webhook registered on it, the store's included.
+  it("never says a plan without a webhook stops deliveries, in the engine's dry run or on /build", () => {
+    const line = "none declared by this plan; PayPal still delivers this account's events to every webhook registered on it";
+    for (const [name, text] of [["src/executor/dryRun.ts", read("src", "executor", "dryRun.ts")], ["build/page.tsx", read("console", "app", "build", "page.tsx")]] as const) {
+      expect(text, name).toContain(line);
+      expect(text, name).not.toMatch(/no events will be delivered|so no webhook will be registered"/);
+    }
+  });
+
+  // R-044: the store's receive times make a latency exact, so no page may still call every time an upper bound.
+  it("says a delivery's time is the store's own receive time, and an upper bound only from an older store", () => {
+    const runPage = read("console", "app", "live", "[runId]", "page.tsx");
+    expect(runPage).not.toContain("so its time is an upper bound");
+    expect(runPage).toContain("at the time the store recorded receiving it, so a latency is exact to the second");
+    expect(read("store", "lib", "merchant.ts")).toContain(".map((ms) => new Date(ms).toISOString())");
+  });
+
   it("no longer says every delivery is verified", () => {
     expect(trust).not.toMatch(/Webhooks verified[\s\S]{0,200}every delivery/);
   });

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { type LiveEvent, type LiveRead, type LiveRunRow, type LiveView, liveView, mergeEvents, withinLabel } from "../lib/liveView";
+import { type LiveEvent, type LiveRead, type LiveRunRow, type LiveView, liveView, mergeEvents, pairLabel } from "../lib/liveView";
 import { AXIS_BREAK_S, clock, gapHeightPx, utcTime } from "../lib/replays";
 import { Mark } from "./chrome";
 
@@ -181,11 +181,11 @@ function Board({ view, lostForS }: { view: LiveView; lostForS: number | null }) 
         <article key={row.key} data-row={row.key} className="delivery shown" style={{ gridRow }}>
           <div className="env-head">
             <span>{d.title}</span>
-            <span className="when"><span className="words">seen</span> +{clock(d.t)} · {utcTime(d.at)} UTC</span>
+            <span className="when"><span className="words">{d.received ? "received" : "seen"}</span> +{clock(d.t)} · {utcTime(d.at)} UTC</span>
           </div>
           <div className="body">
             <dl>{d.facts.map(([k, v]) => <Fact key={k} k={k} v={v} />)}</dl>
-            <div className="proof"><Mark kind="ok">recorded by the store</Mark><span className="cert">its own state endpoint, read every 5 s</span></div>
+            <div className="proof"><Mark kind="ok">recorded by the store</Mark><span className="cert">{d.received ? "the time is the store's own record of receiving it" : "seen on its state endpoint, read every 5 s"}</span></div>
           </div>
         </article>,
       );
@@ -226,7 +226,7 @@ function Board({ view, lostForS }: { view: LiveView; lostForS: number | null }) 
       // Only a connector still being waited on is live; one whose wait ended is not.
       const live = !arrived && !view.settled;
       const cls = arrived ? "link verified" : live ? "link waiting" : "link stopped";
-      const label = arrived ? withinLabel(p.arrivedT! - p.callT) : live ? `${Math.floor(Math.max(0, view.elapsedS - p.callT))} s so far` : "not seen";
+      const label = arrived ? pairLabel(p) : live ? `${Math.floor(Math.max(0, view.elapsedS - p.callT))} s so far` : "not seen";
       const pill = `pill${live ? " live" : ""}`;
       const anchorCls = `anchor ${arrived ? "ok" : live ? "live" : ""}`;
       const w = label.length * 7.2 + 12;
@@ -346,7 +346,7 @@ function Ledger({ view }: { view: LiveView }) {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th scope="col">Event</th><th scope="col">Type</th><th scope="col">Deliveries</th><th scope="col">Store did</th><th scope="col">Cert host</th><th scope="col">First seen</th></tr>
+              <tr><th scope="col">Event</th><th scope="col">Type</th><th scope="col">Deliveries</th><th scope="col">Store did</th><th scope="col">Cert host</th><th scope="col">First received</th><th scope="col">Joined to</th></tr>
             </thead>
             <tbody>
               {view.ledger.map((l) => (
@@ -356,14 +356,15 @@ function Ledger({ view }: { view: LiveView }) {
                   <td className="mono">{l.deliveries}</td>
                   <td>{[l.fulfilled > 0 ? `fulfilled ${l.fulfilled}` : null, l.duplicatesIgnored > 0 ? `duplicate_ignored ${l.duplicatesIgnored}` : null, l.refused > 0 ? `refused ${l.refused}` : null].filter(Boolean).join(", ") || "recorded"}</td>
                   <td className="mono">{l.certHosts.join(", ") || "none"}</td>
-                  <td className="mono">+{clock(l.firstSeenT)}</td>
+                  <td className="mono">{l.firstReceivedT === null ? <><span className="word">seen</span> +{clock(l.firstSeenT)}</> : <>+{clock(l.firstReceivedT)}</>}</td>
+                  <td className="mono">{l.joinedTo.length === 0 ? <span className="word">no call in this run</span> : l.joinedTo.join(", ")}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      <p className="note">The store&apos;s report says which event each delivery was, but not which call caused it. Only exact matches are joined above: a card order to its capture, a resend to its event&apos;s second delivery.</p>
+      <p className="note">A delivery is joined to a call only when the id the store recorded for it is one of that call&apos;s ids, for an event type that call causes: a card order&apos;s capture or order, a refund, a dispute, an invoice&apos;s creation or payment, and a resend&apos;s second delivery. Times are the store&apos;s own receive times, so a latency is exact to the second, give or take the two servers&apos; clocks. A delivery no call names, or more than one could, is never guessed at and stays unjoined here.</p>
     </section>
   );
 }

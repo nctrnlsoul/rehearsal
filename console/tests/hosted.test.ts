@@ -34,7 +34,7 @@ const scenario = (steps: unknown[], extra: Record<string, unknown> = {}) => ({
 
 describe("hosted numbers (R-039)", () => {
   it("are the ruled ones", () => {
-    expect(HOSTED_CAPS).toEqual({ currency: "USD", maxStepAmountMinor: 10_000n, maxTotalMinor: 40_000n, maxSteps: 8, maxDisputes: 1 });
+    expect(HOSTED_CAPS).toEqual({ currency: "USD", maxStepAmountMinor: 15_000n, maxTotalMinor: 40_000n, maxSteps: 8, maxDisputes: 1 });
     expect(HOSTED_RUN_LIMITS).toEqual({ global: 20, session: 5, ip: 5 });
     expect(HOSTED_MODEL_LIMITS).toEqual({ global: 30, session: 8, ip: 8 });
     expect(TIME_BUDGET_S).toBe(600);
@@ -119,25 +119,33 @@ describe("liveRunsEnabled", () => {
 });
 
 describe("hostedGate", () => {
-  // Found while building: Tiny Bakery's invoice is USD 120.00, over the ruled
-  // USD 100 per-step cap, so as recorded it cannot run hosted. Brian decides
-  // between raising the cap, a new recorded plan, or marking it CLI-only.
-  it("passes the recorded dispute plan and refuses Tiny Bakery on its USD 120 step", () => {
+  // R-043: the per-step cap is USD 150 so the main recorded plan, whose
+  // invoice is USD 120.00, runs hosted for judges.
+  it("passes both recorded plans: Tiny Bakery in 150 s, the dispute plan in 130 s", () => {
     const c = config();
     const [bakery, dispute] = plans.plans;
     const b = hostedGate(bakery!.scenario, c);
-    expect(b.ok).toBe(false);
-    expect(!b.ok && b.errors.join("; ")).toContain("USD 120.00, over the per-step cap of USD 100.00");
+    expect(b.ok, !b.ok ? b.errors.join("; ") : "").toBe(true);
+    expect(b.ok && b.budgetS).toBe(150);
     const d = hostedGate(dispute!.scenario, c);
     expect(d.ok && d.budgetS).toBe(130);
   });
 
-  it("refuses a step over USD 100, a run over USD 400, 9 steps and 2 disputes", () => {
+  it("refuses Tiny Bakery on its USD 120 step once a setting lowers the step cap to USD 100", () => {
+    const low = hostedConfig({ ...ENV, REHEARSAL_MAX_STEP_AMOUNT: "100.00" });
+    expect(low.ok).toBe(true);
+    if (!low.ok) return;
+    const b = hostedGate(plans.plans[0]!.scenario, low.config);
+    expect(!b.ok && b.errors.join("; ")).toContain("USD 120.00, over the per-step cap of USD 100.00");
+  });
+
+  it("refuses a step over USD 150, a run over USD 400, 9 steps and 2 disputes", () => {
     const c = config();
     const order = (id: string, amount: string) => ({ id, kind: "card_order", amount, needs: [] });
-    expect(hostedGate(scenario([order("a", "100.01")]), c).ok).toBe(false);
-    expect(hostedGate(scenario([order("a", "100.00")]), c).ok).toBe(true);
-    expect(hostedGate(scenario([order("a", "100.00"), order("b", "100.00"), order("c", "100.00"), order("d", "100.00"), order("e", "0.01")]), c).ok).toBe(false);
+    expect(hostedGate(scenario([order("a", "150.01")]), c).ok).toBe(false);
+    expect(hostedGate(scenario([order("a", "150.00")]), c).ok).toBe(true);
+    expect(hostedGate(scenario([order("a", "150.00"), order("b", "150.00"), order("c", "100.00")]), c).ok).toBe(true);
+    expect(hostedGate(scenario([order("a", "150.00"), order("b", "150.00"), order("c", "100.00"), order("e", "0.01")]), c).ok).toBe(false);
     expect(hostedGate(scenario(Array.from({ length: 9 }, (_, i) => order(`s${i}`, "1.00"))), c).ok).toBe(false);
     const dispute = (id: string) => ({ id, kind: "open_dispute", needs: [] });
     expect(hostedGate(scenario([dispute("d1")]), c).ok).toBe(true);

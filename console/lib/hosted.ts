@@ -9,10 +9,10 @@ import { type Caps, FAILURE_CLASSES, capsFromEnv, eventOriginsFromEnv, gateScena
 
 type Env = Record<string, string | undefined>;
 
-/** R-039: 8 steps, USD 100 a step, USD 400 a run, 1 dispute. */
+/** R-039, with R-043's USD 150 a step so Tiny Bakery's USD 120 invoice runs: 8 steps, USD 400 a run, 1 dispute. */
 export const HOSTED_CAPS: Caps = {
   currency: "USD",
-  maxStepAmountMinor: 10_000n,
+  maxStepAmountMinor: 15_000n,
   maxTotalMinor: 40_000n,
   maxSteps: 8,
   maxDisputes: 1,
