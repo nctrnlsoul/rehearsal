@@ -402,10 +402,10 @@ describe("timeGuarded", () => {
 
   // Each kind at exactly its worst case plus the 60 s margin, and a millisecond under.
   it.each([
-    ["card_order", 60],
-    ["refund", 60],
-    ["open_dispute", 160],
-    ["resend_webhook", 270],
+    ["card_order", 63],
+    ["refund", 106],
+    ["open_dispute", 239],
+    ["resend_webhook", 354],
   ])("sends %s with %i s plus the margin left, and not a millisecond less", async (kind, worst) => {
     expect(STEP_MARGIN_S).toBe(60);
     expect(await sent(kind, worst + STEP_MARGIN_S)).toBe(true);

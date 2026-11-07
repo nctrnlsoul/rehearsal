@@ -308,7 +308,7 @@ describe("invoice handlers", () => {
   it("treats an ambiguous answer to an invoice write as unknown and never resends it", async () => {
     const handlerFor = { s1: invoiceSendHandler, pay1: invoiceRecordPaymentHandler, c1: invoiceCancelHandler } as const;
     for (const [stepId, handler] of Object.entries(handlerFor)) {
-      for (const status of [503, 500, 408]) {
+      for (const status of [503, 500, 408, 409]) {
         const seller = fakePaypal([{ status }]);
         const out = await handler(makeContext({ scenario, stepId, seller: seller.client, outputs }).ctx);
         expect(out.kind, `${stepId} ${status}`).toBe("unknown");

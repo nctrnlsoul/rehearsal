@@ -4,13 +4,16 @@ import { describe, expect, it } from "vitest";
 import plans from "../fixtures/plans.json";
 import { defaultHandlers } from "../lib/engine";
 import {
+  CALL_WORST_S,
   DEFAULT_STEP_WORST_CASE_S,
   HOSTED_CAPS,
+  HOSTED_CLIENT,
   HOSTED_MODEL_LIMITS,
   HOSTED_RUN_LIMITS,
   MAX_DURATION_S,
   STEP_WORST_CASE_S,
   TIME_BUDGET_S,
+  TOKEN_WORST_S,
   hostedConfig,
   hostedGate,
   liveRunsEnabled,
@@ -126,14 +129,14 @@ describe("liveRunsEnabled", () => {
 describe("hostedGate", () => {
   // R-043: the per-step cap is USD 150 so the main recorded plan, whose
   // invoice is USD 120.00, runs hosted for judges.
-  it("passes both recorded plans: Tiny Bakery in 330 s, the dispute plan in 160 s", () => {
+  it("passes both recorded plans: Tiny Bakery in 487 s, the dispute plan in 239 s", () => {
     const c = config();
     const [bakery, dispute] = plans.plans;
     const b = hostedGate(bakery!.scenario, c);
     expect(b.ok, !b.ok ? b.errors.join("; ") : "").toBe(true);
-    expect(b.ok && b.budgetS).toBe(330);
+    expect(b.ok && b.budgetS).toBe(487);
     const d = hostedGate(dispute!.scenario, c);
-    expect(d.ok && d.budgetS).toBe(160);
+    expect(d.ok && d.budgetS).toBe(239);
   });
 
   it("refuses Tiny Bakery on its USD 120 step once a setting lowers the step cap to USD 100", () => {
@@ -170,29 +173,43 @@ describe("hostedGate", () => {
     const c = config();
     // 5 disputes would also break the dispute cap, so lift that one to isolate the time rule.
     const loose = { ...c, caps: { ...c.caps, maxDisputes: 8 } };
-    const g = hostedGate(scenario(Array.from({ length: 4 }, (_, i) => ({ id: `d${i}`, kind: "open_dispute", needs: [] }))), loose);
+    const g = hostedGate(scenario(Array.from({ length: 3 }, (_, i) => ({ id: `d${i}`, kind: "open_dispute", needs: [] }))), loose);
     expect(g.ok).toBe(false);
-    expect(!g.ok && g.errors[0]).toContain("640 s");
-    expect(timeBudgetS({ steps: [{ kind: "open_dispute" }, { kind: "card_order" }] } as never)).toBe(220);
+    expect(!g.ok && g.errors[0]).toContain("717 s");
+    expect(timeBudgetS({ steps: [{ kind: "open_dispute" }, { kind: "card_order" }] } as never)).toBe(302);
   });
 
   // The old bounds (30 s for most steps, 150 s for a resend) were below what
-  // the handlers can take, so a step could start that could not finish.
+  // the handlers can take, so a step could start that could not finish. A call
+  // is 2 attempts of 20 s, 2 s of retry wait and the spacing: 43 s; a token 20 s.
   it("bounds each step kind by what its handler can take, and every kind has a bound", () => {
+    expect(CALL_WORST_S).toBe(43);
+    expect(TOKEN_WORST_S).toBe(20);
     expect(STEP_WORST_CASE_S).toEqual({
-      card_order: 60,
-      refund: 60,
-      invoice_create: 90,
-      invoice_send: 60,
-      invoice_record_payment: 60,
-      invoice_cancel: 60,
-      payout_batch: 130,
-      open_dispute: 160,
-      resend_webhook: 270,
+      card_order: 63,
+      refund: 106,
+      invoice_create: 149,
+      invoice_send: 106,
+      invoice_record_payment: 106,
+      invoice_cancel: 106,
+      payout_batch: 201,
+      open_dispute: 239,
+      resend_webhook: 354,
     });
     expect(Object.keys(STEP_WORST_CASE_S).sort()).toEqual(Object.keys(defaultHandlers).sort());
     // A kind added later and not measured is assumed slow, never fast.
     expect(DEFAULT_STEP_WORST_CASE_S).toBe(Math.max(...Object.values(STEP_WORST_CASE_S)));
+  });
+
+  // The bounds hold only for a client built this way: the engine's default
+  // client retries 5 times at 30 s each.
+  it("are the bounds of the client both hosted routes build", () => {
+    expect(HOSTED_CLIENT).toEqual({ minIntervalMs: 250, policy: { maxAttempts: 2, baseDelayMs: 1000, maxDelayMs: 2000 }, requestTimeoutMs: 20_000 });
+    for (const name of ["runs", "finder"]) {
+      const route = readFileSync(join(__dirname, "..", "app", "api", name, "route.ts"), "utf8");
+      expect(route.match(/new PaypalClient\(/g), name).toHaveLength(2);
+      expect(route.match(/\.\.\.HOSTED_CLIENT \}\)/g), name).toHaveLength(2);
+    }
   });
 });
 

@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { dbFromEnv } from "../../../lib/db";
 import { DEFAULT_PLANNER_MODEL, PaypalClient, anthropicGenerator, cleanModelText, credentialsFor, storeStateReader } from "../../../lib/engine";
-import { MAX_DURATION_S } from "../../../lib/hosted";
+import { HOSTED_CLIENT, MAX_DURATION_S } from "../../../lib/hosted";
 import { handleFinderPost } from "../../../lib/live";
 import { runFinderWorker } from "../../../lib/worker";
 
@@ -11,7 +11,6 @@ export const dynamic = "force-dynamic";
 // limit that is generally available; above it is beta. Never raise this.
 export const maxDuration = 800;
 
-const THROTTLE_MS = 250;
 const DEADLINE_MARGIN_S = 20;
 const MIN_STORE_TOKEN_CHARS = 32;
 
@@ -42,8 +41,8 @@ export async function POST(req: Request): Promise<Response> {
       const token = env["REHEARSAL_STORE_TOKEN"]?.trim() ?? "";
       // Built here, before after(): a bad credential then throws inside the
       // hand-off, which cancels the start and gives its quota back.
-      const seller = new PaypalClient(credentialsFor("seller", env), { label: "seller", log, minIntervalMs: THROTTLE_MS });
-      const buyer = new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, minIntervalMs: THROTTLE_MS });
+      const seller = new PaypalClient(credentialsFor("seller", env), { label: "seller", log, ...HOSTED_CLIENT });
+      const buyer = new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, ...HOSTED_CLIENT });
       after(() =>
         runFinderWorker(
           { runId, classId },

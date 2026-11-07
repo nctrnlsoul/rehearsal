@@ -56,18 +56,24 @@ const TRANSMISSION_ID = /^[A-Za-z0-9-]{8,64}$/;
  * PayPal's shape, and a transmission time within ten minutes of now. The
  * store holds the same rules.
  */
-export function checkTransmission(headers: Headers, nowMs: number): { ok: true } | { ok: false; detail: string } {
+export function checkTransmission(
+  headers: Headers,
+  nowMs: number,
+): { ok: true } | { ok: false; detail: string; outsideWindow: boolean } {
   if (headers.get("paypal-auth-algo") !== PAYPAL_AUTH_ALGO) {
-    return { ok: false, detail: `paypal-auth-algo is not ${PAYPAL_AUTH_ALGO}` };
+    return { ok: false, detail: `paypal-auth-algo is not ${PAYPAL_AUTH_ALGO}`, outsideWindow: false };
   }
   if (!TRANSMISSION_ID.test(headers.get("paypal-transmission-id") ?? "")) {
-    return { ok: false, detail: "paypal-transmission-id is not an id" };
+    return { ok: false, detail: "paypal-transmission-id is not an id", outsideWindow: false };
   }
   const raw = headers.get("paypal-transmission-time") ?? "";
   const at = raw.length <= 40 ? Date.parse(raw) : Number.NaN;
-  if (Number.isNaN(at)) return { ok: false, detail: "paypal-transmission-time is not a time" };
+  if (Number.isNaN(at)) return { ok: false, detail: "paypal-transmission-time is not a time", outsideWindow: false };
   if (Math.abs(nowMs - at) > TRANSMISSION_WINDOW_MS) {
-    return { ok: false, detail: "paypal-transmission-time is more than 10 minutes from now" };
+    // PayPal's docs do not say whether a retry keeps the first transmission
+    // time, and retries run for 3 days. So this is "could not check", which
+    // never acts and lets PayPal retry, not a forgery that tells it to stop.
+    return { ok: false, detail: "paypal-transmission-time is more than 10 minutes from now", outsideWindow: true };
   }
   return { ok: true };
 }

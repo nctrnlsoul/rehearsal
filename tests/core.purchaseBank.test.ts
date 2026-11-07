@@ -299,6 +299,25 @@ describe("matchBuyerTransaction", () => {
     expect(matchBuyerTransaction(purchase, rows, new Set())).toEqual({ id: "T-NEAR", candidates: 2 });
   });
 
+  // Verifier finding: with two same-price orders waiting and only the newer
+  // one's payment visible, the older order took it and the newer was stranded.
+  it("never hands a newer same-price order's payment to an older order", () => {
+    const later = { ...purchase, id: "p-O-2", orderId: "O-2", createdAt: "2026-10-23T13:00:00.000Z" };
+    const rows = [row("T-B", "-88.00", "USD", "2026-10-23T13:04:00Z")];
+    expect(matchBuyerTransaction(purchase, rows, new Set(), [purchase, later])).toEqual({ id: null, candidates: 0 });
+    expect(matchBuyerTransaction(later, rows, new Set(), [purchase, later])).toEqual({ id: "T-B", candidates: 1 });
+    // Once the newer one is no longer waiting, an older order may take a payment after it.
+    expect(matchBuyerTransaction(purchase, rows, new Set(), [purchase])).toEqual({ id: "T-B", candidates: 1 });
+  });
+
+  it("matches nothing a day after the order, and nothing for an unreadable purchase", () => {
+    const rows = [row("T-LATE", "-88.00", "USD", "2026-10-24T12:01:00Z")];
+    expect(matchBuyerTransaction(purchase, rows, new Set())).toEqual({ id: null, candidates: 0 });
+    const near = [row("T-NEAR", "-88.00", "USD", "2026-10-23T12:03:00Z")];
+    expect(matchBuyerTransaction({ ...purchase, createdAt: "not a time" }, near, new Set())).toEqual({ id: null, candidates: 0 });
+    expect(matchBuyerTransaction({ ...purchase, amount: "lots" }, near, new Set())).toEqual({ id: null, candidates: 0 });
+  });
+
   it("skips a transaction already banked, and answers none rather than guess", () => {
     const rows = [row("T-NEAR", "-88.00", "USD", "2026-10-23T12:03:00Z")];
     expect(matchBuyerTransaction(purchase, rows, new Set(["T-NEAR"]))).toEqual({ id: null, candidates: 0 });

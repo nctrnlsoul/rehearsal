@@ -23,12 +23,13 @@ export const NOT_PAST_DUE = "not past its due date";
 export const DUE_DATE_UNREAD = "its due date was unreadable";
 
 /**
- * A lost reply, a 408 or a 5xx may mean PayPal already acted. These invoice
+ * A lost reply, a 408, a 409 (an earlier attempt with this request id
+ * landed) or a 5xx may mean PayPal already acted. These invoice
  * writes are not safe to replay on PayPal-Request-Id alone, so such an answer
  * is unknown (a human checks before any retry), never failed, and never resent.
  */
 const ambiguous = (status: number): boolean =>
-  status === TRANSPORT_FAILURE || status === 408 || status >= 500;
+  status === TRANSPORT_FAILURE || status === 408 || status === 409 || status >= 500;
 
 const writeOutcome = (status: number, detail: string, ids: Record<string, string> = {}) =>
   ambiguous(status) ? unknown(detail, ids) : failed(detail, ids);

@@ -11,7 +11,8 @@ import { describe, expect, it } from "vitest";
  */
 
 const ROOT = resolve(__dirname, "..");
-const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+// Line endings depend on the checkout (core.autocrlf), not on the README.
+const readme = readFileSync(join(ROOT, "README.md"), "utf8").replace(/\r\n/g, "\n");
 
 describe("README", () => {
   it("opens with a section for judges, before anything else", () => {

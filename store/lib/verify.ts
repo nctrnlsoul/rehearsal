@@ -86,18 +86,24 @@ const TRANSMISSION_ID = /^[A-Za-z0-9-]{8,64}$/;
  * PayPal delivery costs nothing: the algorithm PayPal signs with, an id of
  * PayPal's shape, and a transmission time within ten minutes of now.
  */
-export function checkTransmission(headers: Headers, nowMs: number): { ok: true } | { ok: false; detail: string } {
+export function checkTransmission(
+  headers: Headers,
+  nowMs: number,
+): { ok: true } | { ok: false; detail: string; outsideWindow: boolean } {
   if (headers.get("paypal-auth-algo") !== PAYPAL_AUTH_ALGO) {
-    return { ok: false, detail: `paypal-auth-algo is not ${PAYPAL_AUTH_ALGO}` };
+    return { ok: false, detail: `paypal-auth-algo is not ${PAYPAL_AUTH_ALGO}`, outsideWindow: false };
   }
   if (!TRANSMISSION_ID.test(headers.get("paypal-transmission-id") ?? "")) {
-    return { ok: false, detail: "paypal-transmission-id is not an id" };
+    return { ok: false, detail: "paypal-transmission-id is not an id", outsideWindow: false };
   }
   const raw = headers.get("paypal-transmission-time") ?? "";
   const at = raw.length <= 40 ? Date.parse(raw) : Number.NaN;
-  if (Number.isNaN(at)) return { ok: false, detail: "paypal-transmission-time is not a time" };
+  if (Number.isNaN(at)) return { ok: false, detail: "paypal-transmission-time is not a time", outsideWindow: false };
   if (Math.abs(nowMs - at) > TRANSMISSION_WINDOW_MS) {
-    return { ok: false, detail: "paypal-transmission-time is more than 10 minutes from now" };
+    // PayPal's docs do not say whether a retry keeps the first transmission
+    // time, and retries run for 3 days. So this is "could not check", which
+    // never acts and lets PayPal retry, not a forgery that tells it to stop.
+    return { ok: false, detail: "paypal-transmission-time is more than 10 minutes from now", outsideWindow: true };
   }
   return { ok: true };
 }
@@ -158,6 +164,7 @@ export async function resolveWebhookId(
 
     const res = await fetchImpl(`https://${SANDBOX_HOST}/v1/notifications/webhooks`, {
       headers: { Authorization: `Bearer ${bearer}`, Accept: "application/json" },
+      redirect: "error",
       signal: AbortSignal.timeout(8000),
     });
     if (res.status === 401) forgetToken();
@@ -255,7 +262,11 @@ export async function verifySignature(
   const cert = checkCertUrl(headers.get("paypal-cert-url") ?? "");
   if (!cert.ok) return { verified: false, detail: cert.detail };
   const transmission = checkTransmission(headers, nowMs);
-  if (!transmission.ok) return { verified: false, detail: transmission.detail };
+  if (!transmission.ok) {
+    return transmission.outsideWindow
+      ? { verified: null, detail: `could not check: ${transmission.detail}` }
+      : { verified: false, detail: transmission.detail };
+  }
 
   // A pinned webhook id needs no origin; otherwise the origin comes from env.
   const pinnedId = (env["REHEARSAL_STORE_WEBHOOK_ID"] ?? "").trim() !== "";
@@ -285,6 +296,7 @@ export async function verifySignature(
           },
           rawEvent,
         ),
+        redirect: "error",
         signal: AbortSignal.timeout(8000),
       },
     );

@@ -523,7 +523,8 @@ async function bankConfirm(): Promise<void> {
       );
 
       for (const purchase of stillWaiting) {
-        const match = matchBuyerTransaction(purchase, rows, alreadyBanked);
+        const waiting = bank.purchases.filter((p) => p.status === "awaiting_transaction_id");
+        const match = matchBuyerTransaction(purchase, rows, alreadyBanked, waiting);
 
         if (match.id === null) {
           console.log(

@@ -39,6 +39,7 @@ async function fetchToken(
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: "grant_type=client_credentials",
+    redirect: "error",
     signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) return null;

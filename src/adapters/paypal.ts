@@ -48,6 +48,8 @@ export type ClientDeps = {
   /** Floor between requests. PayPal publishes no rate limits, so we self-throttle. */
   readonly minIntervalMs?: number;
   readonly policy?: RetryPolicy;
+  /** Per attempt, token request included. The hosted worker sets a shorter one so its time budget holds. */
+  readonly requestTimeoutMs?: number;
   readonly log?: (line: string) => void;
   readonly label?: string;
 };
@@ -125,7 +127,7 @@ export class PaypalClient {
       },
       body: "grant_type=client_credentials",
       redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.#deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
     });
 
     const text = await res.text();
@@ -229,7 +231,7 @@ export class PaypalClient {
           // The host pin checks only the first URL. Following a redirect would
           // let a reply send the token to a host nobody pinned.
           redirect: "error",
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.#deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
         });
         status = res.status;
         debugId = res.headers.get("paypal-debug-id");

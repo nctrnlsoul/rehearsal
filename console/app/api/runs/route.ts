@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { dbFromEnv } from "../../../lib/db";
 import { PaypalClient, cleanModelText, credentialsFor, storeStateReader } from "../../../lib/engine";
-import { MAX_DURATION_S } from "../../../lib/hosted";
+import { HOSTED_CLIENT, MAX_DURATION_S } from "../../../lib/hosted";
 import { handleRunsPost } from "../../../lib/live";
 import { runScenarioWorker } from "../../../lib/worker";
 
@@ -12,7 +12,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800;
 
 /** PayPal publishes no rate limits, so the console throttles itself like the CLI. */
-const THROTTLE_MS = 250;
 /** Kept back from maxDuration for the worker's own last writes. */
 const DEADLINE_MARGIN_S = 20;
 const MIN_STORE_TOKEN_CHARS = 32;
@@ -42,8 +41,8 @@ export async function POST(req: Request): Promise<Response> {
       if (token.length < MIN_STORE_TOKEN_CHARS) log(`run ${runId}: no usable store token, so deliveries will not be read`);
       // Built here, before after(): a bad credential then throws inside the
       // hand-off, which cancels the start and gives its quota back.
-      const seller = new PaypalClient(credentialsFor("seller", env), { label: "seller", log, minIntervalMs: THROTTLE_MS });
-      const buyer = new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, minIntervalMs: THROTTLE_MS });
+      const seller = new PaypalClient(credentialsFor("seller", env), { label: "seller", log, ...HOSTED_CLIENT });
+      const buyer = new PaypalClient(credentialsFor("buyer", env), { label: "buyer", log, ...HOSTED_CLIENT });
       after(() =>
         runScenarioWorker(
           { runId, scenario, digest },

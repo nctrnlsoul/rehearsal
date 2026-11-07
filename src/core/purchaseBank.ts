@@ -93,21 +93,40 @@ export function checkPurchaseAmount(amount: string, currency: string, caps: Caps
 
 /** How far before the order a buyer transaction may be stamped and still be its payment: clock skew only. */
 const MATCH_SKEW_MS = 5 * 60 * 1000;
+/** Approval links lapse within hours, so a payment a day after its order is someone else's. */
+const MATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const minorOrNull = (value: string, currency: string): bigint | null => {
+  try {
+    return toMinor(value.replace(/^-/, ""), currency);
+  } catch {
+    return null;
+  }
+};
 
 /**
  * The buyer-side transaction that paid for a banked purchase, from rows of
  * PayPal's Transaction Search. A match needs the same amount (as money, either
- * sign) and the same currency, no earlier than the order was created; of those,
- * the one closest in time wins. Amount alone matched another purchase of the
- * same price, and a dispute against the wrong transaction tests nothing.
+ * sign), the same currency, and a time from the order's creation to a day
+ * after it; of those, the one closest in time wins. Amount alone matched
+ * another purchase of the same price, and a dispute against the wrong
+ * transaction tests nothing.
+ *
+ * `waiting` is every purchase still waiting for its transaction. A
+ * transaction belongs to the latest same-price order created before it, so a
+ * newer order's payment is never handed to an older order that is still
+ * waiting for its own. Anything unreadable matches nothing.
  */
 export function matchBuyerTransaction(
   purchase: Purchase,
   rows: readonly unknown[],
   taken: ReadonlySet<string>,
+  waiting: readonly Purchase[] = [],
 ): { readonly id: string | null; readonly candidates: number } {
+  const none = { id: null, candidates: 0 };
   const createdMs = Date.parse(purchase.createdAt);
-  const want = toMinor(purchase.amount, purchase.currency);
+  const want = minorOrNull(purchase.amount, purchase.currency);
+  if (Number.isNaN(createdMs) || want === null) return none;
   const field = (o: unknown, ...path: string[]): string | null => {
     let cur: unknown = o;
     for (const k of path) {
@@ -116,19 +135,18 @@ export function matchBuyerTransaction(
     }
     return typeof cur === "string" && cur.trim() !== "" ? cur : null;
   };
+  // Other waiting orders of the same price, by creation time.
+  const rivals = waiting
+    .filter((w) => w.orderId !== purchase.orderId && w.currency === purchase.currency && minorOrNull(w.amount, w.currency) === want)
+    .map((w) => Date.parse(w.createdAt))
+    .filter((ms) => !Number.isNaN(ms));
   const candidates = rows
     .map((r) => (typeof r === "object" && r !== null ? (r as Record<string, unknown>)["transaction_info"] : null))
     .map((info) => {
       const value = field(info, "transaction_amount", "value");
-      let minor: bigint | null = null;
-      try {
-        minor = value === null ? null : toMinor(value.replace(/^-/, ""), purchase.currency);
-      } catch {
-        minor = null;
-      }
       return {
         id: field(info, "transaction_id"),
-        minor,
+        minor: value === null ? null : minorOrNull(value, purchase.currency),
         currency: field(info, "transaction_amount", "currency_code"),
         atMs: Date.parse(field(info, "transaction_initiation_date") ?? ""),
       };
@@ -140,7 +158,9 @@ export function matchBuyerTransaction(
         c.minor === want &&
         c.currency === purchase.currency &&
         !Number.isNaN(c.atMs) &&
-        (Number.isNaN(createdMs) || c.atMs >= createdMs - MATCH_SKEW_MS),
+        c.atMs >= createdMs - MATCH_SKEW_MS &&
+        c.atMs <= createdMs + MATCH_WINDOW_MS &&
+        !rivals.some((r) => r > createdMs && r - MATCH_SKEW_MS <= c.atMs),
     )
     .sort((a, b) => Math.abs(a.atMs - createdMs) - Math.abs(b.atMs - createdMs));
   return { id: candidates[0]?.id ?? null, candidates: candidates.length };

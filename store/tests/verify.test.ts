@@ -263,7 +263,7 @@ describe("verifySignature header checks and replies", () => {
   };
   const success = () => Response.json({ verification_status: "SUCCESS" });
 
-  it("refuses, with no PayPal call, any algorithm but SHA256withRSA, an id of the wrong shape, or a stale or future time", async () => {
+  it("makes no PayPal call for any algorithm but SHA256withRSA, an id of the wrong shape, or a stale or future time", async () => {
     const cases: Record<string, string>[] = [
       { "paypal-auth-algo": "none" },
       { "paypal-transmission-id": "T 1; drop" },
@@ -274,7 +274,10 @@ describe("verifySignature header checks and replies", () => {
     for (const over of cases) {
       const p = paypal(success);
       const out = await verifySignature(headers(over), "{}", ENV, p.fetchImpl, NOW);
-      expect(out.verified, JSON.stringify(over)).toBe(false);
+      // A time outside the window cannot act, but is "could not check", so a
+      // PayPal retry that kept its first time is not told to stop.
+      const outside = /^\d{4}-/.test(over["paypal-transmission-time"] ?? "");
+      expect(out.verified, JSON.stringify(over)).toBe(outside ? null : false);
       expect(p.bodies, JSON.stringify(over)).toEqual([]);
     }
     const p = paypal(success);
@@ -393,5 +396,32 @@ describe("checkCertUrl", () => {
   it("never echoes an overlong host into the reason", () => {
     const out = checkCertUrl(`https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.test/`);
     expect(out).toEqual({ ok: false, detail: "paypal-cert-url host an overlong host is not a PayPal API host" });
+  });
+});
+
+// The PayPal host is pinned; a followed redirect would carry the bearer token
+// or the Basic credentials somewhere nobody pinned.
+describe("every PayPal request the store makes", () => {
+  it("refuses redirects: token, webhook lookup and verify", async () => {
+    const seen: Array<[string, unknown]> = [];
+    const origin = freshOrigin();
+    const fetchImpl = (async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = String(input);
+      seen.push([url.replace(/^https:\/\/[^/]+/, ""), init.redirect]);
+      if (url.endsWith("/v1/oauth2/token")) return new Response(JSON.stringify({ access_token: "tok", expires_in: 32400 }), { status: 200 });
+      if (url.endsWith("/v1/notifications/webhooks")) return Response.json({ webhooks: [{ id: "WH-R", url: `${origin}${STORE_WEBHOOK_PATH}` }] });
+      return Response.json({ verification_status: "SUCCESS" });
+    }) as typeof fetch;
+    const headers = new Headers({
+      "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/C",
+      "paypal-auth-algo": "SHA256withRSA",
+      "paypal-transmission-id": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
+      "paypal-transmission-sig": "sig",
+      "paypal-transmission-time": new Date().toISOString(),
+    });
+    const out = await verifySignature(headers, "{}", { PAYPAL_SELLER_CLIENT_ID: "redirect-id", PAYPAL_SELLER_CLIENT_SECRET: "s", REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    expect(out.verified).toBe(true);
+    expect(seen.map(([path]) => path)).toEqual(expect.arrayContaining(["/v1/notifications/webhooks", "/v1/notifications/verify-webhook-signature"]));
+    for (const [path, redirect] of seen) expect(redirect, path).toBe("error");
   });
 });

@@ -349,3 +349,32 @@ describe("redirects", () => {
     expect(seen).toEqual(["error", "error", "error"]);
   });
 });
+
+// The hosted worker's time budget counts each attempt at its own timeout, so
+// the client must stop waiting there, not at the engine's 30 s default.
+describe("requestTimeoutMs", () => {
+  it("bounds each attempt, token request included", async () => {
+    const hang = (async (_input: unknown, init: Record<string, unknown>) =>
+      new Promise((_resolve, reject) => {
+        (init["signal"] as AbortSignal).addEventListener("abort", () => reject(new DOMException("timed out", "TimeoutError")));
+      })) as unknown as typeof fetch;
+    const started = Date.now();
+    const client = new PaypalClient(CREDS, { fetchImpl: hang, requestTimeoutMs: 50, sleep: async () => {} });
+    await expect(client.call({ method: "GET", path: "/v2/checkout/orders/X" })).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+
+    let tokenServed = false;
+    const slowCall = (async (input: unknown, init: Record<string, unknown>) => {
+      if (String(input).endsWith("/v1/oauth2/token")) {
+        tokenServed = true;
+        return new Response(JSON.stringify({ access_token: TOKEN, expires_in: 32_400 }), { status: 200 });
+      }
+      return hang(input as string, init as RequestInit);
+    }) as unknown as typeof fetch;
+    const c2 = new PaypalClient(CREDS, { fetchImpl: slowCall, requestTimeoutMs: 50, sleep: async () => {}, policy: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 } });
+    const res = await c2.call({ method: "GET", path: "/v2/checkout/orders/X" });
+    expect(tokenServed).toBe(true);
+    expect(res.status).toBe(0);
+    expect(res.transportError).toMatch(/TimeoutError/);
+  });
+});

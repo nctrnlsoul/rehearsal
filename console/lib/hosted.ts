@@ -40,32 +40,50 @@ export const DELIVERY_WAIT_S = 90;
 export const DELIVERY_POLL_S = 5;
 
 /**
+ * How the hosted worker's PayPal clients behave: one retry after at most 2 s,
+ * and 20 s per attempt, token request included. Fixed so every call has a
+ * bound the time budget can count; the CLI keeps the engine's defaults.
+ */
+export const HOSTED_PAYPAL_POLICY = { maxAttempts: 2, baseDelayMs: 1000, maxDelayMs: 2000 } as const;
+export const HOSTED_REQUEST_TIMEOUT_MS = 20_000;
+/** The routes space PayPal requests at least this far apart. */
+export const HOSTED_THROTTLE_MS = 250;
+
+/** One PayPal call at its worst: every attempt times out, plus the retry wait and the spacing. */
+export const CALL_WORST_S = Math.ceil(
+  (HOSTED_PAYPAL_POLICY.maxAttempts * (HOSTED_REQUEST_TIMEOUT_MS + HOSTED_THROTTLE_MS) + HOSTED_PAYPAL_POLICY.maxDelayMs) / 1000,
+);
+/** A token request: one attempt, never retried. Counted on every step, since a token can expire mid-run. */
+export const TOKEN_WORST_S = HOSTED_REQUEST_TIMEOUT_MS / 1000;
+
+const calls = (n: number) => TOKEN_WORST_S + n * CALL_WORST_S;
+
+/**
  * The longest each step kind can take, so no step starts that cannot finish
- * inside the route's time. A PayPal call that answers takes seconds; one that
- * times out takes 30 s and may be retried once with backoff, so every call is
- * counted at 30 s. Polls run to their budget and the last poll can start just
- * before it ends.
+ * inside the route's time. Built from the handlers: how many calls each makes,
+ * and for a polling step its poll budget, the poll that can start just before
+ * that budget ends, and one more sleep.
  *
- * - card order, refund, invoice send, record payment, cancel: 1 to 2 calls, 60 s
- * - invoice create: 3 calls (number, create, read back), 90 s
- * - payout batch: create, then polls for 90 s, 130 s
- * - dispute: create, then polls for 120 s, 160 s
- * - resend: polls the event list for up to 120 s, then retries PayPal's
- *   not-found answer for up to 120 s more, 270 s
+ * - card order: 1 call. Refund, invoice send, record payment, cancel: 2 calls.
+ * - invoice create: 3 calls (number, create, read back).
+ * - payout batch: create, polls for 90 s every 5 s, one last poll.
+ * - dispute: a bank claim (a database call, 5 s), create, polls for 120 s every 8 s, one last poll.
+ * - resend: polls the event list for 120 s every 8 s, one last poll, then
+ *   retries PayPal's not-found answer for up to 120 s, one last attempt.
  */
 export const STEP_WORST_CASE_S: Readonly<Record<string, number>> = {
-  card_order: 60,
-  refund: 60,
-  invoice_create: 90,
-  invoice_send: 60,
-  invoice_record_payment: 60,
-  invoice_cancel: 60,
-  payout_batch: 130,
-  open_dispute: 160,
-  resend_webhook: 270,
+  card_order: calls(1),
+  refund: calls(2),
+  invoice_create: calls(3),
+  invoice_send: calls(2),
+  invoice_record_payment: calls(2),
+  invoice_cancel: calls(2),
+  payout_batch: calls(2) + 90 + 5,
+  open_dispute: 5 + calls(2) + 120 + 8,
+  resend_webhook: calls(2) + 120 + 8 + 120,
 };
 /** For a step kind added later and not yet measured: the largest bound above. */
-export const DEFAULT_STEP_WORST_CASE_S = 270;
+export const DEFAULT_STEP_WORST_CASE_S = Math.max(...Object.values(STEP_WORST_CASE_S));
 
 export const worstCaseOf = (kind: string): number => STEP_WORST_CASE_S[kind] ?? DEFAULT_STEP_WORST_CASE_S;
 
@@ -78,6 +96,13 @@ export const DESCRIPTION_MAX_CHARS = 2000;
 
 /** The engine's own defaults, for the trust panel, which may not import the engine directly. */
 export { DEFAULT_AI_BUDGET, DEFAULT_CAPS, PLANNER_TIMEOUT_MS } from "./engine";
+
+/** What every hosted PayPal client is built with, so the step bounds above hold. */
+export const HOSTED_CLIENT = {
+  minIntervalMs: HOSTED_THROTTLE_MS,
+  policy: HOSTED_PAYPAL_POLICY,
+  requestTimeoutMs: HOSTED_REQUEST_TIMEOUT_MS,
+} as const;
 
 export const KILL_SWITCH_VAR = "CONSOLE_LIVE_RUNS";
 

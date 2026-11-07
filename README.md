@@ -301,8 +301,9 @@ steps, and any event target not on the allowlist.
   is never replayed after one. Anything other than success halts the run, and
   a halted step is never retried without an explicit human `--retry`.
 - **No verdict without evidence.** The finder says BUG or OK only when the step
-  under test ran and the store's own verified rows show the outcome; anything
-  else is INCONCLUSIVE, with the reason.
+  under test ran and its outcome is on record: the store's own verified rows for
+  a webhook class, PayPal's own read-back of the item or invoice for the payout
+  and invoice classes. Anything else is INCONCLUSIVE, with the reason.
 - **A failed read is never an empty result.** A non-200 from PayPal's event list
   is reported as unreadable, not as "no events".
 - **Measure the instrument first.** Gate 5 posts a self-test event and refuses

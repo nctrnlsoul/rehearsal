@@ -124,7 +124,7 @@ describe("the receiver refuses a bad cert URL before any PayPal call", () => {
     expect(rows[0]).toMatchObject({ verified: null, verify_detail: "could not check: verify http 503" });
   });
 
-  it("refuses a stale transmission time before any PayPal call", async () => {
+  it("records a stale transmission time as unchecked, before any PayPal call", async () => {
     await POST(
       new Request("https://receiver.test/api/paypal/webhook", {
         method: "POST",
@@ -136,7 +136,7 @@ describe("the receiver refuses a bad cert URL before any PayPal call", () => {
       }),
     );
     expect(paypalCalls).toEqual([]);
-    expect(rows[0]).toMatchObject({ verified: false, verify_detail: "paypal-transmission-time is more than 10 minutes from now" });
+    expect(rows[0]).toMatchObject({ verified: null, verify_detail: "could not check: paypal-transmission-time is more than 10 minutes from now" });
   });
 });
 
@@ -205,5 +205,30 @@ describe("the body cap is in bytes (L6)", () => {
     expect(res.status).toBe(413);
     expect(rows).toEqual([]);
     expect(paypalCalls).toEqual([]);
+  });
+});
+
+// The PayPal host is pinned; a followed redirect would carry the bearer token
+// or the Basic credentials somewhere nobody pinned.
+describe("every PayPal request the receiver makes", () => {
+  it("refuses redirects", async () => {
+    const seen: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("paypal.com")) {
+          seen.push(init?.redirect);
+          if (url.endsWith("/v1/oauth2/token")) {
+            return new Response(JSON.stringify({ access_token: "tok", expires_in: 32400 }), { status: 200 });
+          }
+          return Response.json({ verification_status: "SUCCESS" });
+        }
+        return new Response(null, { status: 201 });
+      }),
+    );
+    await post("https://api.sandbox.paypal.com/v1/notifications/certs/C");
+    expect(seen.length).toBeGreaterThan(0);
+    for (const r of seen) expect(r).toBe("error");
   });
 });

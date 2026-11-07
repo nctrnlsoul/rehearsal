@@ -74,7 +74,11 @@ async function verify(
   const cert = checkCertUrl(headers.get("paypal-cert-url") ?? "");
   if (!cert.ok) return { verified: false, detail: cert.detail };
   const transmission = checkTransmission(headers, Date.now());
-  if (!transmission.ok) return { verified: false, detail: transmission.detail };
+  if (!transmission.ok) {
+    return transmission.outsideWindow
+      ? { verified: null, detail: `could not check: ${transmission.detail}` }
+      : { verified: false, detail: transmission.detail };
+  }
 
   try {
     const bearer = await accessToken(clientId, clientSecret, fetch);
@@ -97,6 +101,7 @@ async function verify(
         },
         rawEvent,
       ),
+      redirect: "error",
       signal: AbortSignal.timeout(8000),
     });
     if (res.status === 401) forgetToken();
