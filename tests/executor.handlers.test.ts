@@ -51,6 +51,22 @@ describe("cardOrderHandler", () => {
     expect(out.ids).toEqual({ order_id: "ORD-1", capture_id: "CAP-1" });
   });
 
+  // A plan may write "25" where PayPal answers "25.00"; that is the same money,
+  // and calling it a failed capture would halt a run that charged correctly.
+  it("compares the captured amount as money, not as text", async () => {
+    const whole = scenarioWith([{ id: "o1", kind: "card_order", amount: "25" }]);
+    const same = fakePaypal([orderOk("25.00")]);
+    expect((await cardOrderHandler(makeContext({ scenario: whole, stepId: "o1", seller: same.client }).ctx)).kind).toBe("success");
+
+    const short = fakePaypal([orderOk("24.99")]);
+    const out = await cardOrderHandler(makeContext({ scenario: whole, stepId: "o1", seller: short.client }).ctx);
+    expect(out.kind).toBe("failed");
+    expect(out.detail).toBe("captured 24.99, expected 25");
+
+    const junk = fakePaypal([orderOk("lots")]);
+    expect((await cardOrderHandler(makeContext({ scenario: whole, stepId: "o1", seller: junk.client }).ctx)).kind).toBe("failed");
+  });
+
   it("sends a single-step card order with a derived idempotency key", async () => {
     const seller = fakePaypal([orderOk("42.00")]);
     const { ctx } = makeContext({ scenario, stepId: "o1", seller: seller.client });
