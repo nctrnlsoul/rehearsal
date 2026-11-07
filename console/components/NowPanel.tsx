@@ -120,13 +120,13 @@ function Body({ body }: { body: PanelBody }) {
   }
 }
 
-const STAGE_WORD: Record<Stage["state"], string> = { done: "done", now: "in progress", todo: "not yet", none: "not applicable", bad: "did not happen" };
+const STAGE_WORD: Record<Stage["state"], string> = { done: "done", now: "in progress", todo: "not yet", none: "not applicable", bad: "did not happen", unknown: "not known" };
 
 function StageItem({ stage: s }: { stage: Stage }) {
   return (
     <li className={`np-stage-item ${s.state}`}>
       <span className="np-dot" aria-hidden="true">
-        {s.state === "done" ? <Icon name="check" /> : s.state === "bad" ? <Icon name="cross" /> : s.state === "none" ? <Icon name="dash" /> : null}
+        {s.state === "done" ? <Icon name="check" /> : s.state === "bad" ? <Icon name="cross" /> : s.state === "none" || s.state === "unknown" ? <Icon name="dash" /> : null}
       </span>
       <span className="np-stage-label">
         <span className="np-long">{s.label}</span>

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HOSTED_REPLAYS, hostedById, hostedEndS, hostedRead } from "../lib/hostedReplays";
 import type { LiveRead } from "../lib/liveView";
-import { nowPanel } from "../lib/nowPanel";
+import { nowPanel, stagesOf } from "../lib/nowPanel";
 import { runStory } from "../lib/runStory";
 import { type Fixture, absolute, tokenRefused } from "./fixtures/liveRuns";
 
@@ -60,14 +60,14 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
         { label: "Verified by the store", short: "Verified", state: "todo" },
       ],
     });
-    expect(p.label).toBe("0 of 5 sent, 0 of 4 confirmed");
+    expect(p.label).toBe("0 of 5 sent, 0 of 4 verified");
   });
 
   it("names an invoice step as the brief does, and a step with no event as having none", () => {
     const invoice = at(7.5);
     expect(invoice.key).toBe("step:invoice-1");
     expect(invoice.body.kind === "step" && invoice.body.activity).toBe("Creating the invoice, USD 120");
-    expect(invoice.label).toBe("2 of 5 sent, 0 of 4 confirmed");
+    expect(invoice.label).toBe("2 of 5 sent, 0 of 4 verified");
     const send = at(8.5);
     expect(send.body.kind === "step" && send.body.activity).toBe("Sending the invoice");
     expect(send.body.kind === "step" && send.body.stages.slice(2).map((s) => s.state)).toEqual(["none", "none"]);
@@ -76,7 +76,7 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
   it("after the last call, waits on PayPal's webhooks with one chip per expected event", () => {
     const p = at(12);
     expect(p.key).toBe("webhooks");
-    expect(p.label).toBe("5 of 5 sent, 0 of 4 confirmed");
+    expect(p.label).toBe("5 of 5 sent, 0 of 4 verified");
     expect(p.body.kind === "webhooks" && p.body.title).toBe("Waiting for PayPal's webhooks: 0 of 4 arrived");
     expect(p.body.kind === "webhooks" && p.body.chips.map((c) => [c.label, c.state])).toEqual([
       ["Step 1 payment", "out"],
@@ -86,7 +86,7 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
     ]);
     const one = at(20);
     expect(one.body.kind === "webhooks" && one.body.title).toBe("Waiting for PayPal's webhooks: 1 of 4 arrived");
-    expect(one.label).toBe("5 of 5 sent, 1 of 4 confirmed");
+    expect(one.label).toBe("5 of 5 sent, 1 of 4 verified");
     expect(one.body.kind === "webhooks" && one.body.chips[0]!.state).toBe("in");
   });
 
@@ -109,7 +109,7 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
       note: "PayPal also sent 1 event that no step causes, listed below under Other events.",
       chips: expect.any(Array),
     });
-    expect(p.label).toBe("5 of 5 sent, 4 of 4 confirmed");
+    expect(p.label).toBe("5 of 5 sent, 4 of 4 verified");
     expect(p.segments.map((s) => [s.sent, s.confirmed, s.expects])).toEqual([
       [true, true, true],
       [true, true, true],
@@ -200,5 +200,40 @@ describe("the Now running panel, at the edges", () => {
     expect(p.key).toBe("queued");
     expect(p.segments).toEqual([]);
     expect(p.sticky).toBe(true);
+  });
+});
+
+// The independent verifier's findings on the v0.7.1 diff, each held here.
+describe("the Now running panel, after the verifier pass", () => {
+  it("counts events and calls them verified, as the chips and the final sentence do; a refused copy is not counted", () => {
+    const record = structuredClone(hosted.record) as typeof hosted.record;
+    // A copy of the hosted rows with the first capture's delivery refused by the store's signature check.
+    const events = record.events.map((e) => (e.kind === "delivery" && e.data["event_id"] === "WH-9NJ5058544606690H-55R672889N360970C" ? { ...e, data: { ...e.data, refused: 1 } } : e));
+    const changed = { ...hosted, record: { ...record, events } };
+    const p = nowPanel(runStory(hostedRead(changed, 40)));
+    expect(p.label).toBe("5 of 5 sent, 3 of 4 verified");
+    expect(p.body.kind === "webhooks" && p.body.chips.map((c) => c.state)).toEqual(["bad", "in", "in", "in"]);
+    expect(p.segments[0]!.confirmed).toBe(false);
+  });
+
+  it("makes no timing promise while it waits", () => {
+    const p = at(12);
+    expect(p.body.kind === "webhooks" && p.body.text).toBe("Each one turns to a check when the store records it and PayPal's signature check passes.");
+  });
+
+  it("before the plan is read, the hero and the panel both say the run is starting", () => {
+    const s = runStory(hostedRead(hosted, 0));
+    expect(s.cards).toEqual([]);
+    expect([s.headline, s.lead, s.progress]).toEqual(["Starting.", "The server has picked it up. The first step starts in a moment.", null]);
+    expect(nowPanel(s).body).toEqual({ kind: "queued", title: "Starting", text: "The server has picked it up. The first step starts in a moment." });
+  });
+
+  it("draws an unknown outcome as unknown, never as a refusal", () => {
+    const card = runStory(hostedRead(hosted, END)).cards[0]!;
+    for (const sent of ["unknown", "never-confirmed"] as const) {
+      const stages = stagesOf({ ...card, sent, reply: "none", replies: [] });
+      expect(stages.slice(0, 2).map((s) => [s.label, s.state])).toEqual([["Sending to PayPal", "unknown"], ["Outcome unknown", "unknown"]]);
+      expect(stages.some((s) => s.state === "bad" || s.state === "done")).toBe(false);
+    }
   });
 });

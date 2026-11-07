@@ -533,7 +533,11 @@ describe("the Now running panel", () => {
     const animations = new Set<string>();
     for (let i = 0; i < 25; i++) {
       leaving += await page.locator(".np-leave:visible").count();
-      for (const a of await page.locator(".now-panel *").evaluateAll((els) => els.map((e) => getComputedStyle(e).animationName).concat(els.map((e) => getComputedStyle(e, "::after").animationName)))) animations.add(a);
+      for (const a of await page.locator(".now-panel *").evaluateAll((els) => {
+        // React may have replaced a node since it was found; a detached one has no computed style.
+        const live = els.filter((e) => e.isConnected);
+        return live.map((e) => getComputedStyle(e).animationName).concat(live.map((e) => getComputedStyle(e, "::after").animationName));
+      })) animations.add(a);
       await page.waitForTimeout(80);
     }
     expect(leaving).toBe(0);
@@ -547,7 +551,7 @@ describe("the Now running panel", () => {
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live/20261107230012-e2e071", 200);
     await page.waitForSelector(".now-panel.now-step");
-    await expect(page.locator(".now-panel").innerText()).resolves.toMatch(/2 of 5 sent, 0 of 4 confirmed[\s\S]*Step 3 of 5[\s\S]*Creating the invoice, USD 120/);
+    await expect(page.locator(".now-panel").innerText()).resolves.toMatch(/2 of 5 sent, 0 of 4 verified[\s\S]*Step 3 of 5[\s\S]*Creating the invoice, USD 120/);
     expect(await page.locator(".now-panel.sticky").count()).toBe(1);
     await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261107230012-e2e071'");
     await ctx.close();

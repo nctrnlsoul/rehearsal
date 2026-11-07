@@ -24,7 +24,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
               <ul className="sources">
                 <li>{hosted.evidence}</li>
               </ul>
-              <p>The run row and every event it wrote, exported unchanged from this console&apos;s database. The replay reads them on their own clock, exactly as the live page would have read them every 2 s; ids and times are the real ones. Latencies run from PayPal accepting a step to the store recording the event, to the second.</p>
+              <p>The run row and every event it wrote, exported unchanged from this console&apos;s database. The replay shows, at each moment of the recorded clock, the events written by then, as the live page would have seen them; the run row reads as running, with its finish time and final state held back, until its recorded finish. Ids and times are the real ones. Latencies run from PayPal accepting a step to the store recording the event, to the second.</p>
             </details>
           </div>
         </main>

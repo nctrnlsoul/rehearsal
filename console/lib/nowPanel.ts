@@ -7,10 +7,10 @@ import { type RunStory, type StepCard, dur } from "./runStory";
  * eases or fills ahead of what PayPal and the store have actually said.
  */
 
-export type StageState = "done" | "now" | "todo" | "none" | "bad";
+export type StageState = "done" | "now" | "todo" | "none" | "bad" | "unknown";
 export type Stage = { readonly label: string; readonly short: string; readonly state: StageState };
 
-/** One segment per step: sent is PayPal accepting the call, confirmed its event landing verified. */
+/** One segment per step: sent is PayPal accepting the call, confirmed its events all landing verified. */
 export type Segment = { readonly n: number; readonly sent: boolean; readonly confirmed: boolean; readonly expects: boolean; readonly failed: boolean };
 
 export type Chip = { readonly key: string; readonly label: string; readonly state: "in" | "out" | "bad" };
@@ -70,9 +70,18 @@ function chipsOf(cards: readonly StepCard[]): Chip[] {
   );
 }
 
-function stagesOf(c: StepCard): Stage[] {
+export function stagesOf(c: StepCard): Stage[] {
   const failed = FAILED.has(c.sent);
   const accepted = c.sent === "accepted";
+  // Nobody can prove whether PayPal took the call, so neither stage claims it did or did not.
+  if (c.sent === "unknown" || c.sent === "never-confirmed") {
+    return [
+      { label: "Sending to PayPal", short: "Sending", state: "unknown" },
+      { label: "Outcome unknown", short: "Unknown", state: "unknown" },
+      { label: "Waiting for PayPal's webhook", short: "Webhook", state: "todo" },
+      { label: "Verified by the store", short: "Verified", state: "todo" },
+    ];
+  }
   const expects = expectsReply(c);
   const arrived = c.replies.length > 0 && c.replies.every((r) => r.arrived);
   return [
@@ -100,13 +109,13 @@ export function nowPanel(story: RunStory): NowPanel {
     return { n: c.n, sent: c.sent === "accepted", confirmed: c.sent === "accepted" && expects && verifiedReply(c), expects, failed: FAILED.has(c.sent) };
   });
   const sent = segments.filter((s) => s.sent).length;
-  const expecting = segments.filter((s) => s.expects).length;
-  const confirmed = segments.filter((s) => s.confirmed).length;
-  const label = `${sent} of ${total} sent${expecting === 0 ? "" : `, ${confirmed} of ${expecting} confirmed`}`;
   const chips = chipsOf(cards);
   const replies = cards.flatMap((c) => c.replies);
   const arrived = replies.filter((r) => r.arrived).length;
   const verified = replies.filter((r) => r.arrived && r.copies > 0 && r.verified === r.copies).length;
+  // Counted in events, as the chips and the final sentence are; queued steps count the event they will wait for.
+  const expecting = cards.reduce((n, c) => n + (c.replies.length > 0 ? c.replies.length : expectsReply(c) ? 1 : 0), 0);
+  const label = `${sent} of ${total} sent${expecting === 0 ? "" : `, ${verified} of ${expecting} verified`}`;
   const base = { sticky: !story.settled, segments, label };
 
   if (story.tone === "queued") return { ...base, key: "queued", body: { kind: "queued", title: "Queued", text: "Waiting for the server to start it." } };
@@ -148,7 +157,7 @@ export function nowPanel(story: RunStory): NowPanel {
     key: "webhooks",
     body:
       arrived < replies.length
-        ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${replies.length} arrived`, text: "Calls finish in seconds; PayPal's webhooks often land 10 to 30 s later.", chips }
+        ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${replies.length} arrived`, text: "Each one turns to a check when the store records it and PayPal's signature check passes.", chips }
         : { kind: "webhooks", title: `All ${replies.length} webhooks arrived, ${verified} verified`, text: listening, chips },
   };
 }

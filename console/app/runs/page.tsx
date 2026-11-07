@@ -25,13 +25,13 @@ export default function RunsPage() {
               <li key={h.runId}>
                 <Link className="card run-card hosted" href={`/runs/${h.runId}`}>
                   <span className="rc-top">
-                    <Badge kind="ok">Complete</Badge>
+                    <Badge kind={h.record.run.status === "complete" ? "ok" : "stop"}>{h.record.run.status === "complete" ? "Complete" : `Ended ${h.record.run.status}`}</Badge>
                     <span className="note">{h.record.run.created_at.slice(0, 10)}</span>
                   </span>
                   <span className="rc-name">{h.title}</span>
                   <span className="rc-line">{h.summary}</span>
                   <span className="rc-meta">
-                    {h.record.events.filter((e) => e.kind === "step_finished").length} steps · {h.record.events.filter((e) => e.kind === "delivery").length} deliveries from PayPal · {dur(hostedEndS(h))} · <span className="mono">{h.runId}</span>
+                    {h.record.events.filter((e) => e.kind === "step_finished").length} steps · {new Set(h.record.events.flatMap((e) => (e.kind === "delivery" && typeof e.data["event_id"] === "string" ? [e.data["event_id"]] : []))).size} events from PayPal · {dur(hostedEndS(h))} · <span className="mono">{h.runId}</span>
                   </span>
                   <span className="rc-go">Watch the replay <Icon name="arrow" /></span>
                 </Link>

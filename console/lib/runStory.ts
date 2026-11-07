@@ -507,6 +507,11 @@ export function runStory(read: LiveRead): RunStory {
     tone = "stopped";
     headline = view.phase === "abandoned" ? "The server running this stopped." : "The run stopped on an internal error.";
     lead = reason;
+  } else if (total === 0 && !view.settled) {
+    // Started, but the plan note that names the steps has not been read yet.
+    tone = "running";
+    headline = "Starting.";
+    lead = "The server has picked it up. The first step starts in a moment.";
   } else if (view.phase === "complete") {
     tone = "done";
     headline = `All ${stepsWord(total)} done.`;
@@ -531,7 +536,7 @@ export function runStory(read: LiveRead): RunStory {
     }
   }
 
-  const progress = tone === "running" ? { at: Math.min(total, finalCards.filter((c) => c.sent !== "queued").length), of: total } : null;
+  const progress = tone === "running" && total > 0 ? { at: Math.min(total, finalCards.filter((c) => c.sent !== "queued").length), of: total } : null;
 
   const proof: ProofNode[] = [
     ...arrivedPairs.map((p): ProofNode => {

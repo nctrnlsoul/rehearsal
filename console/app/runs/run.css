@@ -67,6 +67,8 @@
 .np-stage-item.now .np-dot { border-color: var(--wait-line); background: var(--wait-bg); }
 .np-stage-item.now .np-dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--wait-line); animation: breathe 1.6s ease-in-out infinite; }
 .np-stage-item.none .np-dot { border-style: dashed; border-color: var(--rule); }
+.np-stage-item.unknown { color: var(--wait); }
+.np-stage-item.unknown .np-dot { border-color: var(--wait-line); color: var(--wait); }
 .np-stage-item.bad { color: var(--bug); }
 .np-stage-item.bad .np-dot { background: var(--bug); border-color: var(--bug); color: var(--white); }
 
