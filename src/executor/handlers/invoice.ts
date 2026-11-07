@@ -13,6 +13,15 @@ import {
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
 /**
+ * How a sent invoice's due date reads. The finder decides overdue-invoice from
+ * these alone: an unread due date is no evidence either way, so it has its own
+ * wording rather than looking like "not overdue".
+ */
+export const READS_OVERDUE = "reads as overdue";
+export const NOT_PAST_DUE = "not past its due date";
+export const DUE_DATE_UNREAD = "its due date was unreadable";
+
+/**
  * Creates a draft invoice. A negative dueInDays dates the invoice in the past so
  * that once sent it reads as overdue, which is the only way to produce that
  * state: PayPal computes overdue from the due date, there is no API for it.
@@ -119,10 +128,11 @@ export const invoiceSendHandler: StepHandler = async (ctx) => {
   if (status !== "SENT" && status !== "UNPAID") {
     return unknown(`invoice reads ${status ?? "unreadable"} after send, expected SENT or UNPAID`);
   }
-  const overdue = dueDate !== null && dueDate < isoDate(ctx.now());
-  return succeeded(
-    `invoice ${status}${overdue ? ` and past its due date of ${dueDate}, so it reads as overdue` : ""}`,
-  );
+  if (dueDate === null) return succeeded(`invoice ${status}; ${DUE_DATE_UNREAD}`);
+  if (dueDate < isoDate(ctx.now())) {
+    return succeeded(`invoice ${status} and past its due date of ${dueDate}, so it ${READS_OVERDUE}`);
+  }
+  return succeeded(`invoice ${status}, due ${dueDate}, ${NOT_PAST_DUE}`);
 };
 
 export const invoiceRecordPaymentHandler: StepHandler = async (ctx) => {

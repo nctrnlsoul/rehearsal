@@ -3,6 +3,8 @@ import { requestId } from "../src/core/idempotency";
 import { cardOrderHandler } from "../src/executor/handlers/cardOrder";
 import { openDisputeHandler } from "../src/executor/handlers/dispute";
 import {
+  DUE_DATE_UNREAD,
+  NOT_PAST_DUE,
   invoiceCancelHandler,
   invoiceCreateHandler,
   invoiceRecordPaymentHandler,
@@ -265,6 +267,23 @@ describe("invoice handlers", () => {
     expect(out.kind).toBe("success");
     expect(out.detail).toMatch(/overdue/i);
     expect(seller.calls[0]!.body).toEqual({ send_to_invoicer: false, send_to_recipient: false });
+  });
+
+  // The finder reads these two apart: "not past due" is a finding, an unread
+  // due date is no evidence at all.
+  it("says when the due date is not past, and when it could not be read", async () => {
+    const future = fakePaypal([
+      { status: 200 },
+      { status: 200, body: { status: "UNPAID", detail: { payment_term: { due_date: "2999-01-01" } } } },
+    ]);
+    const a = await invoiceSendHandler(makeContext({ scenario, stepId: "s1", seller: future.client, outputs }).ctx);
+    expect(a.kind).toBe("success");
+    expect(a.detail).toBe(`invoice UNPAID, due 2999-01-01, ${NOT_PAST_DUE}`);
+
+    const blind = fakePaypal([{ status: 200 }, { status: 200, body: { status: "UNPAID" } }]);
+    const b = await invoiceSendHandler(makeContext({ scenario, stepId: "s1", seller: blind.client, outputs }).ctx);
+    expect(b.detail).toBe(`invoice UNPAID; ${DUE_DATE_UNREAD}`);
+    expect(b.detail).not.toContain(NOT_PAST_DUE);
   });
 
   it("records a payment and confirms the invoice status", async () => {

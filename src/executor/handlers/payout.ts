@@ -4,6 +4,13 @@ import { classify } from "../../core/outcome";
 import { unclaimedReceiver } from "../../core/sandboxFixtures";
 import { type StepHandler, failed, succeeded, unknown, wrongKind } from "../types";
 
+/**
+ * Opens the detail of a payout that PayPal settled into the wrong state. The
+ * finder calls a payout a bug only on this, read back from PayPal, never on a
+ * refusal or an unknown outcome, so the wording is shared rather than copied.
+ */
+export const ITEM_STATUS_MISMATCH = "item status mismatch";
+
 const POLL_BUDGET_MS = 90_000;
 const POLL_INTERVAL_MS = 5000;
 /** Bounds the loop independently of the clock, so a stalled clock cannot hang a run. */
@@ -113,7 +120,7 @@ export const payoutBatchHandler: StepHandler = async (ctx) => {
 
   if (mismatches.length > 0) {
     return failed(
-      `item status mismatch: ${mismatches.map((m) => `item ${m.i + 1} is ${m.got}, expected ${m.want}`).join("; ")}`,
+      `${ITEM_STATUS_MISMATCH}: ${mismatches.map((m) => `item ${m.i + 1} is ${m.got}, expected ${m.want}`).join("; ")}`,
       ids,
     );
   }

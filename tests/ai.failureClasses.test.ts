@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { type RunState, initRunState, recordOutcome } from "../src/core/runState";
 import { FAILURE_CLASSES, type StoreSnapshot, classById } from "../src/ai/failureClasses";
+import { DUE_DATE_UNREAD, NOT_PAST_DUE, READS_OVERDUE } from "../src/executor/handlers/invoice";
+import { ITEM_STATUS_MISMATCH } from "../src/executor/handlers/payout";
 
 const T = "2026-10-23T12:00:00.000Z";
 
@@ -267,7 +269,9 @@ describe("refund-after-partial", () => {
     expect(f.actual).toBe("2 refund(s) accepted and each recorded once");
   });
 
-  it("is ok when PayPal refused the second refund and the first was recorded once", () => {
+  // The false pass this replaces: the store never saw a second refund, so a
+  // clean count for the first one said nothing about the class.
+  it("is inconclusive, never ok, when PayPal refused the second refund", () => {
     const f = check(
       "refund-after-partial",
       recorded(refundRow("RF-1", 1)),
@@ -276,8 +280,20 @@ describe("refund-after-partial", () => {
         { id: "r2", kind: "refund", status: "failed", detail: "http 422" },
       ]),
     );
-    expect(f.verdict).toBe("ok");
-    expect(f.actual).toMatch(/PayPal refused the other 1 itself/);
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/PayPal refused 1 of the 2 refund\(s\) itself, so a second refund after a partial one never happened/);
+  });
+
+  it("is still a bug when PayPal refused one refund but another was recorded twice", () => {
+    const f = check(
+      "refund-after-partial",
+      recorded(refundRow("RF-1", 2)),
+      runWith([
+        { id: "r1", kind: "refund", status: "succeeded", ids: { refund_id: "RF-1" } },
+        { id: "r2", kind: "refund", status: "failed", detail: "http 422" },
+      ]),
+    );
+    expect(f.verdict).toBe("bug");
   });
 
   // The false bug this replaces: a refund event still in flight was read as
@@ -384,16 +400,54 @@ describe("unclaimed-payout", () => {
     expect(f.verdict).toBe("ok");
   });
 
-  it("flags an item that settled instead, and says why", () => {
+  it("flags an item PayPal settled as something else, and says why", () => {
     const f = check(
       "unclaimed-payout",
       store(),
       runWith([
-        { id: "p1", kind: "payout_batch", status: "failed", detail: "item 1 is SUCCESS" },
+        {
+          id: "p1",
+          kind: "payout_batch",
+          status: "failed",
+          detail: `${ITEM_STATUS_MISMATCH}: item 1 is SUCCESS, expected UNCLAIMED`,
+        },
       ]),
     );
     expect(f.verdict).toBe("bug");
     expect(f.likelyFix).toMatch(/example\.com/);
+  });
+
+  // The false bugs this replaces: no item was ever observed in these runs.
+  it("is inconclusive, never a bug, when PayPal refused the batch", () => {
+    const f = check(
+      "unclaimed-payout",
+      store(),
+      runWith([
+        {
+          id: "p1",
+          kind: "payout_batch",
+          status: "failed",
+          detail: "payout batch not accepted: http 403, NOT_AUTHORIZED (Payouts not enabled)",
+        },
+      ]),
+    );
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/p1 ended failed before PayPal reported how the item settled: .*http 403/);
+  });
+
+  it("is inconclusive, never a bug, when the payout ended unknown", () => {
+    const f = check(
+      "unclaimed-payout",
+      store(),
+      runWith([{ id: "p1", kind: "payout_batch", status: "unknown", detail: "still has PENDING items" }]),
+    );
+    expect(f.verdict).toBe("inconclusive");
+  });
+
+  it("is inconclusive, never ok, when the payout never ran", () => {
+    const f = check("unclaimed-payout", store(), runWith([{ id: "p1", kind: "payout_batch" }]));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toBe("p1 never ran");
   });
 
   it("is inconclusive with no payout planned", () => {
@@ -407,20 +461,55 @@ describe("overdue-invoice", () => {
       "overdue-invoice",
       store(),
       runWith([
-        { id: "s1", kind: "invoice_send", status: "succeeded", detail: "UNPAID and past its due date, so it reads as overdue" },
+        { id: "s1", kind: "invoice_send", status: "succeeded", detail: `invoice UNPAID and past its due date of 2026-10-16, so it ${READS_OVERDUE}` },
       ]),
     );
     expect(f.verdict).toBe("ok");
   });
 
-  it("flags an invoice that is not overdue and explains how PayPal decides", () => {
+  it("flags an invoice PayPal reads as not past due and explains how PayPal decides", () => {
     const f = check(
       "overdue-invoice",
       store(),
-      runWith([{ id: "s1", kind: "invoice_send", status: "succeeded", detail: "invoice UNPAID" }]),
+      runWith([{ id: "s1", kind: "invoice_send", status: "succeeded", detail: `invoice UNPAID, due 2026-11-30, ${NOT_PAST_DUE}` }]),
     );
     expect(f.verdict).toBe("bug");
     expect(f.likelyFix).toMatch(/computes overdue from the due date/i);
+  });
+
+  // The false bug this replaces: the create failed, the send stayed pending,
+  // and "not overdue" was read off a step that never ran.
+  it("is inconclusive, never a bug, when the create failed and the send never ran", () => {
+    const f = check(
+      "overdue-invoice",
+      store(),
+      runWith([
+        { id: "invoice", kind: "invoice_create", status: "failed", detail: "invoicing refused with http 403" },
+        { id: "send", kind: "invoice_send" },
+      ]),
+    );
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/send never ran; invoice ended failed: invoicing refused with http 403/);
+  });
+
+  it("is inconclusive, never a bug, when the send failed or ended unknown", () => {
+    for (const status of ["failed", "unknown"] as const) {
+      const f = check(
+        "overdue-invoice",
+        store(),
+        runWith([{ id: "s1", kind: "invoice_send", status, detail: "send failed: http 500" }]),
+      );
+      expect(f.verdict).toBe("inconclusive");
+    }
+  });
+
+  it("is inconclusive when the sent invoice's due date could not be read", () => {
+    const f = check(
+      "overdue-invoice",
+      store(),
+      runWith([{ id: "s1", kind: "invoice_send", status: "succeeded", detail: `invoice UNPAID; ${DUE_DATE_UNREAD}` }]),
+    );
+    expect(f.verdict).toBe("inconclusive");
   });
 
   it("is inconclusive when nothing was sent", () => {
