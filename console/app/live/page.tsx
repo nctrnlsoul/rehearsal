@@ -52,8 +52,8 @@ export default async function LivePage() {
               <dt>Steps</dt><dd>{HOSTED_CAPS.maxSteps}</dd>
               <dt>Disputes</dt><dd className="word">{HOSTED_CAPS.maxDisputes}, from the bank</dd>
               <dt>Worst-case time</dt><dd>{TIME_BUDGET_S} s</dd>
-              <dt>Live runs a day</dt><dd className="word">{HOSTED_RUN_LIMITS.global}, {HOSTED_RUN_LIMITS.session} per session or address</dd>
-              <dt>Planner calls a day</dt><dd className="word">{HOSTED_MODEL_LIMITS.global}, {HOSTED_MODEL_LIMITS.session} per session or address</dd>
+              <dt>Live runs a day</dt><dd className="word">{HOSTED_RUN_LIMITS.global}, {HOSTED_RUN_LIMITS.session} per session</dd>
+              <dt>Planner calls a day</dt><dd className="word">{HOSTED_MODEL_LIMITS.global}, {HOSTED_MODEL_LIMITS.session} per session</dd>
               <dt>At once</dt><dd className="word">one run</dd>
             </dl>
           </section>

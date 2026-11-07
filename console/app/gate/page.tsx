@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { Mark, SiteFooter, Topbar } from "../../components/chrome";
+import { DEFAULT_LIMITS } from "../../lib/gate";
 import { HOSTED_CAPS, liveRunsEnabled } from "../../lib/hosted";
 import "./gate.css";
 
@@ -12,7 +13,7 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
   const n = (v: string | undefined, max: number) => (v !== undefined && /^\d{1,3}$/.test(v) ? Math.min(Number(v), max) : null);
   switch (q.e) {
     case "wrong": {
-      const left = n(q.left, 5);
+      const left = n(q.left, DEFAULT_LIMITS.perIp);
       return { kind: "bug", title: "That passcode did not match", detail: left === null ? "Try again." : `${left} ${left === 1 ? "try" : "tries"} left this hour from this address.` };
     }
     case "locked": {
@@ -67,7 +68,7 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
             )}
             <button className="btn btn-primary" type="submit">Unlock</button>
           </form>
-          <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. 5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.</p>
+          <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. {DEFAULT_LIMITS.perIp} wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.</p>
         </section>
       </main>
       <SiteFooter>REHEARSAL · judge gate</SiteFooter>

@@ -177,7 +177,7 @@ describe("the gate, submitted by a real browser", () => {
     const { ctx, page, watch } = await watched({ javaScriptEnabled: false });
     await page.goto(base + "/gate");
     await page.fill("#passcode", "not the passcode");
-    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d$/), page.click("button[type=submit]")]);
+    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d+$/), page.click("button[type=submit]")]);
     await expect(page.locator("#pass-state").textContent()).resolves.toContain("That passcode did not match");
 
     await page.fill("#passcode", PASSCODE);
@@ -193,7 +193,7 @@ describe("the gate, submitted by a real browser", () => {
     await page.goto(base + "/gate");
     await hydrated(page);
     await page.fill("#passcode", "still not the passcode");
-    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d$/), page.click("button[type=submit]")]);
+    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d+$/), page.click("button[type=submit]")]);
     await hydrated(page);
     await expect(page.locator("#pass-state").textContent()).resolves.toMatch(/That passcode did not match.*left this hour/);
     expect(watch.problems).toEqual([]);

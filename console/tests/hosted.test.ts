@@ -32,11 +32,13 @@ const scenario = (steps: unknown[], extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-describe("hosted numbers (R-039)", () => {
+describe("hosted numbers (R-039, R-049)", () => {
   it("are the ruled ones", () => {
     expect(HOSTED_CAPS).toEqual({ currency: "USD", maxStepAmountMinor: 15_000n, maxTotalMinor: 40_000n, maxSteps: 8, maxDisputes: 1 });
-    expect(HOSTED_RUN_LIMITS).toEqual({ global: 20, session: 5, ip: 5 });
-    expect(HOSTED_MODEL_LIMITS).toEqual({ global: 30, session: 8, ip: 8 });
+    // R-049: no per-address quota below the global one, so judges on one
+    // network each get a session's share.
+    expect(HOSTED_RUN_LIMITS).toEqual({ global: 20, session: 5, ip: 20 });
+    expect(HOSTED_MODEL_LIMITS).toEqual({ global: 30, session: 8, ip: 30 });
     expect(TIME_BUDGET_S).toBe(600);
   });
 
@@ -67,8 +69,8 @@ describe("hostedConfig", () => {
       CONSOLE_MAX_MODEL_CALLS_PER_SESSION: "2",
     });
     expect(low.ok && low.config.caps).toEqual({ currency: "USD", maxStepAmountMinor: 1000n, maxTotalMinor: 2000n, maxSteps: 3, maxDisputes: 0 });
-    expect(low.ok && low.config.runLimits).toEqual({ global: 2, session: 1, ip: 1 });
-    expect(low.ok && low.config.modelLimits).toEqual({ global: 3, session: 2, ip: 2 });
+    expect(low.ok && low.config.runLimits).toEqual({ global: 2, session: 1, ip: 2 });
+    expect(low.ok && low.config.modelLimits).toEqual({ global: 3, session: 2, ip: 3 });
 
     const high = hostedConfig({
       ...ENV,

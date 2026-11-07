@@ -208,20 +208,17 @@ describe("POST /api/plan", () => {
     expect(await h.used("model_global")).toBe(0);
   });
 
-  it("refuses at the per-session limit, and a new session from the same address at the IP limit (R-039)", async () => {
+  // R-049: judges behind one corporate exit share an address, so a second
+  // judge's session on the same address must get its own share.
+  it("refuses at the per-session limit, but a new session from the same address still plans (R-049)", async () => {
     const h = await harness({ ...ENV, CONSOLE_MAX_MODEL_CALLS_PER_SESSION: "2" });
     const mine = cookieFor();
     for (let i = 0; i < 2; i += 1) expect((await h.plan(req("/api/plan", { body: { description: "a shop" }, cookie: mine }))).status).toBe(200);
     const third = await h.plan(req("/api/plan", { body: { description: "a shop" }, cookie: mine }));
     expect(third.status).toBe(429);
     expect((await bodyOf(third))["limit"]).toBe("model_session");
-    // Unlocking again makes a new session; the address still counts.
-    const again = await h.plan(req("/api/plan", { body: { description: "a shop" }, cookie: cookieFor(T0 + 1000) }));
-    expect(again.status).toBe(429);
-    expect((await bodyOf(again))["limit"]).toBe("model_ip");
-    // A new session from a new address is fine.
-    const elsewhere = await h.plan(req("/api/plan", { body: { description: "a shop" }, cookie: cookieFor(T0 + 2000), headers: { "x-vercel-forwarded-for": "198.51.100.7" } }));
-    expect(elsewhere.status).toBe(200);
+    const colleague = await h.plan(req("/api/plan", { body: { description: "a shop" }, cookie: cookieFor(T0 + 1000) }));
+    expect(colleague.status).toBe(200);
     expect(h.modelCalls).toHaveLength(3);
   });
 
@@ -424,7 +421,7 @@ describe("POST /api/runs", () => {
     expect(await h.used("runs_global")).toBe(1);
   });
 
-  it("refuses at the session limit and, for a new session, at the IP limit (R-039)", async () => {
+  it("refuses at the session limit, but a new session from the same address still runs (R-049)", async () => {
     const h = await harness({ ...ENV, CONSOLE_MAX_RUNS_PER_SESSION: "1" });
     for (let i = 0; i < 3; i += 1) await h.addPurchase();
     const mine = cookieFor();
@@ -433,10 +430,9 @@ describe("POST /api/runs", () => {
     const again = await h.runs(req("/api/runs", { body: runBody(DISPUTE!), cookie: mine }));
     expect(again.status).toBe(429);
     expect((await bodyOf(again))["limit"]).toBe("runs_session");
-    const relock = await h.runs(req("/api/runs", { body: runBody(DISPUTE!), cookie: cookieFor(T0 + 1000) }));
-    expect(relock.status).toBe(429);
-    expect((await bodyOf(relock))["limit"]).toBe("runs_ip");
-    expect(h.started).toHaveLength(1);
+    const colleague = await h.runs(req("/api/runs", { body: runBody(DISPUTE!), cookie: cookieFor(T0 + 1000) }));
+    expect(colleague.status).toBe(202);
+    expect(h.started).toHaveLength(2);
   });
 });
 

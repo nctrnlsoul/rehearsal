@@ -20,9 +20,14 @@ export const HOSTED_CAPS: Caps = {
 
 export type DailyLimits = { readonly global: number; readonly session: number; readonly ip: number };
 
-/** R-039: per IP bucket uses the per-session numbers, so unlocking again gains nothing. */
-export const HOSTED_RUN_LIMITS: DailyLimits = { global: 20, session: 5, ip: 5 };
-export const HOSTED_MODEL_LIMITS: DailyLimits = { global: 30, session: 8, ip: 8 };
+/**
+ * R-049, amending R-039: quotas are per session and global only. Judges behind
+ * one corporate exit share an address, so a per-address bucket at the session
+ * number gave all of them one judge's share. The address bucket stays in the
+ * database call but at the global number, where it can never bind first.
+ */
+export const HOSTED_RUN_LIMITS: DailyLimits = { global: 20, session: 5, ip: 20 };
+export const HOSTED_MODEL_LIMITS: DailyLimits = { global: 30, session: 8, ip: 30 };
 
 /** The run route's Vercel limit (R-030). Never above 800: that is beta. */
 export const MAX_DURATION_S = 800;
@@ -108,22 +113,22 @@ export function hostedConfig(env: Env): ConfigResult {
   };
 
   try {
-    const runSession = lowered(env, "CONSOLE_MAX_RUNS_PER_SESSION", HOSTED_RUN_LIMITS.session);
-    const modelSession = lowered(env, "CONSOLE_MAX_MODEL_CALLS_PER_SESSION", HOSTED_MODEL_LIMITS.session);
+    const runGlobal = lowered(env, "CONSOLE_MAX_RUNS_PER_DAY", HOSTED_RUN_LIMITS.global);
+    const modelGlobal = lowered(env, "CONSOLE_MAX_MODEL_CALLS_PER_DAY", HOSTED_MODEL_LIMITS.global);
     return {
       ok: true,
       config: {
         caps,
         storeOrigin,
         runLimits: {
-          global: lowered(env, "CONSOLE_MAX_RUNS_PER_DAY", HOSTED_RUN_LIMITS.global),
-          session: runSession,
-          ip: Math.min(HOSTED_RUN_LIMITS.ip, runSession),
+          global: runGlobal,
+          session: lowered(env, "CONSOLE_MAX_RUNS_PER_SESSION", HOSTED_RUN_LIMITS.session),
+          ip: runGlobal,
         },
         modelLimits: {
-          global: lowered(env, "CONSOLE_MAX_MODEL_CALLS_PER_DAY", HOSTED_MODEL_LIMITS.global),
-          session: modelSession,
-          ip: Math.min(HOSTED_MODEL_LIMITS.ip, modelSession),
+          global: modelGlobal,
+          session: lowered(env, "CONSOLE_MAX_MODEL_CALLS_PER_SESSION", HOSTED_MODEL_LIMITS.session),
+          ip: modelGlobal,
         },
       },
     };

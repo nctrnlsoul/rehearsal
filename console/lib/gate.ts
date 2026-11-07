@@ -116,7 +116,12 @@ export type LimiterConfig = {
   readonly windowMs: number;
 };
 
-export const DEFAULT_LIMITS: LimiterConfig = { perIp: 5, global: 50, windowMs: 60 * 60 * 1000 };
+/**
+ * 30 an hour, not 5 (R-049): judges behind one corporate exit share an address,
+ * and one person's typos must not lock the rest out. The passcode is 24 random
+ * characters, so 30 guesses an hour is still nothing to a guesser.
+ */
+export const DEFAULT_LIMITS: LimiterConfig = { perIp: 30, global: 50, windowMs: 60 * 60 * 1000 };
 
 export type LimitCheck =
   | { readonly allowed: true; readonly ipLeft: number; readonly since: string }

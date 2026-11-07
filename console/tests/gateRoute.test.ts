@@ -307,7 +307,10 @@ describe("POST /api/gate", () => {
     for (let i = 0; i < 5; i += 1) await handleGatePost(post(form("not it")), first.deps);
     // A second store over the same database is what a fresh Vercel instance gets.
     const db = createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: first.rest.fetch });
-    const res = await handleGatePost(post(form(PASS)), { ...first.deps, attempts: dbAttemptStore(db, SECRET) });
+    const res = await handleGatePost(post(form(PASS)), {
+      ...first.deps,
+      attempts: dbAttemptStore(db, SECRET, { perIp: 5, global: 50, windowMs: 3_600_000 }),
+    });
     expect(res.headers.get("location")).toBe("/gate?e=locked&m=60");
   });
 

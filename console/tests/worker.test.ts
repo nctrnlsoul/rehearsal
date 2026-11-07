@@ -339,7 +339,7 @@ describe("runFinderWorker", () => {
     const h = await harness({
       handlers: {
         invoice_create: async () => ({ kind: "success", detail: "invoice created", ids: { invoice_id: "INV2-E2E" } }),
-        invoice_send: async () => ({ kind: "success", detail: "sent; PayPal reads it as OVERDUE", ids: {} }),
+        invoice_send: async () => ({ kind: "success", detail: "invoice UNPAID and past its due date of 2026-10-16, so it reads as overdue", ids: {} }),
       },
       readStore: async () => snapshot([]),
     });

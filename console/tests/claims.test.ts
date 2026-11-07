@@ -104,8 +104,9 @@ describe("gate lockout claim", () => {
   it("names an address or /64, an hour, and one shared count, as the code does", () => {
     expect(gate).not.toContain("lock a network out");
     expect(gate).not.toContain("counted by each server instance on its own");
-    expect(gate).toContain("5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.");
-    expect(DEFAULT_LIMITS.perIp).toBe(5);
+    expect(gate).toContain("{DEFAULT_LIMITS.perIp} wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.");
+    // R-049: judges on one corporate network share an address.
+    expect(DEFAULT_LIMITS.perIp).toBe(30);
     expect(DEFAULT_LIMITS.windowMs).toBe(60 * 60 * 1000);
     // One place: the route counts through the database store, never in memory.
     const route = read("console", "app", "api", "gate", "route.ts");
