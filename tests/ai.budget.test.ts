@@ -81,6 +81,15 @@ describe("aiBudgetFromEnv", () => {
     expect(b).toEqual({ maxCallsPerRun: 2, maxOutputTokensPerCall: 500, maxInputChars: 80 });
   });
 
+  it("lets a variable lower each limit and raise none", () => {
+    const b = aiBudgetFromEnv({
+      REHEARSAL_AI_MAX_CALLS: "600",
+      REHEARSAL_AI_MAX_OUTPUT_TOKENS: "64000",
+      REHEARSAL_AI_MAX_INPUT_CHARS: "1000000",
+    });
+    expect(b).toEqual(DEFAULT_AI_BUDGET);
+  });
+
   // A malformed budget must never silently widen the limit.
   it("throws rather than ignoring a malformed value", () => {
     for (const bad of ["0", "-1", "lots", "2.5", "1e3"]) {
