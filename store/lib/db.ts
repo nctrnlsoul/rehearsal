@@ -97,6 +97,8 @@ export type RowsOptions = {
   readonly limit?: number;
   /** ISO timestamp. Scopes the read to a window rather than a global row cap. */
   readonly sinceIso?: string;
+  /** "only": verified rows. "except": every other row (refused or unchecked). */
+  readonly verified?: "only" | "except";
 };
 
 /** What a verified event can be recorded as. Refusals and duplicates are never passed in. */
@@ -213,6 +215,8 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
       if (options.sinceIso !== undefined) {
         url.searchParams.set("received_at", `gte.${options.sinceIso}`);
       }
+      if (options.verified === "only") url.searchParams.set("verified", "is.true");
+      if (options.verified === "except") url.searchParams.set("verified", "not.is.true");
       const res = await doFetch(url, {
         method: "GET",
         headers: auth,
@@ -227,4 +231,28 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
         .reverse();
     },
   };
+}
+
+export type RowWindow = {
+  readonly rows: StoreRow[];
+  /** The verified read hit MAX_ROWS, so evidence may be missing from the window. */
+  readonly truncated: boolean;
+  /** The read of every other row hit MAX_ROWS. Refusal counts may be short; no verdict rests on them. */
+  readonly refusalsTruncated: boolean;
+};
+
+/**
+ * Every row in the window, read as two queries. The webhook endpoint is public,
+ * so in one newest-first read a flood of junk posts pushes PayPal's verified
+ * rows past the row cap. Read apart, junk can only crowd out other junk, and a
+ * cut in the verified read is reported, never hidden.
+ */
+export async function readWindow(db: Db, sinceIso?: string): Promise<RowWindow> {
+  const base = sinceIso === undefined ? {} : { sinceIso };
+  const [evidence, rest] = await Promise.all([
+    db.rows({ ...base, verified: "only" }),
+    db.rows({ ...base, verified: "except" }),
+  ]);
+  const rows = [...evidence, ...rest].sort((a, b) => a.receivedAtMs - b.receivedAtMs);
+  return { rows, truncated: evidence.length >= MAX_ROWS, refusalsTruncated: rest.length >= MAX_ROWS };
 }

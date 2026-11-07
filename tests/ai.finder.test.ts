@@ -374,6 +374,15 @@ describe("runFinder with templates", () => {
       expect(h.logs.join("\n")).toContain("stopped waiting after 90s");
     });
 
+    // Waiting cannot un-cut a window, and a cut window may be missing the rows
+    // the verdict counts.
+    it("gives no verdict, and does not wait, when the store's window was cut", async () => {
+      const h = harness(okPlan(), { store: [{ ...snapshot(1, 1), truncated: true }] });
+      const results = await findDup(h);
+      expect(results[0]!.finding.verdict).toBe("inconclusive");
+      expect(h.sleeps).toEqual([]);
+    });
+
     it("does not wait when the first read already decides", async () => {
       const h = harness(okPlan(), { store: [snapshot(2)] });
       await findDup(h);

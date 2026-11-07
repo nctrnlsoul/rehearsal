@@ -32,6 +32,13 @@ describe("dryRunLines", () => {
     expect(text(base)).toMatch(/none declared/i);
   });
 
+  // R-045: the old line said no events would be delivered anywhere, which was false.
+  it("never claims a plan with no webhook stops PayPal delivering events", () => {
+    const out = text(scenarioWith([{ id: "o1", kind: "card_order", amount: "1.00" }]));
+    expect(out).toContain("webhook    none declared by this plan; PayPal still delivers this account's events to every webhook registered on it");
+    expect(out).not.toMatch(/no events will be delivered/i);
+  });
+
   it("groups steps into waves and shows what each one depends on", () => {
     const out = text(full());
     expect(out).toContain("wave 1");

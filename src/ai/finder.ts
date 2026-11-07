@@ -6,6 +6,7 @@ import {
   type Finding,
   type ScenarioTemplate,
   type StoreSnapshot,
+  judge,
 } from "./failureClasses";
 import { type PlanOutcome, cleanModelText, printable } from "./planner";
 
@@ -361,6 +362,7 @@ export async function runFinder(
       for (
         let poll = 0;
         poll < MAX_EVIDENCE_POLLS &&
+        store.truncated !== true &&
         !cls.settled(store, state) &&
         deps.now().getTime() - started < EVIDENCE_TIMEOUT_MS;
         poll += 1
@@ -381,7 +383,7 @@ export async function runFinder(
         log(`  stopped waiting after ${Math.round((deps.now().getTime() - started) / 1000)}s`);
       }
     }
-    let finding = cls.check(store, state);
+    let finding = judge(cls, store, state);
     if (failedReads > 0 && finding.verdict === "inconclusive") {
       // Otherwise "no delivery" could really mean "no read succeeded".
       finding = {

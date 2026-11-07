@@ -1,5 +1,5 @@
 import { readBodyCapped } from "../../../../lib/body";
-import { checkCertUrl } from "../../../../lib/certUrl";
+import { checkCertUrl, checkTransmission, couldNotCheck, verifyRequestBody } from "../../../../lib/certUrl";
 import { createLedger, readConfig } from "../../../../lib/ledger";
 import { accessToken, forgetToken } from "../../../../lib/paypalToken";
 
@@ -8,8 +8,9 @@ import { accessToken, forgetToken } from "../../../../lib/paypalToken";
  *
  * It records the arrival durably and, when credentials are present, verifies the
  * signature against PayPal. Verification is the point REHEARSAL makes: events
- * from PayPal's own Webhook Simulator cannot be verified, resent, or looked up,
- * so an app that correctly verifies signatures rejects them. Real events pass.
+ * from PayPal's own Webhook Simulator cannot be verified through the
+ * verify-webhook-signature endpoint or resent (PayPal's webhook simulator docs),
+ * so an app that verifies through that endpoint rejects them. Real events pass.
  *
  * If the ledger cannot be written, this returns a non-2xx on purpose. PayPal
  * retries, so a storage outage delays arrivals instead of losing them. Answering
@@ -53,7 +54,7 @@ const REQUIRED_HEADERS = [
 
 async function verify(
   headers: Headers,
-  event: unknown,
+  rawEvent: string,
 ): Promise<{ verified: boolean | null; detail: string }> {
   const clientId = process.env["PAYPAL_SELLER_CLIENT_ID"];
   const clientSecret = process.env["PAYPAL_SELLER_CLIENT_SECRET"];
@@ -68,15 +69,20 @@ async function verify(
   const missing = REQUIRED_HEADERS.filter((h) => (headers.get(h) ?? "").trim() === "");
   if (missing.length > 0) return { verified: false, detail: `missing ${missing.join(", ")}` };
 
-  const certUrl = headers.get("paypal-cert-url") ?? "";
   // cert_url arrives from the request and PayPal will fetch it. We do not fetch
-  // it, but we refuse to forward anything but a PayPal API URL.
-  const cert = checkCertUrl(certUrl);
+  // it, but we refuse to forward anything but a PayPal cert URL.
+  const cert = checkCertUrl(headers.get("paypal-cert-url") ?? "");
   if (!cert.ok) return { verified: false, detail: cert.detail };
+  const transmission = checkTransmission(headers, Date.now());
+  if (!transmission.ok) {
+    return transmission.outsideWindow
+      ? { verified: null, detail: `could not check: ${transmission.detail}` }
+      : { verified: false, detail: transmission.detail };
+  }
 
   try {
     const bearer = await accessToken(clientId, clientSecret, fetch);
-    if (bearer === null) return { verified: false, detail: "could not get a PayPal token" };
+    if (bearer === null) return { verified: null, detail: "could not check: no PayPal token" };
 
     const res = await fetch(`https://${SANDBOX_HOST}/v1/notifications/verify-webhook-signature`, {
       method: "POST",
@@ -84,18 +90,23 @@ async function verify(
         Authorization: `Bearer ${bearer}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        auth_algo: headers.get("paypal-auth-algo"),
-        cert_url: certUrl,
-        transmission_id: headers.get("paypal-transmission-id"),
-        transmission_sig: headers.get("paypal-transmission-sig"),
-        transmission_time: headers.get("paypal-transmission-time"),
-        webhook_id: webhookId,
-        webhook_event: event,
-      }),
+      body: verifyRequestBody(
+        {
+          auth_algo: headers.get("paypal-auth-algo") ?? "",
+          cert_url: cert.href,
+          transmission_id: headers.get("paypal-transmission-id") ?? "",
+          transmission_sig: headers.get("paypal-transmission-sig") ?? "",
+          transmission_time: headers.get("paypal-transmission-time") ?? "",
+          webhook_id: webhookId,
+        },
+        rawEvent,
+      ),
+      redirect: "error",
       signal: AbortSignal.timeout(8000),
     });
     if (res.status === 401) forgetToken();
+    // A PayPal outage is not a forgery, so it is recorded as unchecked.
+    if (couldNotCheck(res.status)) return { verified: null, detail: `could not check: verify http ${res.status}` };
     if (!res.ok) return { verified: false, detail: `verify http ${res.status}` };
     const out = (await res.json()) as { verification_status?: string };
     return {
@@ -103,8 +114,9 @@ async function verify(
       detail: out.verification_status ?? "no verification_status",
     };
   } catch (e) {
+    // A timeout or a dropped connection says nothing about the signature.
     // Never leak provider detail to the caller; this string stays server-side.
-    return { verified: false, detail: `verify threw: ${(e as Error).name}` };
+    return { verified: null, detail: `could not check: verify threw ${(e as Error).name}` };
   }
 }
 
@@ -136,7 +148,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const e = (typeof event === "object" && event !== null ? event : {}) as Record<string, unknown>;
-  const { verified, detail } = await verify(req.headers, event);
+  const { verified, detail } = await verify(req.headers, raw);
 
   try {
     await createLedger(config).append({

@@ -58,8 +58,12 @@ export function postgrestOver(pg: PGlite): typeof fetch {
         );
         return Response.json(r.rows);
       }
+      // The filters the store's reads use: the verified split and the row cap.
+      const verified = url.searchParams.get("verified");
+      const where = verified === "is.true" ? "where verified is true" : verified === "not.is.true" ? "where verified is not true" : "";
+      const limit = Number(url.searchParams.get("limit") ?? "1000");
       const r = await pg.query(
-        `select ${COLUMNS.join(", ")}, received_at::text as received_at from public.store_order_events order by id desc`,
+        `select ${COLUMNS.join(", ")}, received_at::text as received_at from public.store_order_events ${where} order by id desc limit ${limit}`,
       );
       return Response.json(r.rows);
     }

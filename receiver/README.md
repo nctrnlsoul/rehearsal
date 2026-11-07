@@ -45,7 +45,7 @@ In the receiver's Vercel project, Settings, Environment Variables:
 |---|---|---|
 | `SUPABASE_URL` | `https://<ref>.supabase.co` | Project URL. Any other host is refused. |
 | `SUPABASE_SERVICE_ROLE_KEY` | the project's secret key (`sb_secret_...`) | Server-side only. Never `NEXT_PUBLIC_`. Sent on `apikey` only. |
-| `REHEARSAL_RECEIVER_TOKEN` | a long random string you invent | Must match the same variable on Brian's machine. |
+| `REHEARSAL_RECEIVER_TOKEN` | a long random string you invent | Must match the same variable where gate 5 runs. |
 | `PAYPAL_SELLER_CLIENT_ID` | sandbox seller client id | Optional, enables signature verification. |
 | `PAYPAL_SELLER_CLIENT_SECRET` | sandbox seller secret | Optional, same. |
 | `REHEARSAL_WEBHOOK_ID` | `9FU40962XL437872W` | Optional, same. Gate 5 prints this id. |
@@ -71,7 +71,7 @@ reachable, so Deployment Protection has to be off or PayPal cannot deliver.
 The service role key bypasses RLS, so it is the one real secret here. It is read
 from `process.env` at request time and travels only in request headers to the
 pinned `supabase.co` host. It is never logged, never interpolated into an error
-message, never returned to a caller, and never needed on Brian's machine: the
+message, never returned to a caller, and never needed where the gates run: the
 gate reads the ledger over HTTP using `REHEARSAL_RECEIVER_TOKEN` instead.
 
 `assertSupabaseUrl` rejects any host that is not `*.supabase.co` over https,
@@ -81,8 +81,9 @@ every webhook we record.
 ## Why signature verification is the point
 
 PayPal's own Webhook Simulator sends mock events that, per PayPal's
-documentation, cannot be verified, resent, or looked up. An app that correctly
-verifies signatures therefore **rejects** every simulator event. REHEARSAL fires
-real events, so they verify. A recorded `verified: null` means verification was
+[documentation](https://developer.paypal.com/api/rest/webhooks/simulator/), cannot be verified through the
+verify-webhook-signature endpoint, cannot be resent, and match no real event
+or transaction. An app that verifies through that endpoint therefore
+**rejects** every simulator event. REHEARSAL fires real events, so they verify. A recorded `verified: null` means verification was
 not attempted because the receiver holds no credentials; it does not mean the
 signature failed.

@@ -1,7 +1,16 @@
 import { errorSummary, pick } from "../../core/json";
+import { toMinor } from "../../core/money";
 import { classify } from "../../core/outcome";
 import { cardOrderBody } from "../../core/sandboxFixtures";
 import { type StepHandler, failed, succeeded, unknown, wrongKind } from "../types";
+
+const minorOrNull = (value: string, currency: string): bigint | null => {
+  try {
+    return toMinor(value, currency);
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Single-step Orders v2: intent CAPTURE plus payment_source.card, so PayPal
@@ -44,7 +53,7 @@ export const cardOrderHandler: StepHandler = async (ctx) => {
     knownFailed: ["VOIDED"],
   });
   if (verdict.kind !== "success") {
-    const detail = `order did not complete: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`;
+    const detail = `order did not complete: http ${res.status}, ${errorSummary(res.body, res.debugId)}`;
     return verdict.kind === "failed" ? failed(detail, ids) : unknown(detail, ids);
   }
 
@@ -73,7 +82,8 @@ export const cardOrderHandler: StepHandler = async (ctx) => {
     "amount",
     "value",
   ]);
-  if (capturedValue !== step.amount) {
+  // Compared as money, not text: PayPal may write "25.00" for a plan's "25".
+  if (capturedValue === null || minorOrNull(capturedValue, currency) !== toMinor(step.amount, currency)) {
     return failed(`captured ${capturedValue ?? "unreadable"}, expected ${step.amount}`, ids);
   }
 

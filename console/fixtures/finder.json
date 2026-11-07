@@ -1,10 +1,10 @@
 {
-  "note": "A recorded finder pass, before and after the store fix. Counts from runs/finder-20261023231753.md and runs/finder-20261024011922.md; store rows from the run fixtures; the fix from git (commit d6b8ff6). Nothing here is live.",
+  "note": "A recorded finder pass, before and after the store fix. Counts from evidence/finder/2026-10-23-duplicate-webhook-before-fix.md and evidence/finder/2026-10-24-duplicate-webhook-after-fix.md; store rows from the run fixtures; the fix from git (commit d6b8ff6). Nothing here is live.",
   "classId": "duplicate-webhook",
   "title": "A redelivered capture event fulfills the order twice",
   "eventType": "PAYMENT.CAPTURE.COMPLETED",
-  "before": { "runId": "20261023231552-60ea96", "report": "runs/finder-20261023231753.md", "verdict": "bug", "deliveries": 2, "fulfilled": 2, "ignored": 0, "verified": 2 },
-  "after": { "runId": "20261024011812-208f4e", "report": "runs/finder-20261024011922.md", "verdict": "ok", "deliveries": 2, "fulfilled": 1, "ignored": 1, "verified": 2 },
+  "before": { "runId": "20261023231552-60ea96", "report": "evidence/finder/2026-10-23-duplicate-webhook-before-fix.md", "verdict": "bug", "deliveries": 2, "fulfilled": 2, "ignored": 0, "verified": 2 },
+  "after": { "runId": "20261024011812-208f4e", "report": "evidence/finder/2026-10-24-duplicate-webhook-after-fix.md", "verdict": "ok", "deliveries": 2, "fulfilled": 1, "ignored": 1, "verified": 2 },
   "fix": {
     "file": "store/lib/merchant.ts",
     "line": 18,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  AttemptLimiter,
   SESSION_COOKIE,
   clientIp,
+  hashedKey,
   limiterKey,
   parsePasscodeHash,
   readCookie,
@@ -94,61 +94,14 @@ describe("limiterKey counts IPv6 by /64 (M2)", () => {
   });
 });
 
-describe("AttemptLimiter", () => {
-  const limits = { perIp: 5, global: 50, windowMs: 3_600_000 };
-
-  it("locks one IP after 5 wrong tries, and only that IP", () => {
-    let now = T0;
-    const l = new AttemptLimiter(limits, () => now);
-    for (let i = 0; i < 5; i += 1) {
-      expect(l.check("203.0.113.1")).toMatchObject({ allowed: true, ipLeft: 5 - i });
-      l.recordFailure("203.0.113.1");
-    }
-    expect(l.check("203.0.113.1")).toMatchObject({ allowed: false, retryAfterS: 3600 });
-    expect(l.check("203.0.113.2")).toMatchObject({ allowed: true });
-    now += 3_600_000;
-    expect(l.check("203.0.113.1")).toMatchObject({ allowed: true, ipLeft: 5 });
-  });
-
-  // R-036: the global ceiling used to close the gate for everyone.
-  it("refuses no one at or past the global ceiling, and keeps counting", () => {
-    const l = new AttemptLimiter(limits, () => T0);
-    const crossed: boolean[] = [];
-    for (let i = 0; i < 60; i += 1) crossed.push(l.recordFailure(`198.51.100.${i}`));
-    expect(l.check("203.0.113.99")).toEqual({ allowed: true, ipLeft: 5 });
-    expect(l.globalFailures).toBe(60);
-    // Reported once, on the failure that reaches the ceiling.
-    expect(crossed.filter(Boolean)).toHaveLength(1);
-    expect(crossed.indexOf(true)).toBe(49);
-  });
-
-  it("still locks one address past the global ceiling", () => {
-    const l = new AttemptLimiter(limits, () => T0);
-    for (let i = 0; i < 50; i += 1) l.recordFailure(`198.51.100.${i}`);
-    for (let i = 0; i < 5; i += 1) l.recordFailure("203.0.113.1");
-    expect(l.check("203.0.113.1")).toMatchObject({ allowed: false });
-  });
-
-  it("clears an address on success but never lowers the global count", () => {
-    const l = new AttemptLimiter(limits, () => T0);
-    for (let i = 0; i < 4; i += 1) l.recordFailure("203.0.113.1");
-    l.recordSuccess("203.0.113.1");
-    expect(l.check("203.0.113.1")).toMatchObject({ allowed: true, ipLeft: 5 });
-    expect(l.globalFailures).toBe(4);
-  });
-
-  it("keeps memory bounded under a flood of distinct IPs, and keeps counting", () => {
-    const l = new AttemptLimiter(limits, () => T0);
-    for (let i = 0; i < 12_000; i += 1) l.recordFailure(`10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`);
-    expect(l.trackedIps).toBeLessThanOrEqual(10_000);
-    for (let i = 0; i < 5; i += 1) l.recordFailure("203.0.113.5");
-    expect(l.check("203.0.113.5")).toMatchObject({ allowed: false });
-  });
-
-  it("only stores an IP once it fails, not for asking", () => {
-    const l = new AttemptLimiter(limits, () => T0);
-    for (let i = 0; i < 100; i += 1) l.check(`192.0.2.${i}`);
-    expect(l.trackedIps).toBe(0);
+describe("hashedKey", () => {
+  it("never contains the address, and differs by label and by secret", () => {
+    const k = hashedKey(SECRET, "gate", "203.0.113.1");
+    expect(k).toMatch(/^[0-9a-f]{64}$/);
+    expect(k).not.toContain("203");
+    expect(hashedKey(SECRET, "ip", "203.0.113.1")).not.toBe(k);
+    expect(hashedKey("t".repeat(40), "gate", "203.0.113.1")).not.toBe(k);
+    expect(hashedKey(SECRET, "gate", "203.0.113.1")).toBe(k);
   });
 });
 
@@ -200,5 +153,20 @@ describe("session cookie", () => {
     expect(readCookie(`a=1; ${SESSION_COOKIE}=v1.x.y.z; b=2`, SESSION_COOKIE)).toBe("v1.x.y.z");
     expect(readCookie(`not${SESSION_COOKIE}=evil`, SESSION_COOKIE)).toBeUndefined();
     expect(readCookie(null, SESSION_COOKIE)).toBeUndefined();
+  });
+});
+
+describe("session token spelling", () => {
+  // The MAC's last base64url character carries 4 real bits; its 2 spare bits
+  // must not give one MAC several accepted spellings. Before the fix this
+  // passed about 1 time in 16, whenever the MAC happened to end in A to D.
+  it("accepts exactly one spelling of a MAC, for every token", () => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    for (let i = 0; i < 200; i += 1) {
+      const tok = signSession(SECRET, T0 + i * 1000, 60);
+      const head = tok.slice(0, -1);
+      const accepted = [...alphabet].filter((c) => verifySession(head + c, SECRET, T0));
+      expect(accepted).toEqual([tok.slice(-1)]);
+    }
   });
 });

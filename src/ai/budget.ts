@@ -99,7 +99,9 @@ export function aiBudgetFromEnv(env: Record<string, string | undefined>): AiBudg
     if (value < 1) {
       throw new Error(`${name} must be at least 1, got ${raw}`);
     }
-    return value;
+    // A variable may tighten the guard, never loosen it: a hosted deployment's
+    // spend limit must not depend on nobody setting a large number.
+    return Math.min(value, fallback);
   };
   return {
     maxCallsPerRun: num("REHEARSAL_AI_MAX_CALLS", DEFAULT_AI_BUDGET.maxCallsPerRun),

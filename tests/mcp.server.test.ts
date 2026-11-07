@@ -8,7 +8,7 @@ import type { GenerateFn } from "../src/ai/planner";
 import { credentialsFor } from "../src/adapters/env";
 import { PaypalClient } from "../src/adapters/paypal";
 import { pathsUnder, runStateStore, scenarioDigest } from "../src/app/runtime";
-import { initRunState, haltRun, recordMeta } from "../src/core/runState";
+import { initRunState, haltRun, markStarted, recordMeta } from "../src/core/runState";
 import { validateScenario } from "../src/core/scenario";
 import { SCENARIO_DIGEST_KEY } from "../src/executor/executor";
 import { SANDBOX_HOST } from "../src/core/host";
@@ -519,6 +519,19 @@ describe("run_scenario", () => {
       const r = await h.call("run_scenario", { scenario: cardScenario(), confirm: true, resume: id });
       expect(r.isError).toBe(true);
       expect(r.text).toContain("is halted");
+      expect(r.text).toContain(`--resume ${id} --retry <stepId>`);
+      expect(h.calls).toHaveLength(0);
+    });
+
+    // The double write this closes: a step cut off mid-call ran again on resume.
+    it("refuses a run cut off mid-step, sends nothing, and points at the CLI", async () => {
+      const h = await connect();
+      const id = seed(h, false);
+      const store = runStateStore(join(h.root, "runs"), id);
+      store.write(markStarted(store.read()!, "order", "2026-10-23T12:00:02.000Z"));
+      const r = await h.call("run_scenario", { scenario: cardScenario(), confirm: true, resume: id });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("may have reached PayPal");
       expect(r.text).toContain(`--resume ${id} --retry <stepId>`);
       expect(h.calls).toHaveLength(0);
     });

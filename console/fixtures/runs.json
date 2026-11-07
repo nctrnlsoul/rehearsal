@@ -1,5 +1,5 @@
 {
-  "note": "Recorded runs, replayed. Calls, ids and times are copied from each run's state file (runs/<runId>.json); store rows from the finder reports and the store-row times recorded in the vault note 'PayPal AI Hackathon Recon 2026-10-20'. Store row times are recorded to the second. Nothing here is live.",
+  "note": "Recorded runs, replayed. Calls, ids and times are copied from each run's state file (evidence/runs/<runId>.json); store rows from the finder reports in evidence/finder/; store-row times were read from the store's state endpoint during those runs, to the second, and are not published separately. Nothing here is live.",
   "runs": [
     {
       "runId": "20261023231552-60ea96",
@@ -8,9 +8,9 @@
       "verdict": "bug",
       "verdictLine": "BUG: one event, delivered twice, fulfilled twice. The store had no event-id dedupe yet.",
       "sources": [
-        "runs/20261023231552-60ea96.json",
-        "runs/finder-20261023231753.md",
-        "vault: PayPal AI Hackathon Recon 2026-10-20, update 2026-10-23 19:18 (store rows 23:16:17 and 23:17:51, both verified, cert host api.sandbox.paypal.com)"
+        "evidence/runs/20261023231552-60ea96.json",
+        "evidence/finder/2026-10-23-duplicate-webhook-before-fix.md",
+        "store state endpoint, read during the run (store rows 23:16:17 and 23:17:51, both verified, cert host api.sandbox.paypal.com)"
       ],
       "calls": [
         {
@@ -63,9 +63,9 @@
       "verdict": "ok",
       "verdictLine": "OK: fulfilled once, and the redelivery was recognized and ignored. Dedupe by event id was on.",
       "sources": [
-        "runs/20261024011812-208f4e.json",
-        "runs/finder-20261024011922.md",
-        "vault: PayPal AI Hackathon Recon 2026-10-20, entry 2026-10-23 21:20 (store rows 01:18:37 and 01:19:21, both verified)"
+        "evidence/runs/20261024011812-208f4e.json",
+        "evidence/finder/2026-10-24-duplicate-webhook-after-fix.md",
+        "store state endpoint, read during the run (store rows 01:18:37 and 01:19:21, both verified)"
       ],
       "calls": [
         {

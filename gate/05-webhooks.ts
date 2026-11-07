@@ -21,8 +21,9 @@ import { errorSummary, pick, runGate, saveState, sleep } from "./_harness";
  * records: what we did, what PayPal says it sent, and what the receiver
  * actually got. Finally resend one event and confirm it arrives twice.
  *
- * PayPal's own Webhook Simulator cannot do any of this: its events cannot be
- * verified, resent, or looked up. That is the gap this gate is measuring.
+ * PayPal's own Webhook Simulator cannot do any of this: per its docs, its events
+ * cannot be verified through verify-webhook-signature or resent, and match no
+ * real transaction. That is the gap this gate is measuring.
  */
 
 const WEBHOOK_PATH = "/api/paypal/webhook";
@@ -178,7 +179,7 @@ await runGate({
     let webhookId = pick(created.body, ["id"]);
 
     if (webhookId === null) {
-      ctx.log(`create returned http ${created.status}: ${errorSummary(created.body, created.bodyPreview)}`);
+      ctx.log(`create returned http ${created.status}: ${errorSummary(created.body, created.debugId)}`);
       const list = await client.call({ method: "GET", path: "/v1/notifications/webhooks" });
       const match = arrayOf(list.body, "webhooks").find((w) => w["url"] === webhookTarget);
       webhookId = typeof match?.["id"] === "string" ? match["id"] : null;
@@ -188,7 +189,7 @@ await runGate({
     if (webhookId === null) {
       return {
         ok: false,
-        reason: `could not register or find a webhook for ${webhookTarget}: http ${created.status}, ${errorSummary(created.body, created.bodyPreview)}`,
+        reason: `could not register or find a webhook for ${webhookTarget}: http ${created.status}, ${errorSummary(created.body, created.debugId)}`,
       };
     }
     ctx.record("webhook_id", webhookId);
@@ -224,7 +225,7 @@ await runGate({
     if (orderVerdict.kind !== "success" || captureId === null) {
       return {
         ok: false,
-        reason: `could not create the events to test with: order ${orderVerdict.kind}, http ${order.status}, ${errorSummary(order.body, order.bodyPreview)}`,
+        reason: `could not create the events to test with: order ${orderVerdict.kind}, http ${order.status}, ${errorSummary(order.body, order.debugId)}`,
       };
     }
 
@@ -285,7 +286,7 @@ await runGate({
       // shape the standing rules single out, and it made a 400 look like silence.
       if (listed.status !== 200) {
         listOk = false;
-        listError = `http ${listed.status}: ${errorSummary(listed.body, listed.bodyPreview)}`;
+        listError = `http ${listed.status}: ${errorSummary(listed.body, listed.debugId)}`;
         ctx.log(`webhooks-events list FAILED, ${listError}`);
         await sleep(8000);
         continue;
@@ -383,7 +384,7 @@ await runGate({
     if (resend.status < 200 || resend.status >= 300) {
       return {
         ok: false,
-        reason: `resend of ${resendTarget.eventId} failed: http ${resend.status}, ${errorSummary(resend.body, resend.bodyPreview)}`,
+        reason: `resend of ${resendTarget.eventId} failed: http ${resend.status}, ${errorSummary(resend.body, resend.debugId)}`,
       };
     }
 

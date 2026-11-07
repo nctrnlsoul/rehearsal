@@ -85,7 +85,7 @@ h2, p { margin: 0; }
 .topbar nav a:not(.wordmark):hover { color: var(--text); }
 .topbar nav a[aria-current="page"] { color: var(--text); text-decoration: underline; text-underline-offset: 6px; text-decoration-color: var(--rule); }
 .topbar-end { display: flex; align-items: center; gap: 16px; }
-/* 36px: the screen floor for the blossom is 34 (vault ruling GV-021). */
+/* 36px: the screen floor for the blossom is 34. */
 .maker-mark { display: block; width: auto; height: 36px; flex: none; }
 .env { font-size: 13px; color: var(--text-2); }
 .env .mono { color: var(--text); }

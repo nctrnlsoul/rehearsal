@@ -120,12 +120,24 @@ export function checkCaps(scenario: Scenario, caps: Caps = DEFAULT_CAPS): CapVio
 
   const amounts = amountsOf(scenario);
 
+  // The cap is per step, so a payout batch counts the sum of its items: eight
+  // items each under the cap must not move eight times the cap in one step.
+  const perStep = new Map<string, { label: string; minor: bigint; items: number }>();
   for (const a of amounts) {
+    const seen = perStep.get(a.stepId);
+    perStep.set(
+      a.stepId,
+      seen === undefined
+        ? { label: a.label, minor: a.minor, items: 1 }
+        : { label: `payout batch of ${seen.items + 1} items`, minor: seen.minor + a.minor, items: seen.items + 1 },
+    );
+  }
+  for (const [stepId, a] of perStep) {
     if (a.minor > caps.maxStepAmountMinor) {
       violations.push({
         code: "step-amount-too-large",
-        message: `${a.label} in step ${a.stepId} is ${c} ${fromMinor(a.minor, c)}, over the per-step cap of ${c} ${fromMinor(caps.maxStepAmountMinor, c)}`,
-        stepId: a.stepId,
+        message: `${a.label} in step ${stepId} is ${c} ${fromMinor(a.minor, c)}, over the per-step cap of ${c} ${fromMinor(caps.maxStepAmountMinor, c)}`,
+        stepId,
       });
     }
   }

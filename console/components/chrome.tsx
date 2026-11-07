@@ -23,7 +23,7 @@ export function Topbar({ current }: { current: Surface }) {
       </nav>
       <div className="topbar-end">
         <div className="env"><span className="label">Sandbox only</span> <span className="mono">api-m.sandbox.paypal.com</span></div>
-        {/* Maker's mark (R-037): the NorthSchema blossom, white on dark, as supplied. Not the product's logo. */}
+        {/* Maker's mark: the NorthSchema blossom, white on dark, as supplied. Not the product's logo. */}
         <img className="maker-mark" src="/northschema-blossom.png" width={38} height={36} alt="Made by NorthSchema" />
       </div>
     </div>
@@ -40,7 +40,7 @@ export function ReplayBanner({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** The maker credit is text: the blossom does not go in a footer (vault ruling J-023). */
+/** The maker credit is text: the blossom does not go in a footer. */
 export function SiteFooter({ children }: { children: React.ReactNode }) {
   return (
     <footer className="site">

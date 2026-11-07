@@ -3,6 +3,8 @@ import { requestId } from "../src/core/idempotency";
 import { cardOrderHandler } from "../src/executor/handlers/cardOrder";
 import { openDisputeHandler } from "../src/executor/handlers/dispute";
 import {
+  DUE_DATE_UNREAD,
+  NOT_PAST_DUE,
   invoiceCancelHandler,
   invoiceCreateHandler,
   invoiceRecordPaymentHandler,
@@ -47,6 +49,22 @@ describe("cardOrderHandler", () => {
     const out = await cardOrderHandler(ctx);
     expect(out.kind).toBe("success");
     expect(out.ids).toEqual({ order_id: "ORD-1", capture_id: "CAP-1" });
+  });
+
+  // A plan may write "25" where PayPal answers "25.00"; that is the same money,
+  // and calling it a failed capture would halt a run that charged correctly.
+  it("compares the captured amount as money, not as text", async () => {
+    const whole = scenarioWith([{ id: "o1", kind: "card_order", amount: "25" }]);
+    const same = fakePaypal([orderOk("25.00")]);
+    expect((await cardOrderHandler(makeContext({ scenario: whole, stepId: "o1", seller: same.client }).ctx)).kind).toBe("success");
+
+    const short = fakePaypal([orderOk("24.99")]);
+    const out = await cardOrderHandler(makeContext({ scenario: whole, stepId: "o1", seller: short.client }).ctx);
+    expect(out.kind).toBe("failed");
+    expect(out.detail).toBe("captured 24.99, expected 25");
+
+    const junk = fakePaypal([orderOk("lots")]);
+    expect((await cardOrderHandler(makeContext({ scenario: whole, stepId: "o1", seller: junk.client }).ctx)).kind).toBe("failed");
   });
 
   it("sends a single-step card order with a derived idempotency key", async () => {
@@ -265,6 +283,40 @@ describe("invoice handlers", () => {
     expect(out.kind).toBe("success");
     expect(out.detail).toMatch(/overdue/i);
     expect(seller.calls[0]!.body).toEqual({ send_to_invoicer: false, send_to_recipient: false });
+  });
+
+  // The finder reads these two apart: "not past due" is a finding, an unread
+  // due date is no evidence at all.
+  it("says when the due date is not past, and when it could not be read", async () => {
+    const future = fakePaypal([
+      { status: 200 },
+      { status: 200, body: { status: "UNPAID", detail: { payment_term: { due_date: "2999-01-01" } } } },
+    ]);
+    const a = await invoiceSendHandler(makeContext({ scenario, stepId: "s1", seller: future.client, outputs }).ctx);
+    expect(a.kind).toBe("success");
+    expect(a.detail).toBe(`invoice UNPAID, due 2999-01-01, ${NOT_PAST_DUE}`);
+
+    const blind = fakePaypal([{ status: 200 }, { status: 200, body: { status: "UNPAID" } }]);
+    const b = await invoiceSendHandler(makeContext({ scenario, stepId: "s1", seller: blind.client, outputs }).ctx);
+    expect(b.detail).toBe(`invoice UNPAID; ${DUE_DATE_UNREAD}`);
+    expect(b.detail).not.toContain(NOT_PAST_DUE);
+  });
+
+  // A lost reply, 408 or 5xx may mean PayPal already sent, recorded or
+  // canceled. Resending could record a second payment, so these stop as
+  // unknown after one call; a clear refusal is still a plain failure.
+  it("treats an ambiguous answer to an invoice write as unknown and never resends it", async () => {
+    const handlerFor = { s1: invoiceSendHandler, pay1: invoiceRecordPaymentHandler, c1: invoiceCancelHandler } as const;
+    for (const [stepId, handler] of Object.entries(handlerFor)) {
+      for (const status of [503, 500, 408, 409]) {
+        const seller = fakePaypal([{ status }]);
+        const out = await handler(makeContext({ scenario, stepId, seller: seller.client, outputs }).ctx);
+        expect(out.kind, `${stepId} ${status}`).toBe("unknown");
+        expect(seller.calls, `${stepId} ${status}`).toHaveLength(1);
+      }
+      const refused = fakePaypal([{ status: 422, body: { name: "UNPROCESSABLE_ENTITY" } }]);
+      expect((await handler(makeContext({ scenario, stepId, seller: refused.client, outputs }).ctx)).kind).toBe("failed");
+    }
   });
 
   it("records a payment and confirms the invoice status", async () => {

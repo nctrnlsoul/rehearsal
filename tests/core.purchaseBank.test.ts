@@ -4,11 +4,17 @@ import {
   addPurchase,
   attachTransactionId,
   availablePurchases,
+  checkPurchaseAmount,
   claimPurchase,
   confirmCapture,
+  MOVED_TO_HOSTED,
   emptyBank,
+  exportForHosted,
+  hostedInsertSql,
   markExpired,
+  matchBuyerTransaction,
 } from "../src/core/purchaseBank";
+import { DEFAULT_CAPS } from "../src/core/caps";
 
 const T = "2026-10-23T00:00:00.000Z";
 
@@ -182,5 +188,139 @@ describe("claimPurchase", () => {
     };
     expect(availablePurchases(corrupt)).toHaveLength(0);
     expect(claimPurchase(corrupt, "run-1", T).ok).toBe(false);
+  });
+});
+
+describe("exportForHosted and hostedInsertSql (Stage B bank move)", () => {
+  const ready = (orderId: string, createdAt: string) =>
+    ({
+      id: orderId,
+      orderId,
+      captureId: `CAP-${orderId}`,
+      buyerTransactionId: `TXN-${orderId}`,
+      amount: "25.00",
+      currency: "USD",
+      status: "available",
+      createdAt,
+      approvalUrl: null,
+      usedByRunId: null,
+      usedAt: null,
+    }) as const;
+  const bank = () => ({
+    version: 1 as const,
+    purchases: [ready("O-NEW", "2026-10-25T10:00:00Z"), ready("O-OLD", "2026-10-24T10:00:00Z"), { ...ready("O-WAIT", "2026-10-23T10:00:00Z"), status: "awaiting_approval" as const, captureId: null, buyerTransactionId: null }],
+  });
+
+  it("moves the oldest ready purchases and marks them used locally, so the local bank can never draw them", () => {
+    const r = exportForHosted(bank(), 1, "2026-10-25T12:00:00Z");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.moved.map((p) => p.orderId)).toEqual(["O-OLD"]);
+    const old = r.value.bank.purchases.find((p) => p.orderId === "O-OLD")!;
+    expect(old).toMatchObject({ status: "used", usedByRunId: MOVED_TO_HOSTED, usedAt: "2026-10-25T12:00:00Z" });
+    expect(availablePurchases(r.value.bank).map((p) => p.orderId)).toEqual(["O-NEW"]);
+  });
+
+  it("never moves a purchase that is not ready, and refuses when none is", () => {
+    const r = exportForHosted(bank(), 10, "2026-10-25T12:00:00Z");
+    expect(r.ok && r.value.moved.map((p) => p.orderId)).toEqual(["O-OLD", "O-NEW"]);
+    const empty = exportForHosted({ version: 1, purchases: [] }, 1, "2026-10-25T12:00:00Z");
+    expect(empty.ok).toBe(false);
+    expect(exportForHosted(bank(), 0, "2026-10-25T12:00:00Z").ok).toBe(false);
+  });
+
+  it("writes an insert that skips orders already moved", () => {
+    const r = exportForHosted(bank(), 2, "2026-10-25T12:00:00Z");
+    if (!r.ok) throw new Error(r.error);
+    const sql = hostedInsertSql(r.value.moved, "2026-10-25T12:00:00Z");
+    expect(sql.ok).toBe(true);
+    if (!sql.ok) return;
+    expect(sql.value).toContain("insert into public.console_purchases");
+    expect(sql.value).toContain("('O-OLD', 'CAP-O-OLD', 'TXN-O-OLD', '25.00', 'USD', '2026-10-24T10:00:00.000Z'::timestamptz)");
+    expect(sql.value).toContain("on conflict (order_id) do nothing;");
+    expect(sql.value).toContain("CONSOLE's own Supabase project");
+  });
+
+  it("refuses any id that is not plain letters, digits and dashes, so nothing can reach the SQL", () => {
+    for (const bad of ["O'1", "O-1); drop table x; --", "O 1", "", "x".repeat(129)]) {
+      const p = { ...ready("O-1", "2026-10-24T10:00:00Z"), orderId: bad };
+      expect(hostedInsertSql([p], "now").ok, bad).toBe(false);
+    }
+    expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), buyerTransactionId: "T'1" }], "now").ok).toBe(false);
+    expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), amount: "1e3" }], "now").ok).toBe(false);
+    expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), createdAt: "not a time" }], "now").ok).toBe(false);
+  });
+
+});
+
+// "Every write keyed and capped" covers bank:add too: its order is a write.
+describe("checkPurchaseAmount", () => {
+  it("takes an amount at or under the per-step cap", () => {
+    expect(checkPurchaseAmount("88.00", "USD", DEFAULT_CAPS)).toEqual({ ok: true, value: 8800n });
+    expect(checkPurchaseAmount("500.00", "USD", DEFAULT_CAPS).ok).toBe(true);
+  });
+
+  it("refuses one over the cap, a malformed or zero amount, and another currency", () => {
+    const over = checkPurchaseAmount("500.01", "USD", DEFAULT_CAPS);
+    expect(over).toEqual({ ok: false, error: "purchase of USD 500.01 is over the per-step cap of USD 500.00" });
+    for (const [amount, currency] of [["1e3", "USD"], ["-5.00", "USD"], ["0.00", "USD"], ["88.00", "EUR"]] as const) {
+      expect(checkPurchaseAmount(amount, currency, DEFAULT_CAPS).ok, `${amount} ${currency}`).toBe(false);
+    }
+  });
+});
+
+// Amount alone matched another purchase of the same price, and a dispute
+// against the wrong transaction tests nothing.
+describe("matchBuyerTransaction", () => {
+  const purchase = {
+    ...seed("O-1", "2026-10-23T12:00:00.000Z"),
+    captureId: "CAP-O-1",
+    buyerTransactionId: null,
+    status: "awaiting_transaction_id" as const,
+    usedByRunId: null,
+    usedAt: null,
+  };
+  const row = (id: string, value: string, currency: string, at: string) => ({
+    transaction_info: {
+      transaction_id: id,
+      transaction_amount: { value, currency_code: currency },
+      transaction_initiation_date: at,
+    },
+  });
+
+  it("matches amount as money in the same currency, closest in time after the order", () => {
+    const rows = [
+      row("T-FAR", "-88.00", "USD", "2026-10-23T18:00:00Z"),
+      row("T-NEAR", "-88.0", "USD", "2026-10-23T12:03:00Z"),
+      row("T-EUR", "-88.00", "EUR", "2026-10-23T12:01:00Z"),
+      row("T-BEFORE", "-88.00", "USD", "2026-10-23T09:00:00Z"),
+      row("T-OTHER", "-87.99", "USD", "2026-10-23T12:02:00Z"),
+    ];
+    expect(matchBuyerTransaction(purchase, rows, new Set())).toEqual({ id: "T-NEAR", candidates: 2 });
+  });
+
+  // Verifier finding: with two same-price orders waiting and only the newer
+  // one's payment visible, the older order took it and the newer was stranded.
+  it("never hands a newer same-price order's payment to an older order", () => {
+    const later = { ...purchase, id: "p-O-2", orderId: "O-2", createdAt: "2026-10-23T13:00:00.000Z" };
+    const rows = [row("T-B", "-88.00", "USD", "2026-10-23T13:04:00Z")];
+    expect(matchBuyerTransaction(purchase, rows, new Set(), [purchase, later])).toEqual({ id: null, candidates: 0 });
+    expect(matchBuyerTransaction(later, rows, new Set(), [purchase, later])).toEqual({ id: "T-B", candidates: 1 });
+    // Once the newer one is no longer waiting, an older order may take a payment after it.
+    expect(matchBuyerTransaction(purchase, rows, new Set(), [purchase])).toEqual({ id: "T-B", candidates: 1 });
+  });
+
+  it("matches nothing a day after the order, and nothing for an unreadable purchase", () => {
+    const rows = [row("T-LATE", "-88.00", "USD", "2026-10-24T12:01:00Z")];
+    expect(matchBuyerTransaction(purchase, rows, new Set())).toEqual({ id: null, candidates: 0 });
+    const near = [row("T-NEAR", "-88.00", "USD", "2026-10-23T12:03:00Z")];
+    expect(matchBuyerTransaction({ ...purchase, createdAt: "not a time" }, near, new Set())).toEqual({ id: null, candidates: 0 });
+    expect(matchBuyerTransaction({ ...purchase, amount: "lots" }, near, new Set())).toEqual({ id: null, candidates: 0 });
+  });
+
+  it("skips a transaction already banked, and answers none rather than guess", () => {
+    const rows = [row("T-NEAR", "-88.00", "USD", "2026-10-23T12:03:00Z")];
+    expect(matchBuyerTransaction(purchase, rows, new Set(["T-NEAR"]))).toEqual({ id: null, candidates: 0 });
+    expect(matchBuyerTransaction(purchase, [null, 7, { transaction_info: "x" }], new Set())).toEqual({ id: null, candidates: 0 });
   });
 });

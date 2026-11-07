@@ -1,5 +1,7 @@
 import type { CSSProperties } from "react";
 import { Mark, SiteFooter, Topbar } from "../../components/chrome";
+import { DEFAULT_LIMITS } from "../../lib/gate";
+import { HOSTED_CAPS, liveRunsEnabled } from "../../lib/hosted";
 import "./gate.css";
 
 const order = (i: number) => ({ "--i": i }) as CSSProperties;
@@ -11,7 +13,7 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
   const n = (v: string | undefined, max: number) => (v !== undefined && /^\d{1,3}$/.test(v) ? Math.min(Number(v), max) : null);
   switch (q.e) {
     case "wrong": {
-      const left = n(q.left, 5);
+      const left = n(q.left, DEFAULT_LIMITS.perIp);
       return { kind: "bug", title: "That passcode did not match", detail: left === null ? "Try again." : `${left} ${left === 1 ? "try" : "tries"} left this hour from this address.` };
     }
     case "locked": {
@@ -22,6 +24,8 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
       return { kind: "stop", title: "That request was refused", detail: "It did not arrive as a post from this page. Reload the page and try again. Refused requests do not count as wrong tries." };
     case "closed":
       return { kind: "stop", title: "The gate is not configured", detail: "This deployment has no passcode set, so it stays shut. Replays still work." };
+    case "unavailable":
+      return { kind: "stop", title: "The gate cannot count tries right now", detail: "Wrong tries are counted in this console's database, and it did not answer, so the gate stays shut rather than take a guess it cannot count. Replays still work. Try again in a minute." };
     default:
       return null;
   }
@@ -29,6 +33,8 @@ function stateOf(q: Query): { kind: "bug" | "wait" | "stop"; title: string; deta
 
 export default async function GatePage({ searchParams }: { searchParams: Promise<Query> }) {
   const state = stateOf(await searchParams);
+  const live = liveRunsEnabled(process.env);
+  const usd = (minor: bigint) => `USD ${(Number(minor) / 100).toFixed(2)}`;
   return (
     <div className="s-gate">
       <a className="skip" href="#gate">Skip to the passcode</a>
@@ -40,8 +46,8 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
         </section>
         <dl className="inside arrive" style={order(1)} aria-label="What is behind the gate">
           <dt>PayPal host</dt><dd><span className="mono">api-m.sandbox.paypal.com</span><small>pinned in code; no setting can point it at live PayPal</small></dd>
-          <dt>Live runs</dt><dd>Arrive in Stage B<small>this deployment replays recorded runs only</small></dd>
-          <dt>Per run</dt><dd><span className="mono">USD 2,000.00</span> at most, <span className="mono">USD 500.00</span> per step</dd>
+          <dt>Live runs</dt><dd>{live ? "On" : "Paused on this deployment"}<small>{live ? "real sandbox calls, one run at a time" : "recorded runs still replay"}</small></dd>
+          <dt>Per run</dt><dd><span className="mono">{usd(HOSTED_CAPS.maxTotalMinor)}</span> at most, <span className="mono">{usd(HOSTED_CAPS.maxStepAmountMinor)}</span> per step</dd>
           <dt>Without a passcode</dt><dd>Recorded runs replay, each one labeled REPLAY</dd>
         </dl>
 
@@ -62,7 +68,7 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
             )}
             <button className="btn btn-primary" type="submit">Unlock</button>
           </form>
-          <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. 5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted by each server instance on its own.</p>
+          <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. {DEFAULT_LIMITS.perIp} wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.</p>
         </section>
       </main>
       <SiteFooter>REHEARSAL · judge gate</SiteFooter>

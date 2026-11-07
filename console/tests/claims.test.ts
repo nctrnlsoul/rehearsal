@@ -35,11 +35,44 @@ describe("caps claim", () => {
     expect(caps).toMatch(/maxTotalMinor: 200_000n/);
     expect(caps).toMatch(/maxSteps: 30,/);
     expect(caps).toMatch(/maxDisputes: 2,/);
-    for (const shown of ["USD 500.00", "USD 2,000.00", "<dd>30</dd>", "<dd>2</dd>"]) expect(trust).toContain(shown);
+    // Rendered from DEFAULT_CAPS; the figures themselves are pinned above.
+    for (const shown of ["usd(DEFAULT_CAPS.maxStepAmountMinor)", "usd(DEFAULT_CAPS.maxTotalMinor)", "{DEFAULT_CAPS.maxSteps}", "{DEFAULT_CAPS.maxDisputes}"]) expect(trust).toContain(shown);
+  });
+
+  it("shows the hosted caps from the constants the routes enforce, here and on the gate", () => {
+    expect(trust).toContain("HOSTED_CAPS.maxStepAmountMinor");
+    expect(trust).toContain("HOSTED_CAPS.maxTotalMinor");
+    expect(gate).toContain("usd(HOSTED_CAPS.maxTotalMinor)");
+    expect(gate).not.toContain("USD 2,000.00");
+    expect(gate).toContain("liveRunsEnabled(process.env)");
+  });
+
+  it("never says live runs are still to come", () => {
+    for (const page of ["page.tsx", "build/page.tsx", "finder/page.tsx", "gate/page.tsx", "runs/page.tsx", "live/page.tsx"]) {
+      expect(read("console", "app", ...page.split("/")), page).not.toMatch(/arrive in Stage B|Stage A/);
+    }
   });
 });
 
 describe("webhook claim", () => {
+  // R-045: a plan with no webhook registers none, but PayPal still delivers the
+  // account's events to every webhook registered on it, the store's included.
+  it("never says a plan without a webhook stops deliveries, in the engine's dry run or on /build", () => {
+    const line = "none declared by this plan; PayPal still delivers this account's events to every webhook registered on it";
+    for (const [name, text] of [["src/executor/dryRun.ts", read("src", "executor", "dryRun.ts")], ["build/page.tsx", read("console", "app", "build", "page.tsx")]] as const) {
+      expect(text, name).toContain(line);
+      expect(text, name).not.toMatch(/no events will be delivered|so no webhook will be registered"/);
+    }
+  });
+
+  // R-044: the store's receive times make a latency exact, so no page may still call every time an upper bound.
+  it("says a delivery's time is the store's own receive time, and an upper bound only from an older store", () => {
+    const runPage = read("console", "app", "live", "[runId]", "page.tsx");
+    expect(runPage).not.toContain("so its time is an upper bound");
+    expect(runPage).toContain("at the time the store recorded receiving it, so a latency is exact to the second");
+    expect(read("store", "lib", "merchant.ts")).toContain(".map((ms) => new Date(ms).toISOString())");
+  });
+
   it("no longer says every delivery is verified", () => {
     expect(trust).not.toMatch(/Webhooks verified[\s\S]{0,200}every delivery/);
   });
@@ -69,15 +102,46 @@ describe("webhook claim", () => {
 });
 
 describe("gate lockout claim", () => {
-  it("names an address or /64, an hour, and per-instance counting, as the code does", () => {
+  it("names an address or /64, an hour, and one shared count, as the code does", () => {
     expect(gate).not.toContain("lock a network out");
-    expect(gate).toContain("5 wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted by each server instance on its own.");
-    expect(DEFAULT_LIMITS.perIp).toBe(5);
+    expect(gate).not.toContain("counted by each server instance on its own");
+    expect(gate).toContain("{DEFAULT_LIMITS.perIp} wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.");
+    // R-049: judges on one corporate network share an address.
+    expect(DEFAULT_LIMITS.perIp).toBe(30);
     expect(DEFAULT_LIMITS.windowMs).toBe(60 * 60 * 1000);
-    expect(read("console", "app", "api", "gate", "route.ts")).toContain("const limiter = new AttemptLimiter();");
+    // One place: the route counts through the database store, never in memory.
+    const route = read("console", "app", "api", "gate", "route.ts");
+    expect(route).toContain("dbAttemptStore(db, secret)");
+    expect(read("console", "lib", "gate.ts")).not.toMatch(/new Map</);
+    const sqlFile = read("console", "migrations", "0003_plans_counters.sql");
+    expect(sqlFile).toContain("function public.console_gate_take");
   });
 
   it("never says a network is locked, since the key is an address", () => {
     expect(gate).not.toMatch(/this network/i);
+  });
+});
+
+// Re-measured for v0.6.1: the trust panel's figures read the constants the
+// code enforces, so a changed cap or budget changes the page with it.
+describe("trust panel figures", () => {
+  it("come from the code's constants, not typed-in numbers", () => {
+    for (const source of [
+      "usd(DEFAULT_CAPS.maxStepAmountMinor)",
+      "usd(DEFAULT_CAPS.maxTotalMinor)",
+      "DEFAULT_CAPS.maxSteps",
+      "DEFAULT_CAPS.maxDisputes",
+      "usd(HOSTED_CAPS.maxStepAmountMinor)",
+      "DEFAULT_AI_BUDGET.maxOutputTokensPerCall",
+      "PLANNER_TIMEOUT_MS / 1000",
+      "count(DESCRIPTION_MAX_CHARS)",
+      "facts.version",
+    ]) {
+      expect(trust, source).toContain(source);
+    }
+    for (const literal of ["USD 500.00", "USD 2,000.00", "4,000 tokens", "4,000 chars", "facts.branch"]) {
+      expect(trust, literal).not.toContain(literal);
+    }
+    expect(trust).toContain("the reports are in the repo under evidence/");
   });
 });

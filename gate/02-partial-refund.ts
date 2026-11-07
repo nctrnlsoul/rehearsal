@@ -73,7 +73,7 @@ await runGate({
     if (verdict.kind !== "success") {
       return {
         ok: false,
-        reason: `refund did not complete: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`,
+        reason: `refund did not complete: http ${res.status}, ${errorSummary(res.body, res.debugId)}`,
         ...(verdict.kind === "unknown" ? { qualifier: "UNKNOWN" } : {}),
       };
     }

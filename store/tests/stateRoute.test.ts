@@ -64,6 +64,14 @@ describe("store state endpoint gates", () => {
     expect(await res.json()).toEqual({ error: "store not configured" });
   });
 
+  // The length rule reads the trimmed value, so the compare must too: a value
+  // pasted with a trailing newline otherwise locks out the right caller.
+  it("compares against the trimmed token, as the length rule reads it", async () => {
+    process.env["REHEARSAL_STORE_TOKEN"] = `  ${TOKEN}\n`;
+    expect((await get()).status).not.toBe(401);
+    expect((await get("", `Bearer ${TOKEN}x`)).status).toBe(401);
+  });
+
   it("accepts a token of exactly 32 characters", async () => {
     const exact = "e".repeat(32);
     process.env["REHEARSAL_STORE_TOKEN"] = exact;
@@ -90,5 +98,33 @@ describe("store state endpoint gates", () => {
   it("refuses a half-configured store rather than reading without it", async () => {
     process.env["SUPABASE_SERVICE_ROLE_KEY"] = "not-a-real-key";
     expect((await get()).status).toBe(503);
+  });
+});
+
+// R-044, through the route and the real table: the reply carries each
+// delivery's capture ids and receive times, so the console can pair exactly.
+describe("store state reply", () => {
+  it("gives each delivery its capture ids and receive times from the table, verified rows only", async () => {
+    const { freshDb } = await import("./pg");
+    const { postgrestOver } = await import("./postgrest");
+    const pg = await freshDb();
+    await pg.exec(`insert into public.store_order_events (event_id, event_type, capture_id, action, verified, received_at) values
+      ('WH-1', 'PAYMENT.CAPTURE.COMPLETED', 'CAP-1', 'fulfilled', true, '2026-10-25T18:00:07.125Z'),
+      ('WH-1', 'PAYMENT.CAPTURE.COMPLETED', 'CAP-1', 'duplicate_ignored', true, '2026-10-25T18:00:40.250Z'),
+      ('WH-1', 'PAYMENT.CAPTURE.COMPLETED', null, 'refused', false, '2026-10-25T18:00:01.000Z')`);
+    process.env["SUPABASE_URL"] = "https://testproject.supabase.co";
+    process.env["SUPABASE_SERVICE_ROLE_KEY"] = "test-only-key";
+    vi.stubGlobal("fetch", postgrestOver(pg));
+    try {
+      const res = await get();
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { deliveries: Array<Record<string, unknown>> };
+      expect(body).toMatchObject({ truncated: false, refusalsTruncated: false });
+      expect(body.deliveries).toEqual([
+        expect.objectContaining({ eventId: "WH-1", captureIds: ["CAP-1"], receivedAt: ["2026-10-25T18:00:07.125Z", "2026-10-25T18:00:40.250Z"] }),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

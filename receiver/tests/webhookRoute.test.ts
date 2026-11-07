@@ -51,8 +51,8 @@ afterEach(() => {
 });
 
 const headers = (certUrl: string) => ({
-  "paypal-transmission-id": "T-1",
-  "paypal-transmission-time": "2026-10-23T00:00:00Z",
+  "paypal-transmission-id": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
+  "paypal-transmission-time": new Date().toISOString(),
   "paypal-transmission-sig": "sig",
   "paypal-auth-algo": "SHA256withRSA",
   "paypal-cert-url": certUrl,
@@ -82,6 +82,61 @@ describe("the receiver refuses a bad cert URL before any PayPal call", () => {
   it("forwards a good cert URL to PayPal", async () => {
     await post("https://api.sandbox.paypal.com/v1/notifications/certs/C");
     expect(paypalCalls.length).toBeGreaterThan(0);
+  });
+
+  // The stub answers PayPal with a 500: an outage, not a forgery.
+  it("records a PayPal outage as unchecked, never as a failed signature", async () => {
+    await post("https://api.sandbox.paypal.com/v1/notifications/certs/C");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!["verified"]).toBeNull();
+  });
+
+  it("records an outage on the verify call itself as unchecked, and forwards the raw body", async () => {
+    const verifyBodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/v1/oauth2/token")) {
+          return new Response(JSON.stringify({ access_token: "tok", expires_in: 32400 }), { status: 200 });
+        }
+        if (url.endsWith("/v1/notifications/verify-webhook-signature")) {
+          verifyBodies.push(String(init?.body));
+          return new Response("{}", { status: 503 });
+        }
+        if (url.includes("/rest/v1/webhook_arrivals") && init?.method === "POST") {
+          rows.push(...(JSON.parse(String(init.body)) as Array<Record<string, unknown>>));
+          return new Response(null, { status: 201 });
+        }
+        return new Response("[]", { status: 200 });
+      }),
+    );
+    const raw = '{"id":"WH-2","amount":1.50}';
+    await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body: raw,
+        headers: headers("https://api.sandbox.paypal.com/v1/notifications/certs/C"),
+      }),
+    );
+    expect(verifyBodies).toHaveLength(1);
+    expect(verifyBodies[0]!.endsWith(`"webhook_event":${raw}}`)).toBe(true);
+    expect(rows[0]).toMatchObject({ verified: null, verify_detail: "could not check: verify http 503" });
+  });
+
+  it("records a stale transmission time as unchecked, before any PayPal call", async () => {
+    await POST(
+      new Request("https://receiver.test/api/paypal/webhook", {
+        method: "POST",
+        body: "{}",
+        headers: {
+          ...headers("https://api.sandbox.paypal.com/v1/notifications/certs/C"),
+          "paypal-transmission-time": new Date(Date.now() - 11 * 60_000).toISOString(),
+        },
+      }),
+    );
+    expect(paypalCalls).toEqual([]);
+    expect(rows[0]).toMatchObject({ verified: null, verify_detail: "could not check: paypal-transmission-time is more than 10 minutes from now" });
   });
 });
 
@@ -150,5 +205,30 @@ describe("the body cap is in bytes (L6)", () => {
     expect(res.status).toBe(413);
     expect(rows).toEqual([]);
     expect(paypalCalls).toEqual([]);
+  });
+});
+
+// The PayPal host is pinned; a followed redirect would carry the bearer token
+// or the Basic credentials somewhere nobody pinned.
+describe("every PayPal request the receiver makes", () => {
+  it("refuses redirects", async () => {
+    const seen: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("paypal.com")) {
+          seen.push(init?.redirect);
+          if (url.endsWith("/v1/oauth2/token")) {
+            return new Response(JSON.stringify({ access_token: "tok", expires_in: 32400 }), { status: 200 });
+          }
+          return Response.json({ verification_status: "SUCCESS" });
+        }
+        return new Response(null, { status: 201 });
+      }),
+    );
+    await post("https://api.sandbox.paypal.com/v1/notifications/certs/C");
+    expect(seen.length).toBeGreaterThan(0);
+    for (const r of seen) expect(r).toBe("error");
   });
 });

@@ -64,7 +64,7 @@ export const refundHandler: StepHandler = async (ctx) => {
     knownFailed: ["CANCELLED", "FAILED"],
   });
   if (verdict.kind !== "success") {
-    const detail = `refund did not complete: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`;
+    const detail = `refund did not complete: http ${res.status}, ${errorSummary(res.body, res.debugId)}`;
     return verdict.kind === "failed" ? failed(detail, ids) : unknown(detail, ids);
   }
 

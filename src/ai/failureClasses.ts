@@ -1,5 +1,7 @@
 import type { RunState, StepRecord } from "../core/runState";
 import type { Step } from "../core/scenario";
+import { DUE_DATE_UNREAD, NOT_PAST_DUE, READS_OVERDUE } from "../executor/handlers/invoice";
+import { ITEM_STATUS_MISMATCH } from "../executor/handlers/payout";
 import { cleanModelText } from "./planner";
 
 /**
@@ -39,6 +41,11 @@ export type StoreSnapshot = {
   readonly eventCount: number;
   readonly unverifiedCount: number;
   readonly dedupeEnabled?: boolean;
+  /**
+   * True when the store's read of verified rows hit its row cap, so evidence
+   * may be missing from the window. Absent on a store that predates the flag.
+   */
+  readonly truncated?: boolean;
 };
 
 export type Verdict = "bug" | "ok" | "inconclusive";
@@ -76,7 +83,7 @@ export type FailureClass = {
   /** Null only for an unsupported class, which never runs. */
   readonly template: ScenarioTemplate | null;
   readonly needsBankedPurchase: boolean;
-  /** False when v0.2.0 cannot express the scenario; reported, never silently dropped. */
+  /** False when this version cannot express the scenario; reported, never silently dropped. */
   readonly supported: boolean;
   readonly unsupportedReason?: string;
   check(store: StoreSnapshot, run: RunState): Finding;
@@ -431,13 +438,19 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
       }
 
       const accepted = e.perRefund.length;
-      const refusedNote =
-        e.refusedByPaypal > 0 ? `; PayPal refused the other ${e.refusedByPaypal} itself` : "";
+      // A refused second refund means the store never faced a refund after a
+      // partial one, so a clean count proves nothing about the class.
+      if (e.refusedByPaypal > 0) {
+        return none(
+          `PayPal refused ${e.refusedByPaypal} of the ${accepted + e.refusedByPaypal} refund(s) itself, so a second refund after a partial one never happened`,
+          "re-run with a partial refund small enough that PayPal accepts the second refund too",
+        );
+      }
       if (e.perRefund.every((p) => p.recorded === 1)) {
         return finding(REFUND_AFTER_PARTIAL, "ok", {
           event,
           expected: "one refund event recorded per refund PayPal accepted",
-          actual: `${accepted} refund(s) accepted and each recorded once${refusedNote}`,
+          actual: `${accepted} refund(s) accepted and each recorded once`,
           likelyFix: "none needed",
         });
       }
@@ -474,28 +487,54 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     ...UNCLAIMED_PAYOUT,
     needsBankedPurchase: false,
     supported: true,
+    /**
+     * Decided from what PayPal reported back about the item, never from the
+     * step merely not succeeding: a refused batch or a lost reply says nothing
+     * about how an unclaimed item settles.
+     */
     check(_store: StoreSnapshot, run: RunState) {
+      const event = "PAYMENT.PAYOUTS-ITEM.UNCLAIMED";
+      const none = (actual: string, likelyFix: string) =>
+        finding(UNCLAIMED_PAYOUT, "inconclusive", {
+          event,
+          expected: "a payout item PayPal settles as UNCLAIMED",
+          actual,
+          likelyFix,
+        });
       const payouts = stepsOfKind(run, "payout_batch");
       if (payouts.length === 0) {
-        return finding(UNCLAIMED_PAYOUT, "inconclusive", {
-          event: "PAYMENT.PAYOUTS-ITEM.UNCLAIMED",
-          expected: "a payout batch with an unclaimed recipient",
-          actual: "the plan contained no payout step",
-          likelyFix: "re-plan with a payout_batch whose item sets unclaimed to true",
-        });
+        return none(
+          "the plan contained no payout step",
+          "re-plan with a payout_batch whose item sets unclaimed to true",
+        );
       }
-      const failed = payouts.filter((p) => p.status === "failed" || p.status === "unknown");
-      if (failed.length > 0) {
+      const settledWrong = payouts.filter(
+        (p) => p.status === "failed" && p.detail.startsWith(`${ITEM_STATUS_MISMATCH}:`),
+      );
+      if (settledWrong.length > 0) {
         return finding(UNCLAIMED_PAYOUT, "bug", {
-          event: "PAYMENT.PAYOUTS-ITEM.UNCLAIMED",
+          event,
           expected: "the item to settle as UNCLAIMED",
-          actual: failed.map((p) => `${p.id}: ${p.detail}`).join("; "),
+          actual: settledWrong.map((p) => `${p.id}: ${p.detail}`).join("; "),
           likelyFix:
             "an item that settles as SUCCESS instead of UNCLAIMED means the address has an account; use a reserved address such as example.com",
         });
       }
+      const notSettled = payouts.filter((p) => p.status !== "succeeded");
+      if (notSettled.length > 0) {
+        return none(
+          notSettled
+            .map((p) =>
+              p.status === "pending"
+                ? `${p.id} never ran`
+                : `${p.id} ended ${p.status} before PayPal reported how the item settled: ${p.detail}`,
+            )
+            .join("; "),
+          "read the step detail: PayPal refused the batch or its reply was lost, so the item was never observed",
+        );
+      }
       return finding(UNCLAIMED_PAYOUT, "ok", {
-        event: "PAYMENT.PAYOUTS-ITEM.UNCLAIMED",
+        event,
         expected: "the item to reach UNCLAIMED",
         actual: payouts.map((p) => p.detail).join("; "),
         likelyFix: "none needed",
@@ -513,30 +552,64 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     ...OVERDUE_INVOICE,
     needsBankedPurchase: false,
     supported: true,
+    /**
+     * Decided only from a send PayPal accepted and a due date it read back. A
+     * create that failed leaves the send pending, which is no answer at all.
+     */
     check(_store: StoreSnapshot, run: RunState) {
+      const event = "INVOICING.INVOICE.SENT";
+      const none = (actual: string, likelyFix: string) =>
+        finding(OVERDUE_INVOICE, "inconclusive", {
+          event,
+          expected: "an invoice sent with a due date in the past",
+          actual,
+          likelyFix,
+        });
       const sends = stepsOfKind(run, "invoice_send");
       if (sends.length === 0) {
-        return finding(OVERDUE_INVOICE, "inconclusive", {
-          event: "INVOICING.INVOICE.SENT",
-          expected: "an invoice sent with a due date in the past",
-          actual: "the plan sent no invoice",
-          likelyFix: "re-plan with invoice_create using a negative dueInDays, then invoice_send",
-        });
+        return none(
+          "the plan sent no invoice",
+          "re-plan with invoice_create using a negative dueInDays, then invoice_send",
+        );
       }
-      const overdue = sends.filter((s) => /overdue/i.test(s.detail));
-      if (overdue.length === 0) {
+      const unsent = sends.filter((s) => s.status !== "succeeded");
+      if (unsent.length > 0) {
+        const blocked = Object.values(run.steps).filter(
+          (s) => s.kind === "invoice_create" && s.status !== "succeeded" && s.status !== "pending",
+        );
+        return none(
+          [
+            ...unsent.map((s) =>
+              s.status === "pending" ? `${s.id} never ran` : `${s.id} ended ${s.status}: ${s.detail}`,
+            ),
+            ...blocked.map((s) => `${s.id} ended ${s.status}: ${s.detail}`),
+          ].join("; "),
+          "read the step detail: the invoice was never sent, so whether it reads overdue was never observed",
+        );
+      }
+      const notPast = sends.filter((s) => s.detail.includes(NOT_PAST_DUE));
+      if (notPast.length > 0) {
         return finding(OVERDUE_INVOICE, "bug", {
-          event: "INVOICING.INVOICE.SENT",
+          event,
           expected: "the invoice to read as past its due date once sent",
-          actual: sends.map((s) => `${s.id}: ${s.detail}`).join("; "),
+          actual: notPast.map((s) => `${s.id}: ${s.detail}`).join("; "),
           likelyFix:
             "PayPal computes overdue from the due date, so the invoice must be dated on or after its due date; check dueInDays was negative",
         });
       }
+      const unread = sends.filter((s) => !s.detail.includes(READS_OVERDUE));
+      if (unread.length > 0) {
+        return none(
+          unread
+            .map((s) => `${s.id}: ${s.detail.includes(DUE_DATE_UNREAD) ? s.detail : `no due date reading in "${s.detail}"`}`)
+            .join("; "),
+          "re-run; PayPal's reply after the send did not show the due date",
+        );
+      }
       return finding(OVERDUE_INVOICE, "ok", {
-        event: "INVOICING.INVOICE.SENT",
+        event,
         expected: "the invoice to read as overdue",
-        actual: overdue.map((s) => s.detail).join("; "),
+        actual: sends.map((s) => s.detail).join("; "),
         likelyFix: "none needed",
       });
     },
@@ -558,18 +631,33 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     needsBankedPurchase: true,
     supported: false,
     unsupportedReason:
-      "A dispute can only be opened against a pre-approved purchase drawn from the bank, and a refund step can only target a card_order created in the same run. So there is no way to refund the order that is about to be disputed. Reaching this class needs either a step that refunds a banked purchase, or a dispute that targets a card_order, neither of which v0.2.0 has.",
+      "A dispute can only be opened against a pre-approved purchase drawn from the bank, and a refund step can only target a card_order created in the same run. So there is no way to refund the order that is about to be disputed. Reaching this class needs either a step that refunds a banked purchase, or a dispute that targets a card_order, neither of which this version has.",
     check() {
       return finding(DISPUTE_ON_REFUNDED, "inconclusive", {
         event: "CUSTOMER.DISPUTE.CREATED",
         expected: "a dispute raised against an order that was already refunded",
-        actual: "not reachable with the step kinds v0.2.0 has, so this class was not tested",
+        actual: "not reachable with the step kinds this version has, so this class was not tested",
         likelyFix:
           "add a step that refunds a banked purchase, or let open_dispute target a card_order from the same run",
       });
     },
   },
 ];
+
+/**
+ * A class's verdict on a store snapshot. A window the store had to cut may be
+ * missing the very rows the class counts, so no verdict is given on one.
+ */
+export function judge(cls: FailureClass, store: StoreSnapshot, run: RunState): Finding {
+  const finding = cls.check(store, run);
+  if (store.truncated !== true) return finding;
+  return {
+    ...finding,
+    verdict: "inconclusive",
+    actual: `the store's window held more verified rows than it returns, so rows this class counts may be missing (would have read: ${finding.verdict})`,
+    likelyFix: "re-run when the store is quieter, or read a shorter window",
+  };
+}
 
 export function classById(id: string): FailureClass | undefined {
   return FAILURE_CLASSES.find((c) => c.id === id);

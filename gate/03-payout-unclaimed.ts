@@ -70,7 +70,7 @@ await runGate({
     if (created.kind !== "success" || payoutBatchId === null) {
       return {
         ok: false,
-        reason: `payout batch not accepted: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`,
+        reason: `payout batch not accepted: http ${res.status}, ${errorSummary(res.body, res.debugId)}`,
         ...(created.kind === "unknown" ? { qualifier: "UNKNOWN" } : {}),
       };
     }

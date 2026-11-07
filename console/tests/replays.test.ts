@@ -30,8 +30,25 @@ describe("run fixtures", () => {
     expect(RUNS.map((r) => r.runId)).toEqual(["20261023231552-60ea96", "20261024011812-208f4e"]);
     for (const r of RUNS) {
       expect(r.runId).toMatch(/^\d{14}-[0-9a-f]{6}$/);
-      expect(r.sources).toContain(`runs/${r.runId}.json`);
+      expect(r.sources).toContain(`evidence/runs/${r.runId}.json`);
       expect(["bug", "ok"]).toContain(r.verdict);
+    }
+  });
+
+  // A judge can open every file a replay cites: each is committed, none is a
+  // local folder or a private note.
+  it("cite only files committed under evidence/, and the store's own endpoint", () => {
+    const repo = join(ROOT, "..");
+    const cited = [...RUNS.flatMap((r) => r.sources), FINDER.before.report, FINDER.after.report];
+    for (const s of cited) {
+      if (s.startsWith("store state endpoint")) continue;
+      expect(s, s).toMatch(/^evidence\//);
+      expect(statSync(join(repo, s)).isFile(), s).toBe(true);
+    }
+    // The state file the replay copies is the one committed.
+    for (const r of RUNS) {
+      const state = JSON.parse(readFileSync(join(repo, "evidence", "runs", `${r.runId}.json`), "utf8")) as { runId: string };
+      expect(state.runId).toBe(r.runId);
     }
   });
 
@@ -145,19 +162,60 @@ describe("facts", () => {
 describe("Stage A boundaries", () => {
   const source = [...filesUnder(join(ROOT, "app"), /\.tsx?$/), ...filesUnder(join(ROOT, "lib"), /\.ts$/), ...filesUnder(join(ROOT, "components"), /\.tsx?$/), join(ROOT, "middleware.ts")];
 
-  it("labels every page that shows recorded data as REPLAY", () => {
+  // A live page may list the recorded plans, because there they run live; it
+  // then says LIVE and calls each one "a recorded plan". Anything else that
+  // reads the recorded data says REPLAY.
+  it("labels every page that shows recorded data as REPLAY, or as LIVE with its recorded plans named as recorded", () => {
     const pages = source.filter((f) => /page\.tsx$/.test(f));
     const usesReplays = pages.filter((f) => /lib\/replays/.test(readFileSync(f, "utf8")));
     expect(usesReplays.length).toBeGreaterThanOrEqual(4);
-    for (const f of usesReplays) expect(readFileSync(f, "utf8"), f).toMatch(/<ReplayBanner>/);
+    for (const f of usesReplays) {
+      const text = readFileSync(f, "utf8");
+      if (text.includes('className="live-banner"')) {
+        expect(text, f).not.toMatch(/\b(RUNS|FINDER|runById)\b/);
+        expect(readFileSync(join(ROOT, "components", "LiveBuilder.tsx"), "utf8")).toContain("A recorded plan");
+      } else {
+        expect(text, f).toMatch(/<ReplayBanner>/);
+      }
+    }
   });
 
-  it("makes no outbound call: no fetch, no PayPal client, no model client", () => {
+  // Stage B adds outbound calls on purpose, so this names where they may live.
+  // A page, a component, the middleware or the replay code that grew one would
+  // be a new path to PayPal, a model or the database that skipped the gate.
+  const OUTBOUND_ALLOWED = new Set(
+    ["lib/db.ts", "lib/engine.ts", "lib/worker.ts", "lib/live.ts"].map((p) => join(ROOT, ...p.split("/"))),
+  );
+  const isApiRoute = (f: string) => f.startsWith(join(ROOT, "app", "api"));
+
+  it("makes outbound calls only from the named server modules and API routes", () => {
     for (const f of source) {
+      if (OUTBOUND_ALLOWED.has(f) || isApiRoute(f)) continue;
       const text = readFileSync(f, "utf8");
-      expect(text, f).not.toMatch(/\bfetch\s*\(/);
       expect(text, f).not.toMatch(/@ai-sdk|from ["']ai["']|PaypalClient|api-m\.sandbox\.paypal\.com\/v/);
+      expect(text, f).not.toMatch(/lib\/(db|engine|worker|live)["']/);
     }
+  });
+
+  // The server reaches the network only through lib/db.ts (the engine's own
+  // PayPal and model clients aside). A browser component may call this
+  // console's own /api/ routes, which run every check, and nothing else.
+  it("fetches only from the database client, and from the browser only this console's /api/", () => {
+    for (const f of source) {
+      if (f === join(ROOT, "lib", "db.ts")) continue;
+      const text = readFileSync(f, "utf8");
+      const calls = text.match(/\bfetch\s*\(\s*.{0,8}/g) ?? [];
+      const browser = text.startsWith('"use client"') && f.startsWith(join(ROOT, "components"));
+      for (const call of calls) {
+        expect(browser && /^fetch\s*\(\s*[`'"]\/api\//.test(call), `${f}: ${call}`).toBe(true);
+      }
+    }
+  });
+
+  it("checks a run id's shape exactly as the engine does", async () => {
+    const { RUN_ID_SHAPE } = await import("../lib/liveView");
+    const { RUN_ID_PATTERN } = await import("../lib/engine");
+    expect(RUN_ID_SHAPE.source).toBe(RUN_ID_PATTERN.source);
   });
 
   // A server component cannot run outside a request, so its wiring is checked at

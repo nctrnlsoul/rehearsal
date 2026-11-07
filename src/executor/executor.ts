@@ -6,6 +6,7 @@ import {
   type RunState,
   haltRun,
   initRunState,
+  markInterrupted,
   markStarted,
   nextRunnableStep,
   recordMeta,
@@ -28,9 +29,13 @@ export type ExecutorDeps = {
   readonly seller: PaypalClient;
   readonly buyer: PaypalClient;
   /** Draws a banked purchase for a dispute step. */
-  readonly claimPurchase: (runId: string) => ClaimResult;
-  /** Called after every state change, so an interrupted run is resumable. */
-  readonly persist: (state: RunState) => void;
+  readonly claimPurchase: (runId: string) => ClaimResult | Promise<ClaimResult>;
+  /**
+   * Called after every state change, so an interrupted run is resumable, and
+   * awaited: the save that marks a step started finishes before the step can
+   * reach PayPal. If it throws, the run stops there with that step unsent.
+   */
+  readonly persist: (state: RunState) => void | Promise<void>;
   readonly now: () => Date;
   readonly sleep: (ms: number) => Promise<void>;
   readonly log: (line: string) => void;
@@ -87,7 +92,7 @@ export async function executeScenario(
     }
     // Matching ids are not enough: the same ids with bigger amounts would let
     // the two halves of a run together move more than the caps allow. A run
-    // with no recorded digest cannot prove it matches, so it is refused too (R-021).
+    // with no recorded digest cannot prove it matches, so it is refused too.
     const recorded = args.resume.meta[SCENARIO_DIGEST_KEY];
     if (args.scenarioDigest !== undefined && recorded !== args.scenarioDigest) {
       throw new Error(
@@ -96,8 +101,9 @@ export async function executeScenario(
           : `run ${args.resume.runId} was started from a different scenario, so it cannot be resumed`,
       );
     }
-    state = args.resume;
+    state = markInterrupted(args.resume, iso());
     deps.log(`resuming run ${state.runId} from ${state.updatedAt}`);
+    if (state !== args.resume) await deps.persist(state);
   } else {
     state = initRunState({
       runId,
@@ -110,7 +116,7 @@ export async function executeScenario(
     if (args.scenarioDigest !== undefined) {
       state = recordMeta(state, SCENARIO_DIGEST_KEY, args.scenarioDigest, iso());
     }
-    deps.persist(state);
+    await deps.persist(state);
   }
 
   if (scenario.webhook !== undefined && state.meta["webhook_id"] === undefined && !state.halted) {
@@ -118,7 +124,7 @@ export async function executeScenario(
       (args.webhookMode ?? "register") === "reuse-only"
         ? await reuseWebhook(scenario, deps, state, iso)
         : await registerWebhook(scenario, deps, state, iso);
-    deps.persist(state);
+    await deps.persist(state);
   }
 
   for (;;) {
@@ -128,7 +134,7 @@ export async function executeScenario(
     const step = byId.get(stepId);
     if (step === undefined) {
       state = haltRun(state, `step ${stepId} vanished from the scenario`, iso());
-      deps.persist(state);
+      await deps.persist(state);
       break;
     }
 
@@ -140,12 +146,12 @@ export async function executeScenario(
         { kind: "unknown", detail: `no handler is registered for step kind ${step.kind}` },
         iso(),
       );
-      deps.persist(state);
+      await deps.persist(state);
       break;
     }
 
     state = markStarted(state, stepId, iso());
-    deps.persist(state);
+    await deps.persist(state);
     deps.log(`step ${stepId} (${step.kind}) starting`);
 
     const outputs = new Map<string, StepOutputs>();
@@ -186,7 +192,7 @@ export async function executeScenario(
     }
 
     state = recordOutcome(state, stepId, outcome, iso());
-    deps.persist(state);
+    await deps.persist(state);
     deps.log(`step ${stepId} ${outcome.kind}: ${outcome.detail}`);
 
     if (state.halted) {

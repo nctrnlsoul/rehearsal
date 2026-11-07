@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "runId": "20261023231552-60ea96",
+  "scenarioName": "Small online shop: card order with webhook resend",
+  "currency": "USD",
+  "order": [
+    "order",
+    "resend-capture"
+  ],
+  "startedAt": "2026-10-23T23:15:52.697Z",
+  "updatedAt": "2026-10-23T23:17:47.257Z",
+  "halted": false,
+  "haltReason": null,
+  "meta": {
+    "webhook_id": "4DE52141J0303334X"
+  },
+  "steps": {
+    "order": {
+      "id": "order",
+      "kind": "card_order",
+      "status": "succeeded",
+      "detail": "captured USD 25.00 by card, no human step",
+      "ids": {
+        "order_id": "3Y2144672G186725Y",
+        "capture_id": "80644537PH409550V"
+      },
+      "attempts": 1,
+      "startedAt": "2026-10-23T23:15:53.389Z",
+      "finishedAt": "2026-10-23T23:15:56.706Z"
+    },
+    "resend-capture": {
+      "id": "resend-capture",
+      "kind": "resend_webhook",
+      "status": "succeeded",
+      "detail": "asked PayPal to redeliver PAYMENT.CAPTURE.COMPLETED WH-23242717T8452430B-4FP87531JX1278159 to webhook 4DE52141J0303334X",
+      "ids": {
+        "resent_event_id": "WH-23242717T8452430B-4FP87531JX1278159"
+      },
+      "attempts": 1,
+      "startedAt": "2026-10-23T23:15:56.710Z",
+      "finishedAt": "2026-10-23T23:17:47.257Z"
+    }
+  }
+}

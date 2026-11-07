@@ -1,8 +1,9 @@
 {
   "name": "rehearsal-console",
-  "version": "0.0.0",
+  "version": "0.6.1",
   "private": true,
-  "description": "REHEARSAL's web console. Stage A: replays of recorded runs and the judge gate, no live execution.",
+  "license": "MIT",
+  "description": "REHEARSAL's web console: replays of recorded runs for everyone, and live sandbox runs behind the judge passcode.",
   "scripts": {
     "dev": "next dev",
     "prebuild": "node scripts/fetch-fonts.mjs",
@@ -15,11 +16,15 @@
     "hash-passcode": "node scripts/hash-passcode.mjs"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.87",
+    "ai": "7.0.151",
     "next": "15.5.28",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "zod": "3.25.76"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "@types/node": "22.20.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

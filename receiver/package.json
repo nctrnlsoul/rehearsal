@@ -1,7 +1,8 @@
 {
   "name": "rehearsal-receiver",
-  "version": "0.0.0",
+  "version": "0.6.1",
   "private": true,
+  "license": "MIT",
   "description": "Tiny public webhook receiver for REHEARSAL. Records arrival times to Supabase and verifies PayPal signatures.",
   "scripts": {
     "dev": "next dev",

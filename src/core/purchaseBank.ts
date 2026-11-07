@@ -7,6 +7,9 @@
  * dispute. Pure: all transitions here, all file I/O in the adapter.
  */
 
+import type { Caps } from "./caps";
+import { fromMinor, toMinor } from "./money";
+
 export type PurchaseStatus =
   /** Order created, waiting for the human to approve it in a browser. */
   | "awaiting_approval"
@@ -61,6 +64,106 @@ function isDrawable(p: Purchase): boolean {
     p.buyerTransactionId !== null &&
     p.buyerTransactionId.trim() !== ""
   );
+}
+
+/**
+ * The per-step cap, applied to a banked purchase before its order exists, so
+ * "every write keyed and capped" holds for bank:add too. The amount must also
+ * be a plain amount in the caps' currency.
+ */
+export function checkPurchaseAmount(amount: string, currency: string, caps: Caps): BankResult<bigint> {
+  if (currency !== caps.currency) {
+    return { ok: false, error: `a banked purchase must be in ${caps.currency}, the caps' currency, not ${currency}` };
+  }
+  let minor: bigint;
+  try {
+    minor = toMinor(amount, currency);
+  } catch {
+    return { ok: false, error: `amount ${JSON.stringify(amount)} is not a plain amount in ${currency}` };
+  }
+  if (minor <= 0n) return { ok: false, error: "a banked purchase needs an amount above zero" };
+  if (minor > caps.maxStepAmountMinor) {
+    return {
+      ok: false,
+      error: `purchase of ${currency} ${fromMinor(minor, currency)} is over the per-step cap of ${currency} ${fromMinor(caps.maxStepAmountMinor, currency)}`,
+    };
+  }
+  return { ok: true, value: minor };
+}
+
+/** How far before the order a buyer transaction may be stamped and still be its payment: clock skew only. */
+const MATCH_SKEW_MS = 5 * 60 * 1000;
+/** Approval links lapse within hours, so a payment a day after its order is someone else's. */
+const MATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const minorOrNull = (value: string, currency: string): bigint | null => {
+  try {
+    return toMinor(value.replace(/^-/, ""), currency);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The buyer-side transaction that paid for a banked purchase, from rows of
+ * PayPal's Transaction Search. A match needs the same amount (as money, either
+ * sign), the same currency, and a time from the order's creation to a day
+ * after it; of those, the one closest in time wins. Amount alone matched
+ * another purchase of the same price, and a dispute against the wrong
+ * transaction tests nothing.
+ *
+ * `waiting` is every purchase still waiting for its transaction. A
+ * transaction belongs to the latest same-price order created before it, so a
+ * newer order's payment is never handed to an older order that is still
+ * waiting for its own. Anything unreadable matches nothing.
+ */
+export function matchBuyerTransaction(
+  purchase: Purchase,
+  rows: readonly unknown[],
+  taken: ReadonlySet<string>,
+  waiting: readonly Purchase[] = [],
+): { readonly id: string | null; readonly candidates: number } {
+  const none = { id: null, candidates: 0 };
+  const createdMs = Date.parse(purchase.createdAt);
+  const want = minorOrNull(purchase.amount, purchase.currency);
+  if (Number.isNaN(createdMs) || want === null) return none;
+  const field = (o: unknown, ...path: string[]): string | null => {
+    let cur: unknown = o;
+    for (const k of path) {
+      if (typeof cur !== "object" || cur === null) return null;
+      cur = (cur as Record<string, unknown>)[k];
+    }
+    return typeof cur === "string" && cur.trim() !== "" ? cur : null;
+  };
+  // Other waiting orders of the same price, by creation time.
+  const rivals = waiting
+    .filter((w) => w.orderId !== purchase.orderId && w.currency === purchase.currency && minorOrNull(w.amount, w.currency) === want)
+    .map((w) => Date.parse(w.createdAt))
+    .filter((ms) => !Number.isNaN(ms));
+  const candidates = rows
+    .map((r) => (typeof r === "object" && r !== null ? (r as Record<string, unknown>)["transaction_info"] : null))
+    .map((info) => {
+      const value = field(info, "transaction_amount", "value");
+      return {
+        id: field(info, "transaction_id"),
+        minor: value === null ? null : minorOrNull(value, purchase.currency),
+        currency: field(info, "transaction_amount", "currency_code"),
+        atMs: Date.parse(field(info, "transaction_initiation_date") ?? ""),
+      };
+    })
+    .filter(
+      (c): c is { id: string; minor: bigint; currency: string; atMs: number } =>
+        c.id !== null &&
+        !taken.has(c.id) &&
+        c.minor === want &&
+        c.currency === purchase.currency &&
+        !Number.isNaN(c.atMs) &&
+        c.atMs >= createdMs - MATCH_SKEW_MS &&
+        c.atMs <= createdMs + MATCH_WINDOW_MS &&
+        !rivals.some((r) => r > createdMs && r - MATCH_SKEW_MS <= c.atMs),
+    )
+    .sort((a, b) => Math.abs(a.atMs - createdMs) - Math.abs(b.atMs - createdMs));
+  return { id: candidates[0]?.id ?? null, candidates: candidates.length };
 }
 
 export function addPurchase(
@@ -176,5 +279,66 @@ export function claimPurchase(
       bank: replace(bank, oldest.orderId, { status: "used", usedByRunId: runId, usedAt: nowIso }),
       claimed: oldest,
     },
+  };
+}
+
+/** What a moved purchase is marked used by in the local bank. */
+export const MOVED_TO_HOSTED = "moved-to-hosted";
+
+/**
+ * Moves up to `count` drawable purchases out of the local bank, oldest first,
+ * for the hosted console's bank. Each is marked used HERE, before anything is
+ * written for the console: a move that never reaches the console burns a
+ * purchase (one human click), while a purchase in both banks could be
+ * disputed twice.
+ */
+export function exportForHosted(
+  bank: Bank,
+  count: number,
+  nowIso: string,
+): BankResult<{ bank: Bank; moved: Purchase[] }> {
+  if (!Number.isInteger(count) || count < 1) return { ok: false, error: "count must be a whole number of at least 1" };
+  const drawable = [...availablePurchases(bank)].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (drawable.length === 0) return { ok: false, error: "no purchase is ready to move: none is available with both ids" };
+  const moved = drawable.slice(0, count);
+  let next = bank;
+  for (const p of moved) next = replace(next, p.orderId, { status: "used", usedByRunId: MOVED_TO_HOSTED, usedAt: nowIso });
+  return { ok: true, value: { bank: next, moved } };
+}
+
+const SQL_ID = /^[A-Za-z0-9-]{1,128}$/;
+const SQL_AMOUNT = /^[0-9]{1,10}(\.[0-9]{1,2})?$/;
+const SQL_CURRENCY = /^[A-Z]{3}$/;
+
+/**
+ * The SQL that adds moved purchases to the console's bank. Generated text, so
+ * every value is checked against a strict shape first and anything else is
+ * refused, rather than escaped: an id is never a place for a quote.
+ */
+export function hostedInsertSql(moved: readonly Purchase[], nowIso: string): BankResult<string> {
+  const rows: string[] = [];
+  for (const p of moved) {
+    const values = [p.orderId, p.captureId ?? "", p.buyerTransactionId ?? ""];
+    if (!values.every((v) => SQL_ID.test(v))) return { ok: false, error: `order ${p.orderId.slice(0, 40)} has an id that is not plain letters, digits and dashes` };
+    if (!SQL_AMOUNT.test(p.amount) || !SQL_CURRENCY.test(p.currency)) return { ok: false, error: `order ${p.orderId} has an amount or currency of an unexpected shape` };
+    if (Number.isNaN(Date.parse(p.createdAt))) return { ok: false, error: `order ${p.orderId} has an unreadable creation time` };
+    rows.push(`  ('${values[0]}', '${values[1]}', '${values[2]}', '${p.amount}', '${p.currency}', '${new Date(p.createdAt).toISOString()}'::timestamptz)`);
+  }
+  if (rows.length === 0) return { ok: false, error: "nothing to write" };
+  return {
+    ok: true,
+    value: [
+      `-- Generated by rehearsal bank:export-hosted at ${nowIso}.`,
+      "-- Run in the SQL editor of the CONSOLE's own Supabase project, never the store's.",
+      "-- Safe to run twice: an order already in the console's bank is skipped.",
+      "-- These purchases are already marked used in the local bank, so only the console can draw them.",
+      "insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)",
+      "values",
+      `${rows.join(",\n")}`,
+      "on conflict (order_id) do nothing;",
+      "",
+      "select available, used from public.console_bank_counts();",
+      "",
+    ].join("\n"),
   };
 }

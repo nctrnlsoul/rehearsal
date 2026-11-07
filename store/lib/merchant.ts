@@ -201,6 +201,15 @@ export type DeliveryState = {
   refusalReasons: string[];
   /** Distinct cert hosts the deliveries named, so an original and a resend can be compared. */
   certHosts: string[];
+  /**
+   * What ties a delivery to the call that caused it. The distinct ids
+   * the store recorded as the order (the capture, or the event's resource id),
+   * and when each delivery was received, earliest first, as ISO timestamps.
+   * Verified deliveries only: a refused one carries whatever an anonymous
+   * sender claimed, and a forged early copy must not shorten a latency.
+   */
+  captureIds: string[];
+  receivedAt: string[];
 };
 
 /** Refusals that could not be tied to an event, such as a body that was not JSON. */
@@ -255,6 +264,7 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
   };
 
   const byEvent = new Map<string, DeliveryState>();
+  const receivedMs = new Map<string, number[]>();
   const unattributedRefusals: UnattributedRefusals = { count: 0, reasons: [] };
   for (const row of rows) {
     if (row.eventId === null) {
@@ -275,6 +285,8 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
         refused: 0,
         refusalReasons: [],
         certHosts: [],
+        captureIds: [],
+        receivedAt: [],
       };
     if (row.action === "fulfilled") current.fulfilled += 1;
     else if (row.action === "duplicate_ignored") current.duplicatesIgnored += 1;
@@ -290,7 +302,21 @@ export function summarise(rows: readonly StoreRow[]): StoreState {
     ) {
       current.certHosts.push(row.certHost);
     }
+    if (row.verified === true) {
+      if (row.captureId !== null && current.captureIds.length < MAX_REASONS && !current.captureIds.includes(row.captureId)) {
+        current.captureIds.push(row.captureId);
+      }
+      // 0 is what the reader gives an unreadable timestamp; it is no time at all.
+      if (row.receivedAtMs > 0) receivedMs.set(row.eventId, [...(receivedMs.get(row.eventId) ?? []), row.receivedAtMs]);
+    }
     byEvent.set(row.eventId, current);
+  }
+  // Rows arrive newest first; the earliest deliveries are the ones a call caused.
+  for (const [eventId, times] of receivedMs) {
+    byEvent.get(eventId)!.receivedAt = times
+      .sort((a, b) => a - b)
+      .slice(0, MAX_REASONS)
+      .map((ms) => new Date(ms).toISOString());
   }
 
   return {

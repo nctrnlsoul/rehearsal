@@ -145,7 +145,7 @@ export function reconcile(
     notes.push("at least one event failed signature verification");
   }
   if (matched.some((m) => m.verified === null)) {
-    notes.push("receiver did not verify signatures, so verification is unproven for these events");
+    notes.push("receiver could not check some signatures (no credentials, a stale transmission time, or a PayPal outage), so verification is unproven for these events");
   }
   if (uncounted > 0) {
     notes.push(

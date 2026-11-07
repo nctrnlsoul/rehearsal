@@ -85,8 +85,8 @@ describe("the PayPal token is fetched once and reused (M3)", () => {
 describe("forged requests cost one token, not one each (M3 probe)", () => {
   const signed = (i: number) =>
     new Headers({
-      "paypal-transmission-id": `T-${i}`,
-      "paypal-transmission-time": "2026-10-25T00:00:00Z",
+      "paypal-transmission-id": `69cd13f0-d67a-11e5-baa3-778b53f4ae${String(i).padStart(2, "0")}`,
+      "paypal-transmission-time": new Date().toISOString(),
       "paypal-transmission-sig": "forged",
       "paypal-auth-algo": "SHA256withRSA",
       "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/C",
@@ -108,7 +108,7 @@ describe("forged requests cost one token, not one each (M3 probe)", () => {
       REHEARSAL_STORE_WEBHOOK_ID: "WH-PINNED",
     };
     for (let i = 0; i < 10; i += 1) {
-      const out = await verifySignature(signed(i), { id: `WH-${i}` }, env, fetchImpl);
+      const out = await verifySignature(signed(i), JSON.stringify({ id: `WH-${i}` }), env, fetchImpl);
       expect(out.verified).toBe(false);
     }
     expect(calls.filter((c) => c === "/v1/oauth2/token")).toHaveLength(1);
@@ -126,8 +126,8 @@ describe("forged requests cost one token, not one each (M3 probe)", () => {
       return new Response("{}", { status: 401 });
     }) as typeof fetch;
     const env = { PAYPAL_SELLER_CLIENT_ID: "id", PAYPAL_SELLER_CLIENT_SECRET: "secret", REHEARSAL_STORE_WEBHOOK_ID: "WH" };
-    await verifySignature(signed(1), {}, env, fetchImpl);
-    await verifySignature(signed(2), {}, env, fetchImpl);
+    await verifySignature(signed(1), "{}", env, fetchImpl);
+    await verifySignature(signed(2), "{}", env, fetchImpl);
     expect(tokens).toBe(2);
   });
 });

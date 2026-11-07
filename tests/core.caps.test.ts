@@ -37,7 +37,20 @@ describe("checkCaps", () => {
     ]);
     const v = checkCaps(s);
     expect(v.some((x) => x.code === "step-amount-too-large")).toBe(true);
-    expect(v[0]!.message).toContain("payout item 2");
+    expect(v[0]!.message).toContain("payout batch of 2 items in step p1 is USD 901.00");
+  });
+
+  // The cap is per step: two items under it can still move more than it in one step.
+  it("counts a payout batch's items together against the per-step cap", () => {
+    const s = scenarioWith([
+      { id: "p1", kind: "payout_batch", items: [{ amount: "300.00" }, { amount: "300.00", unclaimed: true }] },
+    ]);
+    const v = checkCaps(s);
+    expect(v.map((x) => x.code)).toEqual(["step-amount-too-large"]);
+    expect(v[0]!.stepId).toBe("p1");
+    expect(v[0]!.message).toBe("payout batch of 2 items in step p1 is USD 600.00, over the per-step cap of USD 500.00");
+    // Exactly the cap in total still passes.
+    expect(codes(scenarioWith([{ id: "p1", kind: "payout_batch", items: [{ amount: "250.00" }, { amount: "250.00" }] }]))).toEqual([]);
   });
 
   it("rejects a run whose total exceeds the cap even when each step is fine", () => {

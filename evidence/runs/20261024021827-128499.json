@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "runId": "20261024021827-128499",
+  "scenarioName": "Small online shop sandbox test",
+  "currency": "USD",
+  "order": [
+    "order",
+    "refund-partial",
+    "refund-second"
+  ],
+  "startedAt": "2026-10-24T02:18:27.134Z",
+  "updatedAt": "2026-10-24T02:18:38.058Z",
+  "halted": false,
+  "haltReason": null,
+  "meta": {},
+  "steps": {
+    "order": {
+      "id": "order",
+      "kind": "card_order",
+      "status": "succeeded",
+      "detail": "captured USD 40.00 by card, no human step",
+      "ids": {
+        "order_id": "8SG7852158758521J",
+        "capture_id": "4LS26145HT811931B"
+      },
+      "attempts": 1,
+      "startedAt": "2026-10-24T02:18:27.135Z",
+      "finishedAt": "2026-10-24T02:18:32.106Z"
+    },
+    "refund-partial": {
+      "id": "refund-partial",
+      "kind": "refund",
+      "status": "succeeded",
+      "detail": "refunded USD 20.00; capture confirms PARTIALLY_REFUNDED",
+      "ids": {
+        "refund_id": "4NC13024ET313764H"
+      },
+      "attempts": 1,
+      "startedAt": "2026-10-24T02:18:32.108Z",
+      "finishedAt": "2026-10-24T02:18:35.470Z"
+    },
+    "refund-second": {
+      "id": "refund-second",
+      "kind": "refund",
+      "status": "succeeded",
+      "detail": "refunded USD 20.00; capture confirms REFUNDED",
+      "ids": {
+        "refund_id": "2KL70223P8061435W"
+      },
+      "attempts": 1,
+      "startedAt": "2026-10-24T02:18:35.472Z",
+      "finishedAt": "2026-10-24T02:18:38.058Z"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { StoreDbError, createDb, explainDbStatus, readConfig } from "../../../../lib/db";
+import { StoreDbError, createDb, explainDbStatus, readConfig, readWindow } from "../../../../lib/db";
 import { DEDUPE_BY_EVENT_ID, summarise } from "../../../../lib/merchant";
 
 /**
@@ -24,14 +24,14 @@ function secretsMatch(presented: string, expected: string): boolean {
 }
 
 export async function GET(req: Request): Promise<Response> {
-  const expected = process.env["REHEARSAL_STORE_TOKEN"];
+  const expected = (process.env["REHEARSAL_STORE_TOKEN"] ?? "").trim();
   // Fail closed: an unset token locks the endpoint rather than opening it.
-  if (expected === undefined || expected.trim() === "") {
+  if (expected === "") {
     return Response.json({ error: "store not configured" }, { status: 503 });
   }
   // A short shared secret can be guessed, so it locks the endpoint too (audit
   // 2026-10-25 L5). The log names the length rule, never the value.
-  if (expected.trim().length < MIN_TOKEN_CHARS) {
+  if (expected.length < MIN_TOKEN_CHARS) {
     console.error(`REHEARSAL_STORE_TOKEN is shorter than ${MIN_TOKEN_CHARS} characters`);
     return Response.json({ error: "store not configured" }, { status: 503 });
   }
@@ -67,9 +67,14 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   try {
-    const rows = await createDb(config).rows(sinceIso === undefined ? {} : { sinceIso });
+    const window = await readWindow(createDb(config), sinceIso);
     return Response.json(
-      { ...summarise(rows), dedupeEnabled: DEDUPE_BY_EVENT_ID },
+      {
+        ...summarise(window.rows),
+        truncated: window.truncated,
+        refusalsTruncated: window.refusalsTruncated,
+        dedupeEnabled: DEDUPE_BY_EVENT_ID,
+      },
       { status: 200, headers: { "cache-control": "no-store" } },
     );
   } catch (e) {

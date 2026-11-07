@@ -1,5 +1,5 @@
 import {
-  type AttemptLimiter,
+  type AttemptStore,
   PASSCODE_HASH_VAR,
   PASSCODE_MAX_CHARS,
   clientIp,
@@ -20,7 +20,8 @@ import {
 
 export type GateDeps = {
   readonly env: Record<string, string | undefined>;
-  readonly limiter: AttemptLimiter;
+  /** Where wrong tries are counted. Null when the console has no database: the gate then stays shut. */
+  readonly attempts: AttemptStore | null;
   readonly now: () => number;
   /** Injected only so a test can prove which inputs ever reach the hash. */
   readonly verify?: (input: string, hash: PasscodeHash) => boolean;
@@ -74,11 +75,23 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   const secret = sessionSecret(deps.env);
   if (hash === null || secret === null) return seeOther("/gate?e=closed");
 
-  // Refused before the passcode is hashed, so a locked-out caller costs no
-  // scrypt work. Only the caller's own count refuses: past the global ceiling
-  // the right passcode still opens the gate (R-036).
+  // No counter means no lockout, so the gate stays shut rather than taking
+  // guesses it cannot count.
+  const attempts = deps.attempts;
+  if (attempts === null) return seeOther("/gate?e=unavailable");
+
+  // The try takes its slot before the passcode is hashed, so a locked-out
+  // caller costs no scrypt work and parallel guesses cannot share one count.
+  // Only the caller's own count refuses: past the global ceiling the right
+  // passcode still opens the gate.
   const ip = clientIp(req.headers);
-  const check = deps.limiter.check(ip);
+  let check;
+  try {
+    check = await attempts.take(ip);
+  } catch (e) {
+    console.error(`gate: attempt count unreadable (${e instanceof Error ? e.name : "error"})`);
+    return seeOther("/gate?e=unavailable");
+  }
   if (!check.allowed) {
     const minutes = Math.max(1, Math.ceil(check.retryAfterS / 60));
     return seeOther(`/gate?e=locked&m=${minutes}`);
@@ -89,12 +102,22 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   // Checked before hashing: scrypt never runs on an empty or oversized input.
   const ok = passcode !== "" && passcode.length <= PASSCODE_MAX_CHARS && verify(passcode, hash);
   if (!ok) {
-    if (deps.limiter.recordFailure(ip)) {
-      console.warn("gate: wrong passcodes from all addresses reached the global ceiling this window");
+    try {
+      if (await attempts.recordFailure()) {
+        console.warn("gate: wrong passcodes from all addresses reached the global ceiling this window");
+      }
+    } catch (e) {
+      // Only the global log missed it; this address's try was taken above.
+      console.error(`gate: global wrong-try count failed (${e instanceof Error ? e.name : "error"})`);
     }
-    return seeOther(`/gate?e=wrong&left=${Math.max(0, check.ipLeft - 1)}`);
+    return seeOther(`/gate?e=wrong&left=${Math.max(0, check.ipLeft)}`);
   }
 
-  deps.limiter.recordSuccess(ip);
+  try {
+    await attempts.release(ip, check.since);
+  } catch (e) {
+    // The passcode was right; a slot not given back only means one fewer try later, never more.
+    console.error(`gate: slot could not be given back (${e instanceof Error ? e.name : "error"})`);
+  }
   return seeOther("/live", { "Set-Cookie": sessionCookieHeader(signSession(secret, deps.now())) });
 }

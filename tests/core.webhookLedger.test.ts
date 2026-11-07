@@ -176,3 +176,12 @@ describe("arrivalsOf counts a resend under the same rule", () => {
     expect(arrivalsOf(rows, "a", false)).toHaveLength(3);
   });
 });
+
+// "Unchecked" now also means a PayPal outage or a stale transmission time, not
+// only a receiver with no credentials, and the note must not say otherwise.
+describe("the note on unchecked signatures", () => {
+  it("names every reason a signature goes unchecked", () => {
+    const r = reconcile([exp("a")], [{ ...arr("a", T + 50), verified: null }], { ledgerVerified: true });
+    expect(r.notes.join("\n")).toContain("no credentials, a stale transmission time, or a PayPal outage");
+  });
+});

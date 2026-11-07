@@ -3,10 +3,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { PGlite } from "@electric-sql/pglite";
 import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RUNS } from "../lib/replays";
 import { hashFor } from "../tests/helpers";
+import { TEST_DB_ENV } from "../tests/postgrest";
+import { FAKE_SUPABASE_HOST, startFakeSupabase } from "./fakeSupabase";
 
 /**
  * Every page, as `next build` produced it, in real Chromium under the real
@@ -23,6 +27,7 @@ const PASSCODE = `e2e-${randomBytes(12).toString("hex")}`;
 
 let server: ChildProcess;
 let base: string;
+let db: Awaited<ReturnType<typeof startFakeSupabase>>;
 let browser: Browser;
 let serverLog = "";
 
@@ -41,6 +46,7 @@ beforeAll(async () => {
   if (!existsSync(join(ROOT, ".next", "BUILD_ID"))) throw new Error("No production build: run `npm run build` first.");
   const port = await freePort();
   base = `http://localhost:${port}`;
+  db = await startFakeSupabase();
   server = spawn(process.execPath, [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(port), "-H", "localhost"], {
     cwd: ROOT,
     env: {
@@ -49,6 +55,28 @@ beforeAll(async () => {
       NODE_ENV: "production",
       CONSOLE_PASSCODE_HASH: hashFor(PASSCODE),
       CONSOLE_SESSION_SECRET: randomBytes(32).toString("hex"),
+      // The console's database is a local PGlite with the committed migrations
+      // (e2e/fakeSupabase.ts); the app still sees an https supabase.co URL.
+      SUPABASE_URL: `https://${FAKE_SUPABASE_HOST}`,
+      SUPABASE_SERVICE_ROLE_KEY: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY,
+      E2E_SUPABASE_REDIRECT: `http://localhost:${db.port}`,
+      NODE_OPTIONS: `--import ${pathToFileURL(join(__dirname, "redirect-supabase.mjs")).href}`,
+      CONSOLE_LIVE_RUNS: "on",
+      REHEARSAL_STORE_ORIGIN: "https://rehearsal-store.vercel.app",
+      // The machine running this may hold real values for any of these; the
+      // server under test must not inherit them. A second event origin would
+      // also, correctly, stop every live route.
+      REHEARSAL_RECEIVER_ORIGIN: "",
+      REHEARSAL_EVENT_ORIGINS: "",
+      REHEARSAL_STORE_TOKEN: "",
+      REHEARSAL_RECEIVER_TOKEN: "",
+      REHEARSAL_STORE_WEBHOOK_ID: "",
+      // No PayPal or model keys: nothing in this suite can reach either.
+      PAYPAL_SELLER_CLIENT_ID: "",
+      PAYPAL_SELLER_CLIENT_SECRET: "",
+      PAYPAL_BUYER_CLIENT_ID: "",
+      PAYPAL_BUYER_CLIENT_SECRET: "",
+      ANTHROPIC_API_KEY: "",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -71,6 +99,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   server?.kill();
+  await db?.close();
 });
 
 type Watch = { problems: string[] };
@@ -148,12 +177,12 @@ describe("the gate, submitted by a real browser", () => {
     const { ctx, page, watch } = await watched({ javaScriptEnabled: false });
     await page.goto(base + "/gate");
     await page.fill("#passcode", "not the passcode");
-    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d$/), page.click("button[type=submit]")]);
+    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d+$/), page.click("button[type=submit]")]);
     await expect(page.locator("#pass-state").textContent()).resolves.toContain("That passcode did not match");
 
     await page.fill("#passcode", PASSCODE);
     await Promise.all([page.waitForURL(`${base}/live`), page.click("button[type=submit]")]);
-    await expect(page.locator("h1").textContent()).resolves.toBe("Live runs arrive in Stage B.");
+    await expect(page.locator("h1").textContent()).resolves.toBe("Run a plan in PayPal's sandbox.");
     expect((await ctx.cookies()).map((c) => c.name)).toContain("__Host-rehearsal_session");
     expect(watch.problems).toEqual([]);
     await ctx.close();
@@ -164,7 +193,7 @@ describe("the gate, submitted by a real browser", () => {
     await page.goto(base + "/gate");
     await hydrated(page);
     await page.fill("#passcode", "still not the passcode");
-    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d$/), page.click("button[type=submit]")]);
+    await Promise.all([page.waitForURL(/\/gate\?e=wrong&left=\d+$/), page.click("button[type=submit]")]);
     await hydrated(page);
     await expect(page.locator("#pass-state").textContent()).resolves.toMatch(/That passcode did not match.*left this hour/);
     expect(watch.problems).toEqual([]);
@@ -177,7 +206,7 @@ describe("the gate, submitted by a real browser", () => {
     await page.fill("#passcode", PASSCODE);
     await Promise.all([page.waitForURL(`${base}/live`), page.click("button[type=submit]")]);
     await expectCleanPage(page, watch, "/live", 200);
-    await expect(page.locator("h1").textContent()).resolves.toBe("Live runs arrive in Stage B.");
+    await expect(page.locator("h1").textContent()).resolves.toBe("Run a plan in PayPal's sandbox.");
     await ctx.close();
   });
 
@@ -226,6 +255,220 @@ describe("maker's mark", () => {
     // PNG IHDR: width and height, big-endian, at bytes 16 and 20.
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([64, 64]);
     expect((await fetch(base + "/icon.svg")).status).toBe(404);
+    await ctx.close();
+  });
+});
+
+// ---------------------------------------------------------------- Stage B, past the gate
+
+const SHOTS = process.env["E2E_SCREENSHOT_DIR"];
+
+async function unlocked(viewport?: { width: number; height: number }): Promise<{ ctx: BrowserContext; page: Page; watch: Watch }> {
+  const w = await watched();
+  if (viewport !== undefined) await w.page.setViewportSize(viewport);
+  await w.page.goto(base + "/gate");
+  await w.page.fill("#passcode", PASSCODE);
+  await Promise.all([w.page.waitForURL(`${base}/live`), w.page.click("button[type=submit]")]);
+  return w;
+}
+
+const iso = (offsetS: number) => new Date(Date.now() + offsetS * 1000).toISOString();
+
+/** A run written straight into the console's database, as the worker would have left it. */
+async function seedRun(pg: PGlite, id: string, status: string, events: Array<{ s: number; kind: string; step?: string; data?: unknown }>, opts: { startedS?: number; heartbeatS?: number; reason?: string } = {}) {
+  const started = opts.startedS ?? -120;
+  await pg.query(
+    `insert into public.console_runs (id, kind, plan_source, plan_id, scenario_sha256, session_hash, ip_hash, status, halt_reason, created_at, started_at, heartbeat_at, finished_at)
+     values ($1, 'scenario', 'recorded', 'plan-e2e', $2, $3, $3, $4, $5, $6, $6, $7, $8)`,
+    [id, "a".repeat(64), "b".repeat(64), status, opts.reason ?? null, iso(started), iso(opts.heartbeatS ?? -1), ["complete", "halted", "abandoned", "failed"].includes(status) ? iso(-1) : null],
+  );
+  for (const e of events) {
+    await pg.query("insert into public.console_run_events (run_id, at, kind, step_id, data) values ($1, $2, $3, $4, $5::jsonb)", [
+      id,
+      iso(started + e.s),
+      e.kind,
+      e.step ?? null,
+      JSON.stringify(e.data ?? {}),
+    ]);
+  }
+}
+
+const orderEvents = (capture: string, delivered: boolean) => [
+  { s: 0, kind: "run_started" },
+  { s: 1, kind: "step_started", step: "order", data: { kind: "card_order", attempt: 1 } },
+  { s: 4, kind: "step_finished", step: "order", data: { kind: "card_order", status: "succeeded", detail: "captured USD 25.00 by card", ids: { order_id: "5O190127TN364715T", capture_id: capture } } },
+  ...(delivered
+    ? [
+        { s: 19, kind: "note", data: { order: { capture_id: capture, fulfilled: 1, refunds: 0, disputes: 0, duplicates_ignored: 0 } } },
+        { s: 19, kind: "delivery", data: { event_id: "WH-E2E-1", event_type: "PAYMENT.CAPTURE.COMPLETED", deliveries: 1, fulfilled: 1, duplicates_ignored: 0, other: 0, refused: 0, cert_hosts: ["api.sandbox.paypal.com"] } },
+      ]
+    : []),
+];
+
+/** Elements whose drawn color is the accent. R-026: spent on the live connector only. */
+const accentElements = (page: Page) =>
+  page.evaluate(() => {
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim().toLowerCase();
+    const probe = document.createElement("div");
+    probe.style.color = accent;
+    document.body.appendChild(probe);
+    const rgb = getComputedStyle(probe).color;
+    probe.remove();
+    const hits: string[] = [];
+    for (const el of document.querySelectorAll("main *")) {
+      const cs = getComputedStyle(el);
+      if ([cs.color, cs.stroke, cs.fill, cs.backgroundColor].includes(rgb) && el.closest("[aria-hidden=true], svg, .btn-primary") !== null) hits.push(el.tagName.toLowerCase() + "." + (el.getAttribute("class") ?? ""));
+    }
+    return hits;
+  });
+
+const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+describe("the live builder, past the gate", () => {
+  it("hydrates, passes Tiny Bakery (R-043), and blocks the dispute plan on an empty bank", async () => {
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live", 200);
+    await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("487 s"));
+    await expect(page.locator(".dry").innerText()).resolves.toContain("PayPal still delivers this account's events to every webhook registered on it");
+    await expect(page.locator(".dry").innerText()).resolves.not.toContain("per-step cap");
+    await expect(page.locator(".go .btn-primary").isDisabled()).resolves.toBe(false);
+    await page.locator(".plan-option", { hasText: "Open Dispute" }).click();
+    await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("BLOCKED"));
+    await expect(page.locator(".go .btn-primary").isDisabled()).resolves.toBe(true);
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-builder-1440.png"), fullPage: true });
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+
+  it("enables Run for the dispute plan once the bank holds a purchase, bound to the plan's digest", async () => {
+    await db.pg.exec(`insert into public.console_purchases (order_id, capture_id, buyer_transaction_id, amount, currency, created_at)
+                      values ('O-E2E-1', 'C-E2E-1', 'T-E2E-1', '25.00', 'USD', now())`);
+    const { ctx, page, watch } = await unlocked({ width: 390, height: 844 });
+    await page.locator(".plan-option", { hasText: "Open Dispute" }).click();
+    await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("draws 1 of 1"));
+    await expect(page.locator(".go .btn-primary").isEnabled()).resolves.toBe(true);
+    await expect(page.locator("#go-note").innerText()).resolves.toMatch(/digest [0-9a-f]{12}/);
+    expect(await noSideScroll(page)).toBe(true);
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-builder-390.png"), fullPage: true });
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+});
+
+describe("the live timeline, past the gate", () => {
+  it("draws a complete run: the order joined to its capture, the time on the connector, the delivery in the ledger", async () => {
+    await seedRun(db.pg, "20261025180000-e2e001", "complete", [...orderEvents("CAP-E2E-1", true), { s: 30, kind: "deliveries_wait_started", data: { seconds: 90 } }, { s: 119, kind: "deliveries_wait_ended", data: { events_seen: 1 } }, { s: 119, kind: "run_finished", data: { status: "complete" } }]);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const { ctx, page, watch } = await unlocked(viewport);
+      await expectCleanPage(page, watch, "/live/20261025180000-e2e001", 200);
+      await page.waitForSelector("path.link.verified");
+      await expect(page.locator(".live-state .headline").innerText()).resolves.toContain("Complete");
+      expect(await page.locator("path.link").count()).toBe(1);
+      await expect(page.locator("g.pill text").first().textContent()).resolves.toBe("within 15 s");
+      await expect(page.locator(".ledger").innerText()).resolves.toContain("WH-E2E-1");
+      // Nothing is live any more, so the accent has left the board.
+      expect(await accentElements(page)).toEqual([]);
+      expect(await noSideScroll(page)).toBe(true);
+      if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, `live-complete-${viewport.width}.png`), fullPage: true });
+      await ctx.close();
+    }
+  });
+
+  // R-044: with the store's own receive time the connector carries an exact latency.
+  it("draws an exact pair: the store's receive time on the card and an exact latency on the connector", async () => {
+    await seedRun(db.pg, "20261025180000-e2e005", "complete", [
+      { s: 0, kind: "run_started" },
+      { s: 1, kind: "step_started", step: "order", data: { kind: "card_order", attempt: 1 } },
+      { s: 5, kind: "step_finished", step: "order", data: { kind: "card_order", status: "succeeded", detail: "captured USD 25.00 by card", finished_at: iso(-120 + 4.2), ids: { capture_id: "CAP-E2E-4" } } },
+      { s: 15, kind: "delivery", data: { event_id: "WH-E2E-4", event_type: "PAYMENT.CAPTURE.COMPLETED", deliveries: 1, fulfilled: 1, duplicates_ignored: 0, other: 0, refused: 0, cert_hosts: ["api.sandbox.paypal.com"], capture_ids: ["CAP-E2E-4"], received_at: [iso(-120 + 11.6)] } },
+      { s: 119, kind: "run_finished", data: { status: "complete" } },
+    ]);
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e005", 200);
+    await page.waitForSelector("path.link.verified");
+    await expect(page.locator("g.pill text").first().textContent()).resolves.toBe("7 s");
+    await expect(page.locator(".delivery .env-head").first().innerText()).resolves.toContain("received");
+    await expect(page.locator(".ledger tbody tr").first().innerText()).resolves.toContain("order");
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-exact-1440.png"), fullPage: true });
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+
+  it("draws a waiting delivery as the one live, accented connector, counting up", async () => {
+    await seedRun(db.pg, "20261025180000-e2e002", "running", orderEvents("CAP-E2E-2", false), { startedS: -20 });
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e002", 200);
+    await page.waitForSelector("path.link.waiting");
+    await expect(page.locator(".delivery.waiting").innerText()).resolves.toContain("waiting on PayPal");
+    const hits = await accentElements(page);
+    expect(hits.length).toBeGreaterThan(0);
+    for (const h of hits) expect(h).toMatch(/^(path\.link waiting|circle\.anchor live|rect\.|text\.)/);
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-waiting-1440.png"), fullPage: true });
+    await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261025180000-e2e002'");
+    await ctx.close();
+  });
+
+  it("says plainly when the server died with a step in flight, and that nothing will retry it", async () => {
+    await seedRun(db.pg, "20261025180000-e2e003", "abandoned", [{ s: 0, kind: "run_started" }, { s: 2, kind: "step_started", step: "dispute", data: { kind: "open_dispute", attempt: 1 } }], {
+      reason: "the server running this stopped; a step it had started may have written to PayPal",
+    });
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e003", 200);
+    await page.waitForSelector(".call");
+    await expect(page.locator(".live-state").innerText()).resolves.toContain("The server running this stopped.");
+    await expect(page.locator(".call").innerText()).resolves.toMatch(/never confirmed[\s\S]*may have written to PayPal[\s\S]*Nothing here will retry it/);
+    await ctx.close();
+  });
+
+  it("answers an unknown run with a page that says so, and a malformed id with a 404", async () => {
+    const { ctx, page, watch } = await unlocked();
+    const res = await page.goto(base + "/live/20261025180000-ffffff", { waitUntil: "load" });
+    expect(res?.status()).toBe(200);
+    await hydrated(page);
+    await page.waitForSelector(".terminal");
+    await expect(page.locator(".terminal h2").innerText()).resolves.toBe("No such run");
+    // The poll's own 404 is the answer, and Chrome logs it; nothing else may appear.
+    const expected = `console.error: Failed to load resource: the server responded with a status of 404 (Not Found) @ ${base}/api/runs/20261025180000-ffffff?after=0`;
+    expect(watch.problems.filter((p) => p !== expected)).toEqual([]);
+    const bad = await page.goto(base + "/live/not-a-run");
+    expect(bad?.status()).toBe(404);
+    await ctx.close();
+  });
+
+  it("sends anyone without a session to the gate", async () => {
+    const { ctx, page } = await watched();
+    await page.goto(base + "/live/20261025180000-e2e001");
+    expect(page.url()).toBe(base + "/gate");
+    await ctx.close();
+  });
+});
+
+describe("the hosted finder, past the gate", () => {
+  it("lists the four hosted classes and enables Run this class", async () => {
+    const { ctx, page, watch } = await unlocked();
+    await page.getByRole("radio", { name: "Find an edge case" }).click();
+    await expect(page.locator(".plan-option").count()).resolves.toBe(4);
+    await expect(page.locator(".go .btn-primary").innerText()).resolves.toBe("Run this class");
+    await expect(page.locator(".go .btn-primary").isEnabled()).resolves.toBe(true);
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+
+  it("shows a finder run's verdict with its evidence, as the lab report does", async () => {
+    await db.pg.query(
+      `insert into public.console_runs (id, kind, plan_source, plan_id, scenario_sha256, session_hash, ip_hash, status, created_at, started_at, heartbeat_at, finished_at)
+       values ('20261025180000-e2e004', 'finder', 'finder', 'overdue-invoice', null, $1, $1, 'complete', now(), now(), now(), now())`,
+      ["b".repeat(64)],
+    );
+    await db.pg.query(
+      `insert into public.console_run_events (run_id, kind, data) values ('20261025180000-e2e004', 'note', $1::jsonb)`,
+      [JSON.stringify({ finding: { class_id: "overdue-invoice", verdict: "ok", title: "An invoice already past its due date", expected: "the invoice to read as overdue", actual: "sent; PayPal reads it as OVERDUE", likely_fix: "none needed", skipped: null } })],
+    );
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e004", 200);
+    await page.waitForSelector(".finding");
+    await expect(page.locator(".finding").innerText()).resolves.toMatch(/OK[\s\S]*An invoice already past its due date[\s\S]*Observed[\s\S]*OVERDUE/);
+    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-finder-1440.png"), fullPage: true });
     await ctx.close();
   });
 });

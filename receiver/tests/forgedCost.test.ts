@@ -53,8 +53,8 @@ afterEach(() => {
 });
 
 const ALL = {
-  "paypal-transmission-id": "T-1",
-  "paypal-transmission-time": "2026-10-25T00:00:00Z",
+  "paypal-transmission-id": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
+  "paypal-transmission-time": new Date().toISOString(),
   "paypal-transmission-sig": "forged",
   "paypal-auth-algo": "SHA256withRSA",
   "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/C",
@@ -86,7 +86,7 @@ describe("a forged delivery costs no PayPal call unless it carries all five head
   });
 
   it("ten forged deliveries with every header make one token call and ten verify calls", async () => {
-    for (let i = 0; i < 10; i += 1) await post({ ...ALL, "paypal-transmission-id": `T-${i}` });
+    for (let i = 0; i < 10; i += 1) await post({ ...ALL, "paypal-transmission-id": `69cd13f0-d67a-11e5-baa3-778b53f4ae${String(i).padStart(2, "0")}` });
     expect(paypal.filter((p) => p === "/v1/oauth2/token")).toHaveLength(1);
     expect(paypal.filter((p) => p === "/v1/notifications/verify-webhook-signature")).toHaveLength(10);
     expect(rows.every((r) => r["verified"] === false)).toBe(true);

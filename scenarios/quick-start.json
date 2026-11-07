@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "name": "Quick start: a card order, a partial refund and an overdue invoice",
+  "profile": {
+    "name": "Ember & Wick",
+    "description": "A small candle shop that takes card orders and invoices wholesale buyers.",
+    "country": "US"
+  },
+  "currency": "USD",
+  "steps": [
+    { "id": "order", "kind": "card_order", "label": "Three jar candles, card checkout", "amount": "54.00" },
+    {
+      "id": "one-jar-broken",
+      "kind": "refund",
+      "label": "One jar arrived broken, refund a third",
+      "from": "order",
+      "mode": "partial",
+      "basisPoints": 3333,
+      "needs": ["order"]
+    },
+    { "id": "wholesale-invoice", "kind": "invoice_create", "label": "Wholesale order, already past due", "amount": "120.00", "dueInDays": -7 },
+    { "id": "send-invoice", "kind": "invoice_send", "from": "wholesale-invoice", "needs": ["wholesale-invoice"] }
+  ]
+}

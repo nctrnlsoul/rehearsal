@@ -28,8 +28,12 @@ import {
   addPurchase,
   attachTransactionId,
   availablePurchases,
+  checkPurchaseAmount,
   confirmCapture,
+  exportForHosted,
+  hostedInsertSql,
   markExpired,
+  matchBuyerTransaction,
 } from "../src/core/purchaseBank";
 import { assertAllowedEventTarget, webhookHandlerUrl } from "../src/core/eventTarget";
 import { finderReportLines, runFinder } from "../src/ai/finder";
@@ -102,7 +106,7 @@ function cliCaps(): Caps {
     return capsFromEnv(process.env);
   } catch {
     console.error(
-      "a cap variable (REHEARSAL_MAX_STEP_AMOUNT, REHEARSAL_MAX_RUN_TOTAL, REHEARSAL_MAX_STEPS or REHEARSAL_MAX_DISPUTES) is malformed, so nothing will run. Fix it in the Windows environment variable screen.",
+      "a cap variable (REHEARSAL_MAX_STEP_AMOUNT, REHEARSAL_MAX_RUN_TOTAL, REHEARSAL_MAX_STEPS or REHEARSAL_MAX_DISPUTES) is malformed, so nothing will run. Fix it where your environment variables are set.",
     );
     process.exit(1);
   }
@@ -359,6 +363,12 @@ async function bankAdd(rest: string[]): Promise<void> {
   const flags = args(rest);
   const amount = flags["amount"] ?? "88.00";
   const currency = flags["currency"] ?? "USD";
+  // Checked before any client exists, so an over-cap purchase never reaches PayPal.
+  const capped = checkPurchaseAmount(amount, currency, cliCaps());
+  if (!capped.ok) {
+    console.error(`${capped.error}, so no order was created`);
+    process.exit(1);
+  }
   const store = bankStore();
 
   const seller = client("seller");
@@ -373,7 +383,7 @@ async function bankAdd(rest: string[]): Promise<void> {
 
   const orderId = pick(res.body, ["id"]);
   if (orderId === null) {
-    console.error(`could not create the order: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`);
+    console.error(`could not create the order: http ${res.status}, ${errorSummary(res.body, res.debugId)}`);
     process.exit(1);
   }
 
@@ -471,7 +481,7 @@ async function bankConfirm(): Promise<void> {
       });
       captureId = pick(cap.body, ["purchase_units", 0, "payments", "captures", 0, "id"]);
       if (captureId === null) {
-        console.log(`  capture failed: http ${cap.status}, ${errorSummary(cap.body, cap.bodyPreview)}`);
+        console.log(`  capture failed: http ${cap.status}, ${errorSummary(cap.body, cap.debugId)}`);
         continue;
       }
       console.log(`  captured ${captureId}`);
@@ -502,7 +512,7 @@ async function bankConfirm(): Promise<void> {
     if (res.status !== 200) {
       console.log("");
       console.log(
-        `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.bodyPreview)}`,
+        `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.debugId)}`,
       );
       console.log("Enable Transaction Search on the rehearsal-buyer app, or supply ids by hand.");
     } else {
@@ -513,43 +523,29 @@ async function bankConfirm(): Promise<void> {
       );
 
       for (const purchase of stillWaiting) {
-        const candidates = rows
-          .map((r) => (r as Record<string, unknown>)["transaction_info"])
-          .map((info) => ({
-            id: pick(info, ["transaction_id"]),
-            value: pick(info, ["transaction_amount", "value"]),
-            at: pick(info, ["transaction_initiation_date"]) ?? "",
-          }))
-          .filter(
-            (c) =>
-              c.id !== null &&
-              c.value !== null &&
-              c.value.replace("-", "") === purchase.amount &&
-              !alreadyBanked.has(c.id),
-          )
-          .sort((a, b) => b.at.localeCompare(a.at));
+        const waiting = bank.purchases.filter((p) => p.status === "awaiting_transaction_id");
+        const match = matchBuyerTransaction(purchase, rows, alreadyBanked, waiting);
 
-        if (candidates.length === 0) {
+        if (match.id === null) {
           console.log(
             `order ${purchase.orderId}: no buyer transaction matching ${purchase.currency} ${purchase.amount} is visible yet. Transaction Search can lag up to three hours; run bank:confirm again later.`,
           );
           continue;
         }
-        const chosen = candidates[0]!;
-        if (candidates.length > 1) {
+        if (match.candidates > 1) {
           console.log(
-            `order ${purchase.orderId}: ${candidates.length} transactions match that amount, taking the most recent (${chosen.id})`,
+            `order ${purchase.orderId}: ${match.candidates} transactions match that amount and currency, taking the one closest to the order's creation (${match.id})`,
           );
         }
-        const attached = attachTransactionId(bank, purchase.orderId, chosen.id!);
+        const attached = attachTransactionId(bank, purchase.orderId, match.id);
         if (!attached.ok) {
           console.log(`  ${attached.error}`);
           continue;
         }
-        alreadyBanked.add(chosen.id!);
+        alreadyBanked.add(match.id);
         bank = attached.value;
         store.write(bank);
-        console.log(`order ${purchase.orderId}: buyer transaction ${chosen.id} recorded, now available`);
+        console.log(`order ${purchase.orderId}: buyer transaction ${match.id} recorded, now available`);
       }
     }
   }
@@ -583,6 +579,43 @@ function bankSetTxn(rest: string[]): void {
   bankList();
 }
 
+/**
+ * Moves ready purchases to the hosted console's bank (Stage B). Writes a SQL
+ * file to paste into the CONSOLE's Supabase SQL editor, rather than calling
+ * that database, so its service key never has to live on this machine. The
+ * local bank is written first, with the moved purchases marked used: if the
+ * file is never run they are burned, but they can never be disputed from both
+ * banks.
+ */
+function bankExportHosted(rest: string[]): void {
+  const flags = args(rest);
+  const raw = flags["count"] ?? "1";
+  if (!/^\d+$/.test(raw)) {
+    console.error("usage: rehearsal bank:export-hosted [--count 1] [--out bank/hosted-<time>.sql]");
+    process.exit(1);
+  }
+  const nowIso = new Date().toISOString();
+  const store = bankStore();
+  const moved = exportForHosted(store.read(), Number(raw), nowIso);
+  if (!moved.ok) {
+    console.error(moved.error);
+    process.exit(1);
+  }
+  const sql = hostedInsertSql(moved.value.moved, nowIso);
+  if (!sql.ok) {
+    console.error(`${sql.error}; nothing was moved`);
+    process.exit(1);
+  }
+  const out = resolve(flags["out"] ?? `bank/hosted-${nowIso.replace(/[:.]/g, "-")}.sql`);
+  store.write(moved.value.bank);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, sql.value, "utf8");
+  for (const p of moved.value.moved) console.log(`moved order ${p.orderId} (${p.currency} ${p.amount}); marked used here`);
+  console.log(`SQL written to ${out}`);
+  console.log("Next: paste it into the SQL editor of the CONSOLE's Supabase project and run it. Its last line prints the hosted bank's counts.");
+  bankList();
+}
+
 function bankList(): void {
   const bank = bankStore().read();
   console.log("");
@@ -607,14 +640,16 @@ function bankList(): void {
 function usage(): void {
   console.log("REHEARSAL");
   console.log("  rehearsal dry-run <scenario.json>        print the plan, no network calls");
-  console.log('  rehearsal plan "<description>"           AI-plan a scenario, shows it only');
+  console.log('  rehearsal plan "<description>" [--out <file>]   AI-plan a scenario, save it, run nothing');
   console.log('  rehearsal plan "<description>" --yes     plan it and then run it');
   console.log("  rehearsal run <scenario.json>            run it against the sandbox");
   console.log("  rehearsal run <scenario.json> --resume <runId> [--retry <stepId>]");
+  console.log('  rehearsal find ["<description>"] [--only <classId>]   run the edge-case finder against the sample store');
   console.log("  rehearsal bank:add [--amount 88.00]      create an order and print its approval link");
   console.log("  rehearsal bank:confirm                   capture approved orders and find buyer txn ids");
   console.log("  rehearsal bank:set-txn --order <id> --txn <id>   supply a buyer txn id by hand");
   console.log("  rehearsal bank:list                      show the purchase bank");
+  console.log("  rehearsal bank:export-hosted [--count 1] move ready purchases to the console's bank, as SQL");
 }
 
 const [, , command, ...rest] = process.argv;
@@ -643,6 +678,9 @@ switch (command) {
     break;
   case "bank:list":
     bankList();
+    break;
+  case "bank:export-hosted":
+    bankExportHosted(rest);
     break;
   default:
     usage();
