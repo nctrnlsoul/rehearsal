@@ -40,8 +40,8 @@ export function postgrestOver(pg: PGlite, key: string = TEST_DB_ENV.SUPABASE_SER
       state.calls.push(name);
       const args = (typeof init.body === "string" ? JSON.parse(init.body) : {}) as Record<string, unknown>;
 
-      const proc = await pg.query<{ proretset: boolean }>(
-        "select p.proretset from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = $1",
+      const proc = await pg.query<{ proretset: boolean; void: boolean }>(
+        "select p.proretset, p.prorettype = 'void'::regtype as void from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = $1",
         [name],
       );
       if (proc.rows.length !== 1) return new Response(null, { status: 404 });
@@ -61,6 +61,9 @@ export function postgrestOver(pg: PGlite, key: string = TEST_DB_ENV.SUPABASE_SER
           if (proc.rows[0]!.proretset) return (await tx.query(`select * from ${call}`, params)).rows;
           return (await tx.query<{ v: unknown }>(`select ${call} as v`, params)).rows[0]!.v ?? null;
         });
+        // Real PostgREST answers a function that returns void with 204 and no
+        // body; a client that always parses JSON breaks on it (seen live 2026-11-07).
+        if (proc.rows[0]!.void) return new Response(null, { status: 204 });
         return Response.json(out);
       } catch {
         // PostgREST answers a raised exception or a constraint failure with a 4xx.
