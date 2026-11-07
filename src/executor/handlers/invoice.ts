@@ -1,3 +1,4 @@
+import { TRANSPORT_FAILURE } from "../../core/backoff";
 import { errorSummary, pick } from "../../core/json";
 import { classify } from "../../core/outcome";
 import {
@@ -20,6 +21,17 @@ const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 export const READS_OVERDUE = "reads as overdue";
 export const NOT_PAST_DUE = "not past its due date";
 export const DUE_DATE_UNREAD = "its due date was unreadable";
+
+/**
+ * A lost reply, a 408 or a 5xx may mean PayPal already acted. These invoice
+ * writes are not safe to replay on PayPal-Request-Id alone, so such an answer
+ * is unknown (a human checks before any retry), never failed, and never resent.
+ */
+const ambiguous = (status: number): boolean =>
+  status === TRANSPORT_FAILURE || status === 408 || status >= 500;
+
+const writeOutcome = (status: number, detail: string, ids: Record<string, string> = {}) =>
+  ambiguous(status) ? unknown(detail, ids) : failed(detail, ids);
 
 /**
  * Creates a draft invoice. A negative dueInDays dates the invoice in the past so
@@ -111,10 +123,11 @@ export const invoiceSendHandler: StepHandler = async (ctx) => {
     method: "POST",
     path: `/v2/invoicing/invoices/${invoiceId}/send`,
     idempotencySeed: ctx.seed,
+    replayIfAmbiguous: false,
     body: { send_to_invoicer: false, send_to_recipient: false },
   });
   if (sent.status < 200 || sent.status >= 300) {
-    return failed(`send failed: http ${sent.status}, ${errorSummary(sent.body, sent.bodyPreview)}`);
+    return writeOutcome(sent.status, `send failed: http ${sent.status}, ${errorSummary(sent.body, sent.bodyPreview)}`);
   }
 
   const after = await ctx.seller.call({
@@ -152,6 +165,7 @@ export const invoiceRecordPaymentHandler: StepHandler = async (ctx) => {
     method: "POST",
     path: `/v2/invoicing/invoices/${invoiceId}/payments`,
     idempotencySeed: ctx.seed,
+    replayIfAmbiguous: false,
     body: {
       method: "BANK_TRANSFER",
       payment_date: isoDate(ctx.now()),
@@ -165,7 +179,8 @@ export const invoiceRecordPaymentHandler: StepHandler = async (ctx) => {
   if (paymentId !== null) ids["invoice_payment_id"] = paymentId;
 
   if (paid.status < 200 || paid.status >= 300) {
-    return failed(
+    return writeOutcome(
+      paid.status,
       `record payment failed: http ${paid.status}, ${errorSummary(paid.body, paid.bodyPreview)}`,
       ids,
     );
@@ -194,6 +209,7 @@ export const invoiceCancelHandler: StepHandler = async (ctx) => {
     method: "POST",
     path: `/v2/invoicing/invoices/${invoiceId}/cancel`,
     idempotencySeed: ctx.seed,
+    replayIfAmbiguous: false,
     body: {
       subject: "REHEARSAL canceled this invoice",
       note: `Canceled by REHEARSAL step ${step.id}.`,
@@ -202,7 +218,8 @@ export const invoiceCancelHandler: StepHandler = async (ctx) => {
     },
   });
   if (cancelled.status < 200 || cancelled.status >= 300) {
-    return failed(
+    return writeOutcome(
+      cancelled.status,
       `cancel failed: http ${cancelled.status}, ${errorSummary(cancelled.body, cancelled.bodyPreview)}`,
     );
   }

@@ -286,6 +286,23 @@ describe("invoice handlers", () => {
     expect(b.detail).not.toContain(NOT_PAST_DUE);
   });
 
+  // A lost reply, 408 or 5xx may mean PayPal already sent, recorded or
+  // canceled. Resending could record a second payment, so these stop as
+  // unknown after one call; a clear refusal is still a plain failure.
+  it("treats an ambiguous answer to an invoice write as unknown and never resends it", async () => {
+    const handlerFor = { s1: invoiceSendHandler, pay1: invoiceRecordPaymentHandler, c1: invoiceCancelHandler } as const;
+    for (const [stepId, handler] of Object.entries(handlerFor)) {
+      for (const status of [503, 500, 408]) {
+        const seller = fakePaypal([{ status }]);
+        const out = await handler(makeContext({ scenario, stepId, seller: seller.client, outputs }).ctx);
+        expect(out.kind, `${stepId} ${status}`).toBe("unknown");
+        expect(seller.calls, `${stepId} ${status}`).toHaveLength(1);
+      }
+      const refused = fakePaypal([{ status: 422, body: { name: "UNPROCESSABLE_ENTITY" } }]);
+      expect((await handler(makeContext({ scenario, stepId, seller: refused.client, outputs }).ctx)).kind).toBe("failed");
+    }
+  });
+
   it("records a payment and confirms the invoice status", async () => {
     const seller = fakePaypal([
       { status: 200, body: { payment_id: "EXTR-1" } },
