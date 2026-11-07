@@ -1,14 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { type Reply, type RunStory, type StepCard, arrivalWord, dur } from "../lib/runStory";
+import { nowPanel } from "../lib/nowPanel";
+import { type OtherEvent, type Reply, type RunStory, type StepCard, arrivalWord, dur } from "../lib/runStory";
 import { Badge, Icon, Mark, type MarkKind } from "./chrome";
+import { NowPanelBox } from "./NowPanel";
 
 /**
  * One run, live or replayed, drawn from a RunStory. The live page and the
  * replay page both render this, so a judge without a passcode sees exactly
  * what a live run looks like. Answer first, then the proof, then one card per
  * step with what Rehearsal sent and what PayPal sent back on the same row.
+ * While the run can still change, one panel under the answer holds what is
+ * happening now and the steps shrink to one line each, so the eye has one
+ * place to land; once it settles, every step opens to its full card.
  */
 
 export type Finding = {
@@ -43,7 +48,7 @@ const TONE_BADGE: Record<RunStory["tone"], { kind: MarkKind; word: (s: RunStory)
 export function RunView({ story, name, runId, mode, controls, finding, verdictLine, aside }: Props) {
   const tb = TONE_BADGE[story.tone];
   return (
-    <div className={`run tone-${story.tone}`}>
+    <div className={`run tone-${story.tone} mode-${mode}${story.settled ? "" : " is-running"}`}>
       <section className="hero run-hero" aria-labelledby="run-h">
         <div className="wrap hero-grid">
           <div className="answer" aria-live="polite">
@@ -54,7 +59,6 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
             </p>
             <h1 id="run-h">{story.headline}</h1>
             {story.lead !== null && <p className="lead">{story.lead}</p>}
-            {story.progress !== null && <Progress at={story.progress.at} of={story.progress.of} live={!story.settled} />}
             {controls}
           </div>
           <ProofPanel story={story} />
@@ -62,7 +66,9 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
       </section>
 
       <div className="wrap">
-        <dl className="card figures lift" aria-label="Summary">
+        <NowPanelBox panel={nowPanel(story)} />
+
+        <dl className="card figures" aria-label="Summary">
           <div><dt>Steps</dt><dd>{story.figures.steps}</dd></div>
           <div><dt>Amount in calls</dt><dd><span>{story.figures.amount}{story.figures.amountNote !== null && <small>{story.figures.amountNote}</small>}</span></dd></div>
           <div><dt>Slowest reply</dt><dd>{story.figures.slowest}</dd></div>
@@ -89,19 +95,20 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
         {story.cards.length === 0 ? (
           <p className="note">{story.settled ? "No step ran." : "No step has started yet."}</p>
         ) : (
-          <ol className="steps" aria-labelledby="steps-h">
-            {story.cards.map((c) => <Step key={c.id} card={c} mode={mode} settled={story.settled} />)}
+          <ol className={`steps${story.settled ? "" : " running"}`} aria-labelledby="steps-h">
+            {story.cards.map((c) => (story.settled ? <Step key={c.id} card={c} mode={mode} settled /> : <LineStep key={c.id} card={c} mode={mode} />))}
           </ol>
         )}
 
         {story.other.length > 0 && (
           <section className="other" aria-labelledby="other-h">
             <h2 id="other-h">Other events PayPal sent</h2>
-            <p className="note">Recorded by the store while this run was going, but not tied to any one step by an id. They are listed, never matched by guess.</p>
+            <p className="note">Recorded by the store while this run was going. No step here is known to cause them, so none is tied to a step; where one carries the id of something a step made, that is named. Never matched by guess.</p>
             <ul className="card">
               {story.other.map((o) => (
                 <li key={o.eventId}>
                   <span className="o-plain">{o.plain}</span>
+                  {o.related.length > 0 && <span className="o-rel">{relatedLine(o)}</span>}
                   <span className="o-meta">
                     {o.atS !== null && <>after {dur(o.atS)} · </>}
                     {o.copies} {o.copies === 1 ? "copy" : "copies"} · <span className="mono">{o.eventType ?? "type not given"}</span> · <span className="mono">{o.eventId}</span>
@@ -125,17 +132,14 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
   );
 }
 
-function Progress({ at, of, live }: { at: number; of: number; live: boolean }) {
-  return (
-    <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={of} aria-valuenow={at} aria-label={`Step ${at} of ${of}`}>
-      <span className="progress-word">Step {at} of {of}</span>
-      <span className="progress-track" aria-hidden="true">
-        {Array.from({ length: of }, (_, i) => (
-          <span key={i} className={`seg-bit${i < at - 1 ? " done" : i === at - 1 ? (live ? " now" : " done") : ""}`} />
-        ))}
-      </span>
-    </div>
-  );
+/** "Same invoice as step 3 (INV2-...)": an id the event and a step share, said as that and nothing more. */
+function relatedLine(o: OtherEvent): React.ReactNode {
+  return o.related.map((r, i) => (
+    <span key={r.id}>
+      {i > 0 && "; "}
+      Same {r.what} as {r.steps.length === 1 ? "step" : "steps"} {r.steps.join(" and ")} (<span className="mono">{r.id}</span>)
+    </span>
+  ));
 }
 
 function ProofPanel({ story }: { story: RunStory }) {
@@ -173,7 +177,47 @@ function railOf(c: StepCard): { cls: string; icon: "check" | "cross" | "clock" |
   return { cls: "quiet", icon: "dash", word: "Not started" };
 }
 
-function Step({ card: c, mode, settled }: { card: StepCard; mode: "live" | "replay"; settled: boolean }) {
+/** The reply pill a one-line row ends with: the same words the full card's middle uses. */
+function linePill(c: StepCard): { cls: string; icon: "check" | "cross" | "clock" | "dash" | "arrow"; text: string } {
+  if (c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed") return { cls: "bug", icon: "cross", text: c.sentWord };
+  if (c.sent === "queued") return { cls: "quiet", icon: "dash", text: "Not sent yet" };
+  if (c.sent === "not-run") return { cls: "quiet", icon: "dash", text: "Not run" };
+  if (c.sent === "sending") return { cls: "quiet", icon: "arrow", text: "Calling PayPal" };
+  if (c.reply === "delivered") {
+    const timed = c.replies.filter((r) => r.latencyS !== null);
+    if (timed.length === 0) return { cls: "ok", icon: "check", text: "Arrived during the step" };
+    const slowest = timed.reduce((a, b) => (b.latencyS! > a.latencyS! ? b : a));
+    return { cls: "ok", icon: "check", text: `Replied in ${dur(slowest.latencyS!)}${slowest.exact ? "" : " at most"}` };
+  }
+  if (c.reply === "waiting" || c.reply === "not-yet") return { cls: "wait", icon: "clock", text: `${dur(c.waitingS ?? 0)} so far` };
+  if (c.reply === "not-seen") return { cls: "quiet", icon: "dash", text: "Not seen" };
+  return { cls: "quiet", icon: "dash", text: "No event expected" };
+}
+
+/** While a run is live: one line per step. A click opens the full card; it stays open until closed. */
+function LineStep({ card: c, mode }: { card: StepCard; mode: "live" | "replay" }) {
+  const [open, setOpen] = useState(false);
+  if (open) return <Step card={c} mode={mode} settled={false} onClose={() => setOpen(false)} />;
+  const rail = railOf(c);
+  const pill = linePill(c);
+  return (
+    <li className={`step line${c.current ? " current" : ""} s-${c.sent} r-${c.reply}`} data-step={c.id}>
+      <span className={`rail ${rail.cls}`}><Icon name={rail.icon} /><span className="sr">{rail.word}</span></span>
+      <button type="button" className="card line-row" aria-expanded={false} onClick={() => setOpen(true)}>
+        <span className="line-main">
+          <span className="step-n">Step {c.n}</span>
+          <span className="line-title">{c.title}</span>
+        </span>
+        <span className="line-amount">{c.amount ?? ""}</span>
+        <span className={`pill line-pill ${pill.cls}`}><Icon name={pill.icon} />{pill.text}</span>
+        <Icon name="chevron" className="icon line-open" />
+        <span className="sr">Show the full card</span>
+      </button>
+    </li>
+  );
+}
+
+function Step({ card: c, mode, settled, onClose }: { card: StepCard; mode: "live" | "replay"; settled: boolean; onClose?: () => void }) {
   const rail = railOf(c);
   const compact = c.sent === "not-run" || (c.reply === "none-expected" && (c.sent === "accepted" || c.sent === "queued"));
   const failed = c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed";
@@ -181,6 +225,11 @@ function Step({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
     <li className={`step${c.current ? " current" : ""}${compact ? " compact" : ""}${failed ? " failed" : ""} s-${c.sent} r-${c.reply}`} data-step={c.id}>
       <span className={`rail ${rail.cls}`}><Icon name={rail.icon} /><span className="sr">{rail.word}</span></span>
       <article className="card step-card" aria-label={`Step ${c.n}: ${c.title}`}>
+        {onClose !== undefined && (
+          <button type="button" className="line-close" aria-expanded={true} onClick={onClose}>
+            Show as one line <Icon name="chevron" />
+          </button>
+        )}
         {compact ? (
           <div className="row-compact">
             <span className="step-n">Step {c.n}</span>

@@ -62,7 +62,19 @@ export type StepCard = {
 
 export type ProofNode = { readonly key: string; readonly label: string; readonly arrived: boolean; readonly latencyS: number | null; readonly exact: boolean; readonly early: boolean; readonly verified: boolean };
 
-export type OtherEvent = { readonly eventId: string; readonly eventType: string | null; readonly plain: string; readonly copies: number; readonly store: string; readonly atS: number | null };
+/**
+ * An event no step is known to cause. related: a step whose own ids include
+ * an id the store recorded for the event, say which; it is never a join.
+ */
+export type OtherEvent = {
+  readonly eventId: string;
+  readonly eventType: string | null;
+  readonly plain: string;
+  readonly copies: number;
+  readonly store: string;
+  readonly atS: number | null;
+  readonly related: ReadonlyArray<{ readonly what: string; readonly id: string; readonly steps: readonly number[] }>;
+};
 
 export type Tone = "running" | "waiting" | "done" | "stopped" | "queued";
 
@@ -160,6 +172,7 @@ export const EVENT_PLAIN: Readonly<Record<string, string>> = {
   "INVOICING.INVOICE.CREATED": "PayPal confirmed: invoice created",
   "INVOICING.INVOICE.SENT": "PayPal confirmed: invoice sent",
   "INVOICING.INVOICE.UPDATED": "PayPal says the invoice changed",
+  "INVOICING.INVOICE.UNPAID": "PayPal says the invoice is awaiting payment",
   "INVOICING.INVOICE.PAID": "PayPal confirmed: invoice paid",
   "CUSTOMER.DISPUTE.CREATED": "PayPal confirmed: dispute opened",
   "CUSTOMER.DISPUTE.UPDATED": "PayPal says the dispute changed",
@@ -182,6 +195,15 @@ const EVENT_SHORT: Readonly<Record<string, string>> = {
   "INVOICING.INVOICE.CREATED": "Invoice",
   "INVOICING.INVOICE.PAID": "Paid",
   "CUSTOMER.DISPUTE.CREATED": "Dispute",
+};
+
+/** The noun for an id a step holds, for "same invoice as step 3". */
+const ID_NOUN: Readonly<Record<string, string>> = {
+  invoice_id: "invoice",
+  capture_id: "capture",
+  order_id: "order",
+  refund_id: "refund",
+  dispute_id: "dispute",
 };
 
 const STORE_PLAIN: Readonly<Record<string, string>> = {
@@ -536,6 +558,12 @@ export function runStory(read: LiveRead): RunStory {
       copies: l.deliveries,
       store: l.duplicatesIgnored > 0 ? "duplicate_ignored" : l.fulfilled > 0 ? "fulfilled" : l.refused > 0 ? "refused" : "recorded",
       atS: l.firstReceivedT ?? l.firstSeenT,
+      related: l.resourceIds.flatMap((id) => {
+        const holders = finalCards.flatMap((c) => c.details.ids.filter(([k, v]) => v === id && ID_NOUN[k] !== undefined).map(([k]) => ({ n: c.n, k })));
+        const nouns = [...new Set(holders.map((h) => ID_NOUN[h.k]!))];
+        // Two steps holding the same id under different names says nothing plain.
+        return nouns.length === 1 ? [{ what: nouns[0]!, id, steps: holders.map((h) => h.n) }] : [];
+      }),
     }));
 
   const notes: string[] = [];

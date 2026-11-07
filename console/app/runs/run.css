@@ -13,12 +13,69 @@
 .run-hero h1 { max-width: 18ch; }
 .run-hero .lead { max-width: 46ch; }
 
-.progress { margin-top: 24px; display: grid; gap: 8px; max-width: 460px; }
-.progress-word { font-size: 14px; color: var(--on-hero-2); font-weight: 500; }
-.progress-track { display: flex; gap: 6px; }
-.seg-bit { flex: 1; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.14); }
-.seg-bit.done { background: var(--hero-ok); }
-.seg-bit.now { background: var(--hero-wait); animation: breathe 1.8s ease-in-out infinite; }
+/* ------------------------------------------------------------ now running (v0.7.1)
+   One box under the answer that holds the one thing happening now. Its height
+   is fixed so nothing below moves when its content swaps. */
+.now-panel { --np-h: 204px; position: relative; z-index: 5; margin-top: -56px; height: var(--np-h); padding: 18px 24px 20px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; overflow: hidden; }
+.now-panel.sticky { position: sticky; top: 12px; z-index: 30; box-shadow: 0 1px 2px rgba(23, 24, 26, 0.06), 0 14px 32px -18px rgba(23, 24, 26, 0.35); }
+.now-panel + .figures { margin-top: 16px; }
+/* While the run can change, the hero holds one height, so its headline growing or
+   shrinking never moves the panel. Sized from the hosted replay's tallest moment. */
+.run.is-running .run-hero .answer { min-height: 300px; }
+.run.is-running.mode-replay .run-hero .answer { min-height: 410px; }
+
+.np-bar { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
+.np-track { flex: 1 1 260px; display: flex; gap: 6px; min-width: 0; }
+.np-seg { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--rule); }
+/* Sent then confirmed: two halves, each filled only when that has happened. */
+.np-half { flex: 1; }
+.np-half.sent.on { background: var(--accent); }
+.np-half.confirmed.on { background: var(--ok); }
+.np-seg.whole .np-half.confirmed { display: none; }
+.np-seg.failed { background: var(--bug); }
+.np-label { font-size: 14px; font-weight: 500; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.np-swap { position: relative; min-height: 0; }
+.np-body { min-height: 0; }
+.np-leave { position: absolute; inset: 0; pointer-events: none; animation: np-out 300ms var(--ease) both; }
+.np-enter { animation: np-in 300ms var(--ease) 60ms both; }
+@keyframes np-out { to { opacity: 0; transform: translateY(-8px); } }
+@keyframes np-in { from { opacity: 0; transform: translateY(8px); } }
+
+.np-eyebrow { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; color: var(--text-2); }
+.np-eyebrow .icon { width: 16px; height: 16px; }
+.np-eyebrow.ok { color: var(--ok); }
+.np-eyebrow.bug { color: var(--bug); }
+.np-main { margin-top: 4px; font-size: clamp(22px, 2.5vw, 28px); font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; overflow-wrap: anywhere; }
+.np-main-sm { font-size: clamp(20px, 2.2vw, 24px); }
+.np-text { margin-top: 8px; font-size: 15px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* A stop's reason is never cut short: it can say nothing was sent. */
+.now-final .np-text { -webkit-line-clamp: 3; }
+
+.np-stages { list-style: none; margin: 16px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.np-stage-item { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; color: var(--text-2); }
+/* A short rule after each stage leads the eye to the next. */
+.np-stage-item:not(:last-child)::after { content: ""; flex: 1 1 12px; min-width: 8px; height: 2px; border-radius: 1px; background: var(--rule); }
+.np-stage-item.done:not(:last-child)::after { background: var(--ok); opacity: 0.5; }
+.np-stage-label { min-width: 0; }
+.np-short { display: none; }
+.np-dot { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; border: 2px solid var(--control-line); background: var(--bg-card); color: var(--text-2); }
+.np-dot .icon { width: 14px; height: 14px; }
+.np-stage-item.done { color: var(--text); }
+.np-stage-item.done .np-dot { background: var(--ok); border-color: var(--ok); color: var(--white); }
+.np-stage-item.now { color: var(--text); font-weight: 600; }
+.np-stage-item.now .np-dot { border-color: var(--wait-line); background: var(--wait-bg); }
+.np-stage-item.now .np-dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--wait-line); animation: breathe 1.6s ease-in-out infinite; }
+.np-stage-item.none .np-dot { border-style: dashed; border-color: var(--rule); }
+.np-stage-item.bad { color: var(--bug); }
+.np-stage-item.bad .np-dot { background: var(--bug); border-color: var(--bug); color: var(--white); }
+
+.np-chips { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.np-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-pill); font-size: 13px; font-weight: 500; white-space: nowrap; border: 1px solid transparent; }
+.np-chip .icon { width: 14px; height: 14px; }
+.np-chip.in { background: var(--ok-bg); color: var(--ok); }
+.np-chip.out { background: var(--wait-bg); color: var(--wait); border: 1px dashed var(--wait-line); }
+.np-chip.bad { background: var(--bug-bg); color: var(--bug); }
 
 .proof { background: var(--bg-hero-raised); border-radius: 16px; padding: 22px 24px 18px; border: 1px solid rgba(255, 255, 255, 0.06); }
 .proof-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
@@ -97,6 +154,23 @@
 .problem { margin: 0 24px 14px; padding: 12px 14px; border-radius: var(--radius-control); background: var(--bug-bg); color: var(--text); font-size: 15px; display: flex; gap: 10px; align-items: flex-start; }
 .problem .icon { width: 18px; height: 18px; flex: none; margin-top: 2px; }
 
+/* While a run is live: one line per step, opened to the full card on a click. */
+.steps.running { gap: 8px; }
+.steps.running .step::before { bottom: -8px; }
+.step.line .rail { margin-top: 13px; }
+.line-row { width: 100%; min-height: 50px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto 16px; gap: 6px 16px; align-items: center; padding: 10px 18px; text-align: left; font: inherit; color: inherit; cursor: pointer; box-shadow: none; transition: border-color var(--dur-hover) var(--ease); }
+.line-row:hover { border-color: var(--control-line); }
+.step.line.current .line-row { border-color: var(--wait-line); box-shadow: 0 0 0 3px rgba(240, 176, 58, 0.18); }
+.line-main { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+.line-main .step-n { flex: none; }
+.line-title { font-size: 16px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.line-amount { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.line-pill.ok { background: var(--ok-bg); border-color: transparent; color: var(--ok); }
+.line-pill.bug { background: var(--bug-bg); border-color: transparent; color: var(--bug); }
+.line-open { width: 16px; height: 16px; color: var(--accent); }
+.line-close { display: flex; align-items: center; gap: 6px; margin: 0 0 0 auto; padding: 10px 24px 0; min-height: 32px; background: none; border: 0; color: var(--accent); font: 600 14px var(--font-sans); cursor: pointer; }
+.line-close .icon { width: 16px; height: 16px; transform: rotate(180deg); }
+
 .row-compact { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px 20px; align-items: center; padding: 14px 24px 4px; }
 .compact-title { font-size: 17px; font-weight: 500; }
 .compact-note { font-size: 14px; color: var(--text-2); }
@@ -121,6 +195,7 @@
 .other { margin-top: 40px; display: grid; gap: 10px; }
 .other ul { list-style: none; margin: 4px 0 0; padding: 0; }
 .other li { display: grid; gap: 2px; padding: 14px 20px; }
+.o-rel { font-size: 14px; overflow-wrap: anywhere; }
 .other li + li { border-top: 1px solid var(--rule-soft); }
 .o-plain { font-weight: 500; }
 .o-meta { font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
@@ -150,12 +225,20 @@
 
 /* Reduced motion: the dash and the pulse hold still; state still changes by icon, word and color. */
 @media (prefers-reduced-motion: reduce) {
-  .conn.dashed, .seg-bit.now, .nodes li.out .node, .sending .pulse { animation: none; }
-  .step-card, .details-toggle .icon { transition: none; }
+  .conn.dashed, .nodes li.out .node, .sending .pulse { animation: none; }
+  .step-card, .details-toggle .icon, .line-row { transition: none; }
+  /* The panel swaps at once: no slide, no fade, no pulse. */
+  .np-enter, .np-leave, .np-stage-item.now .np-dot::after { animation: none; }
+  .np-leave { display: none; }
 }
 
 @media (max-width: 960px) {
   .hero-grid { grid-template-columns: 1fr; gap: 28px; }
+  /* One column: while running, the panel's chips carry the proof, so the panel sits
+     right under the answer instead of a screen further down. The strip returns at the end. */
+  .run.is-running .run-hero .proof { display: none; }
+  .run.is-running .run-hero .answer { min-height: 280px; }
+  .run.is-running.mode-replay .run-hero .answer { min-height: 390px; }
 }
 @media (max-width: 760px) {
   .step { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
@@ -171,6 +254,27 @@
   .dl { grid-template-columns: 1fr; gap: 2px; }
   .dl dd { margin-bottom: 8px; }
   .problem { margin: 0 16px 12px; }
+
+  .now-panel { --np-h: 252px; padding: 16px 16px 18px; gap: 12px; }
+  .now-webhooks .np-eyebrow { display: none; }
+  .now-panel.sticky { top: 8px; }
+  .np-label { font-size: 13px; }
+  .np-main { font-size: 22px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .np-main-sm { font-size: 19px; }
+  .np-text { font-size: 14px; }
+  .np-stages { gap: 4px; margin-top: 14px; }
+  .np-stage-item { flex-direction: column; align-items: flex-start; gap: 6px; font-size: 13px; }
+  .np-stage-item:not(:last-child)::after { display: none; }
+  .np-long { display: none; }
+  .np-short { display: inline; }
+  .np-chips { gap: 6px; margin-top: 10px; }
+
+  .line-row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; gap: 6px 12px; }
+  .line-main { gap: 10px; }
+  .line-title { white-space: normal; }
+  .line-pill { grid-column: 1 / -1; justify-self: start; }
+  .line-open { display: none; }
+  .line-close { padding: 10px 16px 0; }
 }
 
 /* ------------------------------------------------------------ around the run */
@@ -193,3 +297,5 @@
 .rc-go { color: var(--accent); font-weight: 600; display: inline-flex; gap: 6px; align-items: center; margin-top: 4px; }
 .rc-go .icon { width: 16px; height: 16px; }
 @media (max-width: 760px) { .run-cards { grid-template-columns: 1fr; } }
+
+.hosted-cards { grid-template-columns: 1fr; margin-bottom: 8px; }

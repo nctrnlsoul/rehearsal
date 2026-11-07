@@ -86,7 +86,7 @@ describe("liveView", () => {
     expect(arrived.deliveries[0]!.facts).toContainEqual(["store", "duplicate_ignored"]);
     expect(arrived.pairs[0]!.exact).toBe(false);
     expect(arrived.ledger).toEqual([
-      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", deliveries: 2, fulfilled: 1, duplicatesIgnored: 1, refused: 0, certHosts: ["api.sandbox.paypal.com"], firstSeenT: 12, firstReceivedT: null, joinedTo: ["resend"] },
+      { eventId: "WH-1", eventType: "PAYMENT.CAPTURE.COMPLETED", deliveries: 2, fulfilled: 1, duplicatesIgnored: 1, refused: 0, certHosts: ["api.sandbox.paypal.com"], firstSeenT: 12, firstReceivedT: null, resourceIds: [], joinedTo: ["resend"] },
     ]);
   });
 

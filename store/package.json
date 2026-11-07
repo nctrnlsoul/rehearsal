@@ -1,6 +1,6 @@
 {
   "name": "rehearsal-sample-store",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "license": "MIT",
   "description": "A sample merchant app with one planted bug, used as the subject of REHEARSAL's edge-case finder.",
