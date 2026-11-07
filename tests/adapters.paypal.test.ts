@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PaypalClient } from "../src/adapters/paypal";
+import { PaypalClient, TokenRequestError } from "../src/adapters/paypal";
 import { HostRefusedError } from "../src/core/host";
 import { requestId } from "../src/core/idempotency";
 
@@ -101,6 +101,30 @@ describe("PaypalClient guards", () => {
     await expect(h.client.accessToken()).rejects.toThrow(
       /^sandbox token request failed with http 401 \(invalid_client\)$/,
     );
+  });
+
+  it("throws a TokenRequestError carrying the status, the code and whose login it was", async () => {
+    const h = harness([{ kind: "json", status: 401, body: { error: "invalid_client" } }]);
+    const e = await h.client.accessToken().catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(TokenRequestError);
+    expect(e).toMatchObject({ status: 401, code: "invalid_client", role: "test" });
+  });
+
+  it("counts writes before sending them, and never counts a GET or a refused token", async () => {
+    const h = harness([
+      { kind: "json", status: 401, body: { error: "invalid_client" } },
+      tokenOk(),
+      { kind: "json", status: 200, body: { status: "OK" } },
+      { kind: "throw", name: "TimeoutError", message: "timed out" },
+    ]);
+    await expect(h.client.call({ method: "POST", path: "/v2/checkout/orders", body: {}, idempotencySeed: "s" })).rejects.toThrow(TokenRequestError);
+    expect(h.client.writesSent).toBe(0);
+    expect(h.apiCalls()).toHaveLength(0);
+    await h.client.call({ method: "GET", path: "/v1/x" });
+    expect(h.client.writesSent).toBe(0);
+    await h.client.call({ method: "POST", path: "/v1/y", body: {}, idempotencySeed: "t", replayIfAmbiguous: false });
+    // A write that timed out may have landed, so it counts.
+    expect(h.client.writesSent).toBe(1);
   });
 
   it("drops an error code that is not a plain identifier", async () => {

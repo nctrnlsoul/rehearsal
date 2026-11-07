@@ -62,13 +62,69 @@ export function savedState(s: RunState): RunState {
   return { ...s, steps, haltReason: s.haltReason === null ? null : cleanModelText(s.haltReason, MAX_DETAIL_CHARS) };
 }
 
+/** What the run page needs to name a step before it starts: its kind, its amount, what it acts on. */
+export type PlanStepFact = {
+  readonly id: string;
+  readonly kind: string;
+  readonly amount?: string;
+  readonly from?: string;
+  readonly mode?: string;
+  readonly basisPoints?: number;
+  readonly eventType?: string;
+};
+export type PlanFacts = { readonly currency: string; readonly steps: readonly PlanStepFact[] };
+
+const MAX_PLAN_STEPS = 12;
+/** Half the 4 KB pg_column_size check, since jsonb adds per-key and per-value overhead to the text size. */
+const MAX_PLAN_BYTES = 2000;
+const AMOUNT_SHAPE = /^\d{1,9}(\.\d{1,2})?$/;
+
+/** The plan's steps, bounded like every other field, for the note the first save records. */
+export function planFacts(scenario: { currency: string; steps: readonly unknown[] }): PlanFacts {
+  const steps = scenario.steps.slice(0, MAX_PLAN_STEPS).map((raw) => {
+    const s = raw as Record<string, unknown>;
+    const text = (k: string, n: number) => (typeof s[k] === "string" && s[k] !== "" ? cleanModelText(s[k] as string, n) : undefined);
+    let amount = typeof s["amount"] === "string" && AMOUNT_SHAPE.test(s["amount"]) ? (s["amount"] as string) : undefined;
+    // A payout's amount is the sum of its items, in integer cents.
+    if (amount === undefined && Array.isArray(s["items"])) {
+      let cents = 0n;
+      let ok = s["items"].length > 0;
+      for (const item of s["items"]) {
+        const a = (item as Record<string, unknown> | null)?.["amount"];
+        const m = typeof a === "string" ? /^(\d{1,9})(?:\.(\d{1,2}))?$/.exec(a) : null;
+        if (m === null) ok = false;
+        else cents += BigInt(m[1]!) * 100n + BigInt((m[2] ?? "").padEnd(2, "0"));
+      }
+      if (ok) amount = `${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`;
+    }
+    const bp = s["basisPoints"];
+    const fact: PlanStepFact = {
+      id: text("id", MAX_ID_KEY_CHARS) ?? "step",
+      kind: text("kind", MAX_ID_KEY_CHARS) ?? "step",
+      ...(amount === undefined ? {} : { amount }),
+      ...(text("from", MAX_ID_KEY_CHARS) === undefined ? {} : { from: text("from", MAX_ID_KEY_CHARS)! }),
+      ...(text("mode", 20) === undefined ? {} : { mode: text("mode", 20)! }),
+      ...(typeof bp === "number" && Number.isInteger(bp) && bp > 0 && bp < 10_000 ? { basisPoints: bp } : {}),
+      ...(text("eventType", 60) === undefined ? {} : { eventType: text("eventType", 60)! }),
+    };
+    return fact;
+  });
+  // An event over the table's 4 KB check would fail the first save and stop
+  // the run before it starts, so steps are dropped from the end until it fits.
+  while (steps.length > 0 && new TextEncoder().encode(JSON.stringify({ plan: { currency: scenario.currency, steps } })).length > MAX_PLAN_BYTES) steps.pop();
+  return { currency: cleanModelText(scenario.currency, 3), steps };
+}
+
 /**
  * What changed between two saves of one run. prev is null for the first save.
  * sources maps a step to the step it names in "from" (an invoice payment to
- * its invoice), so the timeline can find the ids a step acted on.
+ * its invoice), so the timeline can find the ids a step acted on. plan, when
+ * given, is recorded once, on the first save, so the page can name every
+ * step and its amount before any of them runs.
  */
-export function stateEvents(prev: RunState | null, next: RunState, sources: ReadonlyMap<string, string> = new Map()): RunEvent[] {
+export function stateEvents(prev: RunState | null, next: RunState, sources: ReadonlyMap<string, string> = new Map(), plan: PlanFacts | null = null): RunEvent[] {
   const events: RunEvent[] = [];
+  if (prev === null && plan !== null) events.push({ kind: "note", data: { plan } });
   for (const id of next.order) {
     const n = next.steps[id];
     if (n === undefined) continue;
@@ -160,6 +216,16 @@ export function deliveryEvents(snapshot: StoreSnapshot, seen: SeenDeliveries, se
       kind: "note",
       data: { order: { capture_id: captureId, fulfilled, refunds, disputes, duplicates_ignored: duplicates }, seen_at: seenAtIso },
     });
+  }
+  // Copies the store refused carry no event id, so they never show as a
+  // delivery above. Their count in this run's window is said whenever it
+  // grows, so the page can never call every signature verified past one.
+  const raw = snapshot as unknown as Record<string, unknown>;
+  const loose = raw["unattributedRefusals"] as Record<string, unknown> | undefined;
+  const refused = Math.max(count(loose?.["count"]), count(raw["unverifiedCount"]));
+  if (refused > (seen.get("refused") ?? 0)) {
+    seen.set("refused", refused);
+    events.push({ kind: "note", data: { refused_in_window: refused, seen_at: seenAtIso } });
   }
   return events;
 }

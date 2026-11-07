@@ -6,6 +6,3 @@ next-env.d.ts
 !.env.example
 .vercel/
 *.tsbuildinfo
-# Switzer's license (ITF FFL 2.0) forbids making the font files available through
-# a repository. scripts/fetch-fonts.mjs downloads them at build time instead.
-app/fonts/switzer/*.woff2

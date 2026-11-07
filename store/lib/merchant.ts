@@ -49,6 +49,10 @@ export function readEvent(body: unknown): ParsedEvent {
     ? obj(resource["disputed_transactions"][0])
     : {};
 
+  // Invoicing events wrap the invoice: its id is resource.invoice.id, not
+  // resource.id (seen live 2026-11-07: all three invoice events had no id).
+  const invoice = obj(resource["invoice"]);
+
   const amountHolder = obj(resource["amount"]);
   const disputeAmount = obj(resource["dispute_amount"]);
 
@@ -57,6 +61,7 @@ export function readEvent(body: unknown): ParsedEvent {
     eventType: str(e["event_type"]) ?? "UNKNOWN",
     captureId:
       str(resource["id"]) ??
+      str(invoice["id"]) ??
       str(disputed["seller_transaction_id"]) ??
       str(disputed["buyer_transaction_id"]),
     amount: str(amountHolder["value"]) ?? str(disputeAmount["value"]),

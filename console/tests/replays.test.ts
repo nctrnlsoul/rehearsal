@@ -7,13 +7,14 @@ import {
   PLANS,
   RUNS,
   describeStep,
-  gapHeightPx,
   grouped,
-  latencyLabel,
   planTotals,
+  replayEndS,
+  replayRead,
   runById,
   timelineRows,
 } from "../lib/replays";
+import { dur, runStory } from "../lib/runStory";
 
 const ROOT = join(__dirname, "..");
 
@@ -124,30 +125,50 @@ describe("grouped", () => {
   });
 });
 
-describe("timeline math", () => {
+describe("a replay, drawn by the live run's own view", () => {
+  const before = runById("20261023231552-60ea96")!;
+  const after = runById("20261024011812-208f4e")!;
+
   it("orders calls and deliveries by time and measures latency from acceptance", () => {
-    const rows = timelineRows(runById("20261023231552-60ea96")!);
-    expect(rows.map((r) => (r.kind === "call" ? `c:${r.call.step}` : `d:${r.delivery.pair}`))).toEqual([
-      "c:order",
-      "d:order",
-      "c:resend-capture",
-      "d:resend-capture",
-    ]);
-    const lat = rows.filter((r) => r.kind === "delivery").map((r) => (r.kind === "delivery" ? latencyLabel(r.latencyS) : ""));
-    expect(lat).toEqual(["20 s", "4 s"]);
+    const rows = timelineRows(before);
+    expect(rows.map((r) => (r.kind === "call" ? `c:${r.call.step}` : `d:${r.delivery.pair}`))).toEqual(["c:order", "d:order", "c:resend-capture", "d:resend-capture"]);
+    const lat = rows.flatMap((r) => (r.kind === "delivery" ? [dur(r.latencyS)] : []));
+    expect(lat).toEqual(["20s", "4s"]);
   });
 
-  it("shows latency to the second, the precision the store records", () => {
-    expect(latencyLabel(3.743)).toBe("4 s");
-    expect(latencyLabel(20.294)).toBe("20 s");
-    expect(latencyLabel(-1)).toBe("0 s");
+  it("walks the states a live run shows: sending, accepted and waiting, delivered", () => {
+    const sending = runStory(replayRead(before, 2));
+    expect(sending.headline).toBe("Running step 1 of 2: Capture a card payment.");
+    expect(sending.cards[0]!.sent).toBe("sending");
+    expect(sending.cards[0]!.current).toBe(true);
+
+    const waiting = runStory(replayRead(before, 10));
+    expect(waiting.cards[0]!).toMatchObject({ sent: "accepted", reply: "waiting", amount: "USD 25" });
+    expect(waiting.proof.map((n) => n.arrived)).toEqual([false]);
+
+    const delivered = runStory(replayRead(before, 30));
+    expect(delivered.cards[0]!.reply).toBe("delivered");
+    expect(delivered.cards[0]!.replies[0]!).toMatchObject({ plain: "PayPal confirmed: payment completed", rank: 1, verified: 1, copies: 1 });
   });
 
-  it("compresses dead time but keeps longer waits taller", () => {
-    expect(gapHeightPx(0)).toBe(8);
-    expect(gapHeightPx(4)).toBeLessThan(gapHeightPx(20));
-    expect(gapHeightPx(90)).toBeLessThanOrEqual(40);
-    expect(gapHeightPx(10_000)).toBe(40);
+  it("ends on the recorded verdict's evidence: the before run fulfills twice, the after run ignores the repeat", () => {
+    const b = runStory(replayRead(before, replayEndS(before)));
+    expect(b.tone).toBe("done");
+    expect(b.headline).toBe("All 2 steps done.");
+    expect(b.lead).toBe("PayPal confirmed 2 of 2 events, every signature verified.");
+    expect(b.cards[1]!.replies[0]!.plain).toBe("PayPal delivered it again; the store fulfilled the order a second time");
+    const a = runStory(replayRead(after, replayEndS(after)));
+    expect(a.cards[1]!.replies[0]!.plain).toBe("PayPal delivered it again; the store saw a repeat and ignored it");
+    expect(a.figures).toMatchObject({ steps: "2 of 2", amount: "USD 25", slowest: "20s", signatures: "2 of 2 passed", signaturesOk: true });
+    expect(a.proof.map((n) => `${n.label} ${n.latencyS === null ? "" : dur(n.latencyS)}`)).toEqual(["Payment 20s", "Resend 4s"]);
+  });
+
+  it("uses only the fixture's own ids and times", () => {
+    const read = replayRead(after, replayEndS(after));
+    const finished = read.events.find((e) => e.kind === "step_finished" && e.step_id === "order")!;
+    expect(finished.data["ids"]).toEqual({ order_id: "9XW82145R0198523E", capture_id: "7FK80862277639113" });
+    expect(finished.at).toBe("2026-10-24T01:18:16.848Z");
+    expect(read.events.filter((e) => e.kind === "delivery").map((e) => e.at)).toEqual(["2026-10-24T01:18:37Z", "2026-10-24T01:19:21Z"]);
   });
 });
 
@@ -171,7 +192,7 @@ describe("Stage A boundaries", () => {
     expect(usesReplays.length).toBeGreaterThanOrEqual(4);
     for (const f of usesReplays) {
       const text = readFileSync(f, "utf8");
-      if (text.includes('className="live-banner"')) {
+      if (text.includes("<LiveBanner>")) {
         expect(text, f).not.toMatch(/\b(RUNS|FINDER|runById)\b/);
         expect(readFileSync(join(ROOT, "components", "LiveBuilder.tsx"), "utf8")).toContain("A recorded plan");
       } else {

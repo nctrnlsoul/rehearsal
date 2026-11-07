@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
-import { Mark, ReplayBanner, SiteFooter, Topbar } from "../../components/chrome";
+import { Badge, Icon, Mark, ReplayBanner, SiteFooter, Topbar } from "../../components/chrome";
 import { FINDER, type ReplayRun, runById, utcTime } from "../../lib/replays";
 import "./finder.css";
 
@@ -19,14 +19,14 @@ const CHECKS: readonly Check[] = [
 ];
 
 function Flag({ f }: { f: "high" | "low" | null }) {
-  return f === null ? <span className="flag">in range</span> : <span className="flag out">{f === "high" ? "high · bug" : "low"}</span>;
+  return f === null ? <Mark kind="ok">in range</Mark> : <Mark kind="bug">{f === "high" ? "high, a bug" : "low"}</Mark>;
 }
 
 function Evidence({ run, side, label }: { run: ReplayRun; side: Side; label: string }) {
   const order0 = run.calls.find((c) => c.kind === "card_order");
   return (
-    <article className="run">
-      <div className="plate"><span>{run.runId}</span><span className={`tag ${side.verdict}`}>{label}</span></div>
+    <article className="card run-ev">
+      <div className="plate"><Badge kind={side.verdict === "bug" ? "bug" : "ok"}>{label}</Badge><Link className="mono" href={`/runs/${run.runId}`}>{run.runId}</Link></div>
       <div className="body">
         <dl>
           {order0 !== undefined && (
@@ -62,33 +62,37 @@ export default function FinderPage() {
   return (
     <div className="s-finder">
       <a className="skip" href="#report">Skip to the report</a>
-      <ReplayBanner>A recorded finder pass, before and after the fix: runs, ids, counts and the change are real. Nothing here is live.</ReplayBanner>
       <Topbar current="finder" />
-      <header className="page">
-        <h1>The finder caught a real bug in the sample store, then proved the one-line fix.</h1>
-        <p>Same scenario, same check, run before and after the change. Each verdict rests on the store&apos;s own rows, not on the absence of an error.</p>
-      </header>
-
-      <section className="verdicts" aria-label="Verdicts before and after the fix">
+      <ReplayBanner>A recorded finder pass, before and after the fix: runs, ids, counts and the change are real. Nothing here is live.</ReplayBanner>
+      <main>
+      <section className="hero" aria-labelledby="finder-h">
+        <div className="wrap">
+          <p className="eyebrow">Finder report · {FINDER.classId}</p>
+          <h1 id="finder-h">The finder caught a real bug in the sample store, then proved the one-line fix.</h1>
+          <p className="lead">Same scenario, same check, run before and after the change. Each verdict rests on the store&apos;s own rows, not on the absence of an error.</p>
+        </div>
+      </section>
+      <div className="wrap lift">
+      <section className="card verdicts" aria-label="Verdicts before and after the fix">
         <div className="bug arrive" style={order(0)}>
           <div className="label">Before</div>
           <div className="num">{bugs(FINDER.before)}<small>bug</small></div>
-          <Mark kind="bug">BUG · {FINDER.classId}</Mark>
+          <Badge kind="bug">BUG</Badge>
           <div className="when"><Link href={`/runs/${before.runId}`}>run {before.runId}</Link> · {before.startedAt.slice(0, 10)} {utcTime(before.startedAt).slice(0, 5)} UTC</div>
         </div>
-        <div className="arrow" aria-hidden="true"><svg viewBox="0 0 40 16"><path d="M2 8h34M30 3l6 5-6 5" stroke="currentColor" strokeWidth="1.5" fill="none" /></svg></div>
+        <div className="arrow" aria-hidden="true"><Icon name="arrow" /></div>
         <div className="ok arrive" style={order(1)}>
           <div className="label">After</div>
           <div className="num">{bugs(FINDER.after)}<small>bugs</small></div>
-          <Mark kind="ok">OK · {FINDER.classId}</Mark>
+          <Badge kind="ok">OK</Badge>
           <div className="when"><Link href={`/runs/${after.runId}`}>run {after.runId}</Link> · {after.startedAt.slice(0, 10)} {utcTime(after.startedAt).slice(0, 5)} UTC</div>
         </div>
       </section>
 
-      <section className="report arrive" style={order(2)} id="report" aria-labelledby="cls-h">
-        <h2 className="label">Lab report</h2>
+      <section className="card report arrive" style={order(2)} id="report" aria-labelledby="cls-h">
+        <h2>Lab report</h2>
         <p className="cls" id="cls-h">{FINDER.title} <span className="mono">{FINDER.classId} · {FINDER.eventType}</span></p>
-        <table className="lab">
+        <div className="table-wrap"><table className="lab">
           <thead>
             <tr><th>Check</th><th>Expected</th><th>Before<span className="mono">{before.runId.slice(-6)}</span></th><th>Flag</th><th>After<span className="mono">{after.runId.slice(-6)}</span></th><th>Flag</th></tr>
           </thead>
@@ -108,7 +112,7 @@ export default function FinderPage() {
               );
             })}
           </tbody>
-        </table>
+        </table></div>
       </section>
 
       <section className="evidence" aria-label="Evidence: the store's rows for each run">
@@ -116,8 +120,8 @@ export default function FinderPage() {
         <Evidence run={after} side={FINDER.after} label="after the fix" />
       </section>
 
-      <section className="fix" aria-labelledby="fix-h">
-        <h2 className="label" id="fix-h">The change between the two runs</h2>
+      <section className="card fix" aria-labelledby="fix-h">
+        <h2 id="fix-h">The change between the two runs</h2>
         <div className="diff" role="img" aria-label={`${FINDER.fix.file} line ${FINDER.fix.line}: DEDUPE_BY_EVENT_ID changed from false to true`}>
           <div className="file">{FINDER.fix.file}:{FINDER.fix.line}</div>
           <div className="del">- {FINDER.fix.removed}</div>
@@ -126,8 +130,8 @@ export default function FinderPage() {
         <p className="meta">commit {FINDER.fix.commit} · {FINDER.fix.subject} · merged in PR #{FINDER.fix.pr}</p>
       </section>
 
-      <section className="rule" aria-labelledby="rule-h">
-        <h2 className="label" id="rule-h">How a verdict is decided</h2>
+      <section className="card rule" aria-labelledby="rule-h">
+        <h2 id="rule-h">How a verdict is decided</h2>
         <ol>
           <li><b>BUG</b> only when one event id was fulfilled twice.</li>
           <li><b>OK</b> only when the event was fulfilled once and a redelivery reached the store and was ignored.</li>
@@ -139,7 +143,9 @@ export default function FinderPage() {
         <Link className="btn btn-primary" href="/live">Run duplicate-webhook again</Link>
         <span className="note">A live finder run needs the judge passcode, at /live. These two runs took about 70 seconds and 2 minutes, mostly waiting on PayPal&apos;s redelivery.</span>
       </div>
-      <SiteFooter>REHEARSAL · edge-case finder · a recorded pass; the after-run cert host is not in our records, so it is not shown</SiteFooter>
+      </div>
+      </main>
+      <SiteFooter />
     </div>
   );
 }

@@ -65,6 +65,18 @@ describe("readEvent", () => {
     expect(parsed.amount).toBe("88.00");
   });
 
+  it("reads an invoicing event, whose invoice id lives in resource.invoice", () => {
+    for (const type of ["INVOICING.INVOICE.CREATED", "INVOICING.INVOICE.UNPAID", "INVOICING.INVOICE.PAID"]) {
+      const parsed = readEvent({
+        id: "WH-I",
+        event_type: type,
+        resource: { invoice: { id: "INV2-AAAA-BBBB-CCCC-DDDD", status: "PAID" }, links: [] },
+      });
+      expect(parsed.captureId).toBe("INV2-AAAA-BBBB-CCCC-DDDD");
+      expect(parsed.eventType).toBe(type);
+    }
+  });
+
   it("survives junk without throwing", () => {
     for (const junk of [null, undefined, "nope", 7, {}, { resource: "x" }, []]) {
       const parsed = readEvent(junk);

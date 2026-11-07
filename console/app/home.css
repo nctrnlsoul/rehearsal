@@ -1,0 +1,28 @@
+/* Home: start here, recorded plans, and the facts a judge can check. */
+.start-card { padding: 28px 28px 24px; }
+.start-actions { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; }
+.start-actions .btn .icon { width: 16px; height: 16px; }
+
+.plan-cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.plan-card { display: grid; gap: 6px; padding: 22px 24px; height: 100%; text-decoration: none; color: var(--text); transition: border-color var(--dur-hover) var(--ease); }
+.plan-card:hover { border-color: var(--accent); }
+.pc-name { font-size: 20px; font-weight: 600; }
+.pc-sum { font-size: 17px; }
+.pc-meta { font-size: 14px; color: var(--text-2); }
+.pc-go { margin-top: 6px; color: var(--accent); font-weight: 600; display: inline-flex; gap: 6px; align-items: center; }
+.pc-go .icon { width: 16px; height: 16px; }
+
+.trust { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.trust-block { padding: 22px 24px; display: grid; gap: 14px; align-content: start; }
+.trust-block h3, .tests h3, .limits h3 { font-size: 17px; font-weight: 600; }
+.proof-row { margin-top: 16px; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 2.2fr); gap: 16px; }
+.tests { padding: 22px 24px; display: grid; gap: 6px; align-content: start; }
+.tests .big { font-size: 56px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; margin-top: 8px; }
+.limits { padding: 22px 24px; }
+.limits ul { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; font-size: 15px; color: var(--text-2); }
+.limits .badge { margin-right: 6px; color: var(--text); }
+
+@media (max-width: 860px) {
+  .plan-cards, .trust, .proof-row { grid-template-columns: 1fr; }
+  .start-card { padding: 22px 18px 20px; }
+}

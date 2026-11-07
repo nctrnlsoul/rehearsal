@@ -11,7 +11,7 @@ import { Mark } from "./chrome";
  * here; the server reloads the plan and refuses if the digest differs.
  */
 
-export type PlanChoice = { readonly plan: string; readonly name: string; readonly description: string | null };
+export type PlanChoice = { readonly plan: string; readonly name: string; readonly summary: string; readonly description: string | null };
 export type FinderChoice = { readonly id: string; readonly title: string };
 
 type DryRun = {
@@ -133,18 +133,18 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
 
   return (
     <div className="builder">
-      <section className="pick" aria-labelledby="pick-h">
-        <h2 id="pick-h" className="label">1 · Choose what to run</h2>
-        <div className="modes" role="radiogroup" aria-label="Plan source">
-          <button type="button" role="radio" aria-checked={mode === "recorded"} className={`speed${mode === "recorded" ? " on" : ""}`} onClick={() => setMode("recorded")}>A recorded plan</button>
-          <button type="button" role="radio" aria-checked={mode === "describe"} className={`speed${mode === "describe" ? " on" : ""}`} onClick={() => { setMode("describe"); setPicked(null); setProblem(null); }}>Describe a business</button>
-          <button type="button" role="radio" aria-checked={mode === "finder"} className={`speed${mode === "finder" ? " on" : ""}`} onClick={() => { setMode("finder"); setPicked(null); setProblem(null); }}>Find an edge case</button>
+      <section className="card pick" aria-labelledby="pick-h">
+        <h2 id="pick-h"><span className="step-num" aria-hidden="true">1</span>Pick a plan</h2>
+        <div className="seg modes" role="radiogroup" aria-label="Plan source">
+          <button type="button" role="radio" aria-checked={mode === "recorded"} onClick={() => setMode("recorded")}>A recorded plan</button>
+          <button type="button" role="radio" aria-checked={mode === "describe"} onClick={() => { setMode("describe"); setPicked(null); setProblem(null); }}>Describe a business</button>
+          <button type="button" role="radio" aria-checked={mode === "finder"} onClick={() => { setMode("finder"); setPicked(null); setProblem(null); }}>Find an edge case</button>
         </div>
         {mode === "finder" ? (
           <fieldset className="plans">
             <legend className="sr">Finder classes</legend>
             {finder.map((c) => (
-              <label key={c.id} className="plan-option">
+              <label key={c.id} className={`plan-option${finderClass === c.id ? " on" : ""}`}>
                 <input type="radio" name="finder" value={c.id} checked={finderClass === c.id} onChange={() => setFinderClass(c.id)} />
                 <span className="nm">{c.title}</span>
                 <span className="id mono">{c.id}</span>
@@ -156,10 +156,10 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
           <fieldset className="plans">
             <legend className="sr">Recorded plans</legend>
             {plans.map((p) => (
-              <label key={p.plan} className="plan-option">
+              <label key={p.plan} className={`plan-option${chosen === p.plan ? " on" : ""}`}>
                 <input type="radio" name="plan" value={p.plan} checked={chosen === p.plan} onChange={() => setChosen(p.plan)} />
                 <span className="nm">{p.name}</span>
-                <span className="id mono">{p.plan}</span>
+                <span className="sum">{p.summary}</span>
                 {p.description !== null && <q>{p.description}</q>}
               </label>
             ))}
@@ -168,7 +168,7 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
           <form className="describe" onSubmit={(e) => { e.preventDefault(); void planIt(); }}>
             <label htmlFor="desc">What does the business do? The model writes a plan; the schema, the hosted caps and the event target decide whether it may run.</label>
             <textarea id="desc" value={description} maxLength={DESCRIPTION_MAX} rows={4} onChange={(e) => setDescription(e.target.value)} placeholder="A candle shop that takes card orders and sometimes refunds one" />
-            <div className="row">
+            <div className="row-end">
               <span className="note mono">{chars} / {DESCRIPTION_MAX}</span>
               <button type="submit" className="btn btn-quiet" disabled={chars === 0 || busy !== null}>{busy === "plan" ? "Planning…" : "Write a plan (1 model call)"}</button>
             </div>
@@ -176,14 +176,14 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
         )}
       </section>
 
-      <section className="dry" aria-labelledby="dry-h" aria-live="polite" aria-busy={busy !== null}>
-        <h2 id="dry-h" className="label">2 · Read exactly what it becomes</h2>
+      <section className="card dry" aria-labelledby="dry-h" aria-live="polite" aria-busy={busy !== null}>
+        <h2 id="dry-h"><span className="step-num" aria-hidden="true">2</span>Read exactly what it will do</h2>
         {busy === "dry" && <p className="note">Checking the plan…</p>}
         {problem !== null && (
-          <p className="problem"><Mark kind="stop">{problem.text}</Mark>{problem.link !== undefined && <> <Link href={problem.link.href}>{problem.link.label}</Link></>}</p>
+          <p className="problem-line"><Mark kind="bug">{problem.text}</Mark>{problem.link !== undefined && <> <Link href={problem.link.href}>{problem.link.label}</Link></>}</p>
         )}
         {picked === null && busy === null && problem === null && (
-          <p className="note">{mode === "recorded" ? "Choose a plan." : mode === "describe" ? "Describe a business to get a plan." : "The finder plans its class when the run starts, so its exact steps show on the run's timeline."}</p>
+          <p className="note">{mode === "recorded" ? "Choose a plan." : mode === "describe" ? "Describe a business to get a plan." : "The finder plans its class when the run starts, so its exact steps show on the run's page."}</p>
         )}
         {picked !== null && (
           <>
@@ -194,20 +194,20 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
               <pre className="plan-lines mono">{picked.dry.lines.join("\n")}</pre>
             )}
             <dl className="facts">
-              <dt>Worst-case time</dt><dd>{picked.dry.budgetS === null ? <span className="word">not computed</span> : <>{picked.dry.budgetS} s <span className="word">of</span> 600 s</>}</dd>
+              <dt>Worst-case time</dt><dd>{picked.dry.budgetS === null ? "not computed" : <>{picked.dry.budgetS} s of 600 s</>}</dd>
               <dt>Purchase bank</dt>
-              <dd className="word">{picked.dry.bank.needed === 0 ? "not used" : picked.dry.bank.short ? `BLOCKED: needs ${picked.dry.bank.needed}, ${picked.dry.bank.available} ready` : `draws ${picked.dry.bank.needed} of ${picked.dry.bank.available}`}</dd>
-              <dt>Digest</dt>{picked.dry.sha256 === null ? <dd className="word">none: the plan did not pass</dd> : <dd className="mono">{picked.dry.sha256}</dd>}
+              <dd>{picked.dry.bank.needed === 0 ? "not used" : picked.dry.bank.short ? `BLOCKED: needs ${picked.dry.bank.needed}, ${picked.dry.bank.available} ready` : `draws ${picked.dry.bank.needed} of ${picked.dry.bank.available}`}</dd>
+              <dt>Digest</dt>{picked.dry.sha256 === null ? <dd>none: the plan did not pass</dd> : <dd className="mono digest">{picked.dry.sha256}</dd>}
             </dl>
             {picked.scenario !== undefined && (
-              <details><summary>The plan's JSON</summary><pre className="mono json">{JSON.stringify(picked.scenario, null, 2)}</pre></details>
+              <details className="json"><summary>The plan&apos;s JSON</summary><pre className="mono">{JSON.stringify(picked.scenario, null, 2)}</pre></details>
             )}
           </>
         )}
       </section>
 
-      <section className="go" aria-labelledby="go-h">
-        <h2 id="go-h" className="label">3 · Run that, and only that</h2>
+      <section className="card go" aria-labelledby="go-h">
+        <h2 id="go-h"><span className="step-num" aria-hidden="true">3</span>Run it live in the sandbox</h2>
         <button type="button" className="btn btn-primary" onClick={() => void (mode === "finder" ? findIt() : runIt())} disabled={!runnable} aria-describedby="go-note">
           {busy === "run" ? "Starting…" : mode === "finder" ? "Run this class" : "Run this exact plan"}
         </button>

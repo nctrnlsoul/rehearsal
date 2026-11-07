@@ -43,9 +43,11 @@ export function optionalEnv(name: string, env: Env = process.env): string | null
 
 export function credentialsFor(role: AppRole, env: Env = process.env): Credentials {
   const vars = CREDENTIAL_VARS[role];
+  // Whitespace is never part of a client id or secret; a pasted newline would
+  // otherwise turn into an invalid_client from PayPal.
   return {
-    clientId: requiredEnv(vars.id, env),
-    clientSecret: requiredEnv(vars.secret, env),
+    clientId: requiredEnv(vars.id, env).trim(),
+    clientSecret: requiredEnv(vars.secret, env).trim(),
   };
 }
 

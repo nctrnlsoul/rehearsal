@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type LiveEvent, type LiveRead, liveView, mergeEvents, pairLabel, withinLabel } from "../lib/liveView";
+import { type LiveEvent, type LiveRead, liveView, mergeEvents } from "../lib/liveView";
 
 const T = (s: number) => new Date(Date.parse("2026-10-25T18:00:00Z") + s * 1000).toISOString();
 let seq = 0;
@@ -42,8 +42,8 @@ describe("liveView", () => {
     expect(v.calls).toHaveLength(1);
     expect(v.pairs).toEqual([{ callKey: "c:order", deliveryKey: "d:order:CAP-1", what: "the capture's delivery", callT: 4, arrivedT: 21, exact: false }]);
     expect(v.deliveries[0]).toMatchObject({ pair: "c:order", title: "PAYMENT.CAPTURE.COMPLETED", received: false });
-    expect(withinLabel(17.4)).toBe("within 17 s");
-    expect(pairLabel(v.pairs[0]!)).toBe("within 17 s");
+    expect(v.pairs[0]!.exact).toBe(false);
+    expect(Math.round(v.pairs[0]!.arrivedT! - v.pairs[0]!.callT)).toBe(17);
   });
 
   it("shows a pair as waiting while its delivery has not been seen", () => {
@@ -182,7 +182,8 @@ describe("liveView exact pairs (R-044)", () => {
     );
     expect(v.calls[0]!.t).toBeCloseTo(4.2, 3);
     expect(v.pairs).toEqual([{ callKey: "c:order", deliveryKey: "d:event:WH-1", what: "the capture's delivery", callT: v.calls[0]!.t, arrivedT: expect.closeTo(11.6, 3), exact: true }]);
-    expect(pairLabel(v.pairs[0]!)).toBe("7 s");
+    expect(v.pairs[0]!.exact).toBe(true);
+    expect(Math.round(v.pairs[0]!.arrivedT! - v.pairs[0]!.callT)).toBe(7);
     expect(v.deliveries).toEqual([
       { key: "d:event:WH-1", pair: "c:order", t: expect.closeTo(11.6, 3), at: T(11.6), title: "PAYMENT.CAPTURE.COMPLETED", facts: [["event", "WH-1"], ["capture", "CAP-1"], ["store", "fulfilled"]], received: true },
     ]);

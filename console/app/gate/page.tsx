@@ -40,19 +40,23 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
       <a className="skip" href="#gate">Skip to the passcode</a>
       <Topbar current="gate" />
       <main>
-        <section className="behind arrive" style={order(0)} aria-labelledby="behind-h">
-          <h1 id="behind-h">Behind this gate, a real PayPal sandbox account will run your scenario.</h1>
-          <p className="lede">Every order, refund and webhook a live run starts is created for real in PayPal&apos;s sandbox and checked against our sample store. Nothing touches live PayPal or real money.</p>
+        <section className="hero" aria-labelledby="behind-h">
+          <div className="wrap">
+            <p className="eyebrow">Judge passcode</p>
+            <h1 id="behind-h">Behind this gate, a real PayPal sandbox account will run your scenario.</h1>
+            <p className="lead">Every order, refund and webhook a live run starts is created for real in PayPal&apos;s sandbox and checked against our sample store. Nothing touches live PayPal or real money.</p>
+          </div>
         </section>
-        <dl className="inside arrive" style={order(1)} aria-label="What is behind the gate">
+        <div className="wrap lift gate-grid">
+        <dl className="card inside arrive" style={order(1)} aria-label="What is behind the gate">
           <dt>PayPal host</dt><dd><span className="mono">api-m.sandbox.paypal.com</span><small>pinned in code; no setting can point it at live PayPal</small></dd>
           <dt>Live runs</dt><dd>{live ? "On" : "Paused on this deployment"}<small>{live ? "real sandbox calls, one run at a time" : "recorded runs still replay"}</small></dd>
           <dt>Per run</dt><dd><span className="mono">{usd(HOSTED_CAPS.maxTotalMinor)}</span> at most, <span className="mono">{usd(HOSTED_CAPS.maxStepAmountMinor)}</span> per step</dd>
           <dt>Without a passcode</dt><dd>Recorded runs replay, each one labeled REPLAY</dd>
         </dl>
 
-        <section className="control arrive" style={order(2)} id="gate" aria-labelledby="gate-h">
-          <div className="plate"><h2 id="gate-h" className="label">Unlock runs</h2><span className="label mono">01</span></div>
+        <section className="card control arrive" style={order(2)} id="gate" aria-labelledby="gate-h">
+          <div className="plate"><h2 id="gate-h">Unlock live runs</h2></div>
           <form method="post" action="/api/gate">
             <label htmlFor="passcode">Judge passcode</label>
             <input
@@ -70,8 +74,9 @@ export default async function GatePage({ searchParams }: { searchParams: Promise
           </form>
           <p className="after">Checked on the server against a hash; the passcode itself is stored nowhere. {DEFAULT_LIMITS.perIp} wrong tries from one address (one /64 on IPv6) lock it out for an hour, counted in one place for every server.</p>
         </section>
+        </div>
       </main>
-      <SiteFooter>REHEARSAL · judge gate</SiteFooter>
+      <SiteFooter />
     </div>
   );
 }
