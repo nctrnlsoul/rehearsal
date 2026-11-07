@@ -38,20 +38,31 @@ describe("errorSummary", () => {
         message: "Request is not well-formed",
         details: [{ issue: "TRANSACTION_NOT_ELIGIBLE", description: "not eligible" }],
       },
-      "",
+      null,
     );
     expect(s).toContain("INVALID_REQUEST");
     expect(s).toContain("TRANSACTION_NOT_ELIGIBLE");
   });
 
   it("handles the oauth error shape", () => {
-    expect(errorSummary({ error: "invalid_client", error_description: "bad creds" }, "")).toBe(
+    expect(errorSummary({ error: "invalid_client", error_description: "bad creds" }, null)).toBe(
       "invalid_client | bad creds",
     );
   });
 
-  it("falls back to the raw preview when nothing is recognizable", () => {
-    expect(errorSummary({}, "some raw text")).toBe("some raw text");
-    expect(errorSummary(null, "raw")).toBe("raw");
+  // The raw body is saved with the run and served by the console, so a reply
+  // that is not PayPal's error shape is never quoted, however it arrives.
+  it("never quotes the raw body, and names the debug id instead", () => {
+    expect(errorSummary({}, "f1a2b3c4d5e6")).toBe("no PayPal error name in the reply, debug id f1a2b3c4d5e6");
+    expect(errorSummary(null, null)).toBe("no PayPal error name in the reply");
+    expect(errorSummary({ debug_id: "abc123", email: "buyer@example.com" }, null)).toBe(
+      "no PayPal error name in the reply, debug id abc123",
+    );
+    expect(errorSummary({}, "<html>proxy page</html>")).not.toContain("<");
+  });
+
+  it("keeps each named field printable and short", () => {
+    const s = errorSummary({ name: "X\u0007\nY", message: "m".repeat(5000) }, null);
+    expect(s).toBe(`X Y | ${"m".repeat(200)}`);
   });
 });

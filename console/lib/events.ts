@@ -52,6 +52,17 @@ function boundedIds(ids: Readonly<Record<string, string>>): Record<string, strin
 }
 
 /**
+ * The run state as it is saved, and later served by GET /api/runs/[id]: step
+ * details and the halt reason cleaned and capped like the events, so nothing
+ * longer than the engine's short summary of a PayPal reply is ever stored.
+ */
+export function savedState(s: RunState): RunState {
+  const steps: Record<string, RunState["steps"][string]> = {};
+  for (const [id, step] of Object.entries(s.steps)) steps[id] = { ...step, detail: cleanModelText(step.detail, MAX_DETAIL_CHARS) };
+  return { ...s, steps, haltReason: s.haltReason === null ? null : cleanModelText(s.haltReason, MAX_DETAIL_CHARS) };
+}
+
+/**
  * What changed between two saves of one run. prev is null for the first save.
  * sources maps a step to the step it names in "from" (an invoice payment to
  * its invoice), so the timeline can find the ids a step acted on (R-044).

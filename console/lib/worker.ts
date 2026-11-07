@@ -23,7 +23,7 @@ import {
   summarize,
   webhookHandlerUrl,
 } from "./engine";
-import { type RunEvent, type SeenDeliveries, deliveryEvents, stateEvents } from "./events";
+import { MAX_DETAIL_CHARS, type RunEvent, type SeenDeliveries, deliveryEvents, savedState, stateEvents } from "./events";
 import { DELIVERY_POLL_S, DELIVERY_WAIT_S, STEP_MARGIN_S, worstCaseOf } from "./hosted";
 
 /**
@@ -147,7 +147,7 @@ async function runTracked(
 
   const persist = async (s: RunState) => {
     if (fenced) throw new FencedError();
-    if (!(await rpcOk("console_save_state", { p_state: s, p_events: stateEvents(prev, s, sources) }))) {
+    if (!(await rpcOk("console_save_state", { p_state: savedState(s), p_events: stateEvents(prev, s, sources) }))) {
       fenced = true;
       throw new FencedError();
     }
@@ -323,7 +323,7 @@ export async function runFinderWorker(args: { runId: string; classId: string }, 
 /** A failed finish is left to the reaper, which will mark the run abandoned. */
 async function finishQuietly(deps: WorkerDeps, runId: string, status: "complete" | "halted" | "failed", reason: string): Promise<void> {
   try {
-    await deps.db.rpc("console_finish_run", { p_id: runId, p_status: status, p_reason: reason });
+    await deps.db.rpc("console_finish_run", { p_id: runId, p_status: status, p_reason: cleanModelText(reason, MAX_DETAIL_CHARS) });
   } catch (e) {
     deps.log(`run ${runId} could not record its finish (${e instanceof Error ? e.name : "error"}); the reaper will close it`);
   }

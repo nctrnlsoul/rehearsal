@@ -37,7 +37,7 @@ await runGate({
     if (numbered.status === 403 || numbered.status === 401) {
       return {
         ok: false,
-        reason: `invoicing refused with http ${numbered.status}: ${errorSummary(numbered.body, numbered.bodyPreview)}. Enable Invoicing on the rehearsal-seller app in the sandbox dashboard.`,
+        reason: `invoicing refused with http ${numbered.status}: ${errorSummary(numbered.body, numbered.debugId)}. Enable Invoicing on the rehearsal-seller app in the sandbox dashboard.`,
         qualifier: "BLOCKED",
       };
     }
@@ -45,7 +45,7 @@ await runGate({
     if (invoiceNumber === null) {
       return {
         ok: false,
-        reason: `could not generate an invoice number: http ${numbered.status}, ${errorSummary(numbered.body, numbered.bodyPreview)}`,
+        reason: `could not generate an invoice number: http ${numbered.status}, ${errorSummary(numbered.body, numbered.debugId)}`,
         qualifier: "UNKNOWN",
       };
     }
@@ -94,7 +94,7 @@ await runGate({
     if (draftVerdict.kind !== "success" || invoiceId === null) {
       return {
         ok: false,
-        reason: `invoice not created: http ${created.status}, ${errorSummary(created.body, created.bodyPreview)}`,
+        reason: `invoice not created: http ${created.status}, ${errorSummary(created.body, created.debugId)}`,
         ...(draftVerdict.kind === "unknown" ? { qualifier: "UNKNOWN" } : {}),
       };
     }
@@ -110,7 +110,7 @@ await runGate({
     if (sent.status < 200 || sent.status >= 300) {
       return {
         ok: false,
-        reason: `send failed: http ${sent.status}, ${errorSummary(sent.body, sent.bodyPreview)}`,
+        reason: `send failed: http ${sent.status}, ${errorSummary(sent.body, sent.debugId)}`,
       };
     }
 
@@ -147,7 +147,7 @@ await runGate({
     if (paid.status < 200 || paid.status >= 300) {
       return {
         ok: false,
-        reason: `record payment failed: http ${paid.status}, ${errorSummary(paid.body, paid.bodyPreview)}`,
+        reason: `record payment failed: http ${paid.status}, ${errorSummary(paid.body, paid.debugId)}`,
       };
     }
 

@@ -78,7 +78,7 @@ export const payoutBatchHandler: StepHandler = async (ctx) => {
     knownFailed: ["DENIED", "CANCELED"],
   });
   if (created.kind !== "success" || payoutBatchId === null) {
-    const detail = `payout batch not accepted: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`;
+    const detail = `payout batch not accepted: http ${res.status}, ${errorSummary(res.body, res.debugId)}`;
     return created.kind === "failed" ? failed(detail, ids) : unknown(detail, ids);
   }
 

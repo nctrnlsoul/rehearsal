@@ -44,7 +44,7 @@ export const cardOrderHandler: StepHandler = async (ctx) => {
     knownFailed: ["VOIDED"],
   });
   if (verdict.kind !== "success") {
-    const detail = `order did not complete: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`;
+    const detail = `order did not complete: http ${res.status}, ${errorSummary(res.body, res.debugId)}`;
     return verdict.kind === "failed" ? failed(detail, ids) : unknown(detail, ids);
   }
 

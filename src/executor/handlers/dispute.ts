@@ -78,7 +78,7 @@ export const openDisputeHandler: StepHandler = async (ctx) => {
   if (disputeId !== null) ids["dispute_id"] = disputeId;
 
   if (disputeId === null) {
-    const detail = `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.bodyPreview)}`;
+    const detail = `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.debugId)}`;
     return filed.status >= 400 && filed.status < 500 ? failed(detail, ids) : unknown(detail, ids);
   }
 

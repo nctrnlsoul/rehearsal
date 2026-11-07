@@ -63,7 +63,7 @@ export const resendWebhookHandler: StepHandler = async (ctx) => {
 
     // A failed read is never an empty result.
     if (listed.status !== 200) {
-      lastDetail = `http ${listed.status}: ${errorSummary(listed.body, listed.bodyPreview)}`;
+      lastDetail = `http ${listed.status}: ${errorSummary(listed.body, listed.debugId)}`;
       ctx.log(`event list FAILED, ${lastDetail}`);
       await ctx.sleep(POLL_INTERVAL_MS);
       continue;
@@ -117,7 +117,7 @@ export const resendWebhookHandler: StepHandler = async (ctx) => {
       );
     }
 
-    const summary = `http ${resend.status}, ${errorSummary(resend.body, resend.bodyPreview)}`;
+    const summary = `http ${resend.status}, ${errorSummary(resend.body, resend.debugId)}`;
     if (resend.status === 0 || resend.status === 408 || resend.status >= 500) {
       return unknown(
         `resend of ${eventId} may or may not have been accepted (${summary}); not retried, because a retry could deliver it a third time`,

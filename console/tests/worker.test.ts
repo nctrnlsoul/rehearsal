@@ -257,6 +257,20 @@ describe("runScenarioWorker", () => {
     expect(run.state.steps["o1"]!.finishedAt).toBeNull();
   });
 
+  // The saved state is what GET /api/runs/[id] serves, so a long or noisy
+  // step detail is cleaned and capped before it is stored, as events are.
+  it("saves step details and the halt reason cleaned and capped", async () => {
+    const noisy = "x".repeat(5000) + "\u0007\n";
+    const h = await harness({ handlers: { card_order: async () => ({ kind: "failed", detail: noisy, ids: {} }) } });
+    await work(h);
+    const run = await h.run();
+    expect(run.status).toBe("halted");
+    expect(Array.from(run.state.steps["o1"]!.detail)).toHaveLength(300);
+    expect(run.state.steps["o1"]!.detail).not.toMatch(/[\u0000-\u001f]/);
+    expect(Array.from(run.halt_reason ?? "").length).toBeLessThanOrEqual(300);
+    expect((run.state as unknown as { haltReason: string }).haltReason.length).toBeLessThanOrEqual(300);
+  });
+
   it("does not send a step that might outlast this server's time, and says why", async () => {
     // 80 s left: a card order can take 30 s, plus the 60 s margin, so it is not sent.
     const h = await harness({ deadlineS: 80 });

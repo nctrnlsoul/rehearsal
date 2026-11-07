@@ -70,7 +70,7 @@ await runGate({
     if (orderVerdict.kind !== "success") {
       return {
         ok: false,
-        reason: `order did not complete: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`,
+        reason: `order did not complete: http ${res.status}, ${errorSummary(res.body, res.debugId)}`,
         ...(orderVerdict.kind === "unknown" ? { qualifier: "UNKNOWN" } : {}),
       };
     }

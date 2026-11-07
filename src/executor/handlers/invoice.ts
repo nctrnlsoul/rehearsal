@@ -50,13 +50,13 @@ export const invoiceCreateHandler: StepHandler = async (ctx) => {
   });
   if (numbered.status === 401 || numbered.status === 403) {
     return failed(
-      `invoicing refused with http ${numbered.status}: ${errorSummary(numbered.body, numbered.bodyPreview)}. Enable Invoicing on the rehearsal-seller app.`,
+      `invoicing refused with http ${numbered.status}: ${errorSummary(numbered.body, numbered.debugId)}. Enable Invoicing on the rehearsal-seller app.`,
     );
   }
   const invoiceNumber = pick(numbered.body, ["invoice_number"]);
   if (invoiceNumber === null) {
     return unknown(
-      `could not generate an invoice number: http ${numbered.status}, ${errorSummary(numbered.body, numbered.bodyPreview)}`,
+      `could not generate an invoice number: http ${numbered.status}, ${errorSummary(numbered.body, numbered.debugId)}`,
     );
   }
 
@@ -104,7 +104,7 @@ export const invoiceCreateHandler: StepHandler = async (ctx) => {
     knownFailed: ["CANCELLED"],
   });
   if (verdict.kind !== "success" || invoiceId === null) {
-    const d = `invoice not created: http ${created.status}, ${errorSummary(created.body, created.bodyPreview)}`;
+    const d = `invoice not created: http ${created.status}, ${errorSummary(created.body, created.debugId)}`;
     return verdict.kind === "failed" ? failed(d, ids) : unknown(d, ids);
   }
 
@@ -127,7 +127,7 @@ export const invoiceSendHandler: StepHandler = async (ctx) => {
     body: { send_to_invoicer: false, send_to_recipient: false },
   });
   if (sent.status < 200 || sent.status >= 300) {
-    return writeOutcome(sent.status, `send failed: http ${sent.status}, ${errorSummary(sent.body, sent.bodyPreview)}`);
+    return writeOutcome(sent.status, `send failed: http ${sent.status}, ${errorSummary(sent.body, sent.debugId)}`);
   }
 
   const after = await ctx.seller.call({
@@ -181,7 +181,7 @@ export const invoiceRecordPaymentHandler: StepHandler = async (ctx) => {
   if (paid.status < 200 || paid.status >= 300) {
     return writeOutcome(
       paid.status,
-      `record payment failed: http ${paid.status}, ${errorSummary(paid.body, paid.bodyPreview)}`,
+      `record payment failed: http ${paid.status}, ${errorSummary(paid.body, paid.debugId)}`,
       ids,
     );
   }
@@ -220,7 +220,7 @@ export const invoiceCancelHandler: StepHandler = async (ctx) => {
   if (cancelled.status < 200 || cancelled.status >= 300) {
     return writeOutcome(
       cancelled.status,
-      `cancel failed: http ${cancelled.status}, ${errorSummary(cancelled.body, cancelled.bodyPreview)}`,
+      `cancel failed: http ${cancelled.status}, ${errorSummary(cancelled.body, cancelled.debugId)}`,
     );
   }
 

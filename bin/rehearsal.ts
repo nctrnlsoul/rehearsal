@@ -375,7 +375,7 @@ async function bankAdd(rest: string[]): Promise<void> {
 
   const orderId = pick(res.body, ["id"]);
   if (orderId === null) {
-    console.error(`could not create the order: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`);
+    console.error(`could not create the order: http ${res.status}, ${errorSummary(res.body, res.debugId)}`);
     process.exit(1);
   }
 
@@ -473,7 +473,7 @@ async function bankConfirm(): Promise<void> {
       });
       captureId = pick(cap.body, ["purchase_units", 0, "payments", "captures", 0, "id"]);
       if (captureId === null) {
-        console.log(`  capture failed: http ${cap.status}, ${errorSummary(cap.body, cap.bodyPreview)}`);
+        console.log(`  capture failed: http ${cap.status}, ${errorSummary(cap.body, cap.debugId)}`);
         continue;
       }
       console.log(`  captured ${captureId}`);
@@ -504,7 +504,7 @@ async function bankConfirm(): Promise<void> {
     if (res.status !== 200) {
       console.log("");
       console.log(
-        `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.bodyPreview)}`,
+        `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.debugId)}`,
       );
       console.log("Enable Transaction Search on the rehearsal-buyer app, or supply ids by hand.");
     } else {

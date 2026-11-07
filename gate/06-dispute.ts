@@ -79,7 +79,7 @@ async function findBuyerTransactionId(
     });
 
     if (res.status !== 200) {
-      lastDetail = `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.bodyPreview)}`;
+      lastDetail = `buyer transaction search returned http ${res.status}: ${errorSummary(res.body, res.debugId)}`;
       ctx.log(lastDetail);
       // Missing permission will not fix itself by waiting.
       if (res.status === 401 || res.status === 403) {
@@ -171,7 +171,7 @@ await runGate({
       if (orderId === null) {
         return {
           ok: false,
-          reason: `could not create the wallet order: http ${res.status}, ${errorSummary(res.body, res.bodyPreview)}`,
+          reason: `could not create the wallet order: http ${res.status}, ${errorSummary(res.body, res.debugId)}`,
         };
       }
       saveState("gate6", { orderId });
@@ -228,7 +228,7 @@ await runGate({
       if (capVerdict.kind !== "success" || captureId === null) {
         return {
           ok: false,
-          reason: `capture of approved order failed: http ${cap.status}, ${errorSummary(cap.body, cap.bodyPreview)}`,
+          reason: `capture of approved order failed: http ${cap.status}, ${errorSummary(cap.body, cap.debugId)}`,
           ...(capVerdict.kind === "unknown" ? { qualifier: "UNKNOWN" } : {}),
         };
       }
@@ -303,7 +303,7 @@ await runGate({
       if (disputeId === null) {
         return {
           ok: false,
-          reason: `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.bodyPreview)}. Sandbox dispute creation is absent from PayPal's public OpenAPI spec, so this is the finding, not a code bug.`,
+          reason: `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.debugId)}. Sandbox dispute creation is absent from PayPal's public OpenAPI spec, so this is the finding, not a code bug.`,
           ...(filed.status === 403 || filed.status === 404 ? { qualifier: "BLOCKED" } : {}),
         };
       }
@@ -347,7 +347,7 @@ await runGate({
     ctx.log(`require-evidence returned http ${requireEv.status}`);
     if (!requireOk) {
       ctx.note(
-        `require-evidence REJECTED: http ${requireEv.status}, ${errorSummary(requireEv.body, requireEv.bodyPreview)}`,
+        `require-evidence REJECTED: http ${requireEv.status}, ${errorSummary(requireEv.body, requireEv.debugId)}`,
       );
     }
 
@@ -372,7 +372,7 @@ await runGate({
     if (adjudicate.status < 200 || adjudicate.status >= 300) {
       return {
         ok: false,
-        reason: `on dispute ${disputeId} at stage ${requiredStage ?? "unreadable"}: require-evidence ${requireOk ? "accepted" : "REJECTED"}, adjudicate failed with http ${adjudicate.status}, ${errorSummary(adjudicate.body, adjudicate.bodyPreview)}`,
+        reason: `on dispute ${disputeId} at stage ${requiredStage ?? "unreadable"}: require-evidence ${requireOk ? "accepted" : "REJECTED"}, adjudicate failed with http ${adjudicate.status}, ${errorSummary(adjudicate.body, adjudicate.debugId)}`,
       };
     }
 
