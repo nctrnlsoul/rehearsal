@@ -48,7 +48,7 @@
 .s-live details summary { cursor: pointer; font-size: 14px; color: var(--text-2); min-height: 24px; }
 .s-live .go .btn { width: max-content; }
 
-/* Human words inside a machine-data line stay in the sans (R-027). */
+/* Human words inside a machine-data line stay in the sans. */
 .s-live .words, .s-live .facts .word { font-family: var(--font-sans); font-variant-numeric: normal; }
 .s-live .facts span.word { font-family: var(--font-sans); }
 

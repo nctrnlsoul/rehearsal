@@ -66,7 +66,7 @@ export function dryRunLines(scenario: Scenario): string[] {
     lines.push(`  about      ${scenario.profile.description}`);
   }
   lines.push(`  currency   ${c}`);
-  // R-045: a plan with no webhook registers none, but PayPal still delivers the
+  // A plan with no webhook registers none, but PayPal still delivers the
   // account's events to every webhook already registered on it.
   lines.push(
     scenario.webhook === undefined

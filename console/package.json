@@ -1,7 +1,8 @@
 {
   "name": "rehearsal-console",
-  "version": "0.0.0",
+  "version": "0.6.1",
   "private": true,
+  "license": "MIT",
   "description": "REHEARSAL's web console: replays of recorded runs for everyone, and live sandbox runs behind the judge passcode.",
   "scripts": {
     "dev": "next dev",

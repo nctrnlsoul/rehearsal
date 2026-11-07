@@ -3,7 +3,7 @@ import { isIPv4, isIPv6 } from "node:net";
 import type { ConsoleDb } from "./db";
 
 /**
- * The judge gate (R-034). Pure functions plus one injectable attempt store, so
+ * The judge gate. Pure functions plus one injectable attempt store, so
  * every rule here is tested without a server.
  *
  * Fail closed throughout: a missing or malformed passcode hash or session
@@ -110,14 +110,14 @@ export type LimiterConfig = {
   readonly perIp: number;
   /**
    * Wrong passcodes from all addresses together per window that count as an
-   * attack in progress. Crossing it is logged; it refuses no one (R-036).
+   * attack in progress. Crossing it is logged; it refuses no one.
    */
   readonly global: number;
   readonly windowMs: number;
 };
 
 /**
- * 30 an hour, not 5 (R-049): judges behind one corporate exit share an address,
+ * 30 an hour, not 5: judges behind one corporate exit share an address,
  * and one person's typos must not lock the rest out. The passcode is 24 random
  * characters, so 30 guesses an hour is still nothing to a guesser.
  */
@@ -128,11 +128,11 @@ export type LimitCheck =
   | { readonly allowed: false; readonly retryAfterS: number };
 
 /**
- * Where passcode tries are counted. Shared by every server instance (R-038):
+ * Where passcode tries are counted. Shared by every server instance:
  * the counts live in the console's database, so a guesser cannot reset them by
  * landing on a fresh instance. The rules themselves are SQL, in
  * migrations/0003 (console_gate_take, console_gate_fail, console_gate_release),
- * and only the caller's own count ever refuses anyone (R-036). A correct
+ * and only the caller's own count ever refuses anyone. A correct
  * passcode gives back the one slot its own try took, and nothing more: an
  * address bucket can be shared (a NAT, an IPv6 /64, "unknown"), and a judge
  * logging in must not hand a guesser beside them fresh tries.

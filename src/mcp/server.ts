@@ -46,7 +46,7 @@ import { runReportLines } from "../executor/report";
 import { guardTransport, safeErrorText } from "./output";
 
 /**
- * REHEARSAL as an MCP server, stdio only (R-017). Every tool is a thin front
+ * REHEARSAL as an MCP server, stdio only. Every tool is a thin front
  * end over the same planner, scenario gate, executor, bank and finder the CLI
  * uses; nothing here decides what a scenario may do.
  *
@@ -72,7 +72,7 @@ export type ServerDeps = {
 };
 
 export const SERVER_NAME = "rehearsal";
-export const SERVER_VERSION = "0.4.0";
+export const SERVER_VERSION = "0.6.1";
 
 export const MAX_DESCRIPTION_CHARS = 4000;
 export const MAX_SCENARIO_JSON_CHARS = 32_768;

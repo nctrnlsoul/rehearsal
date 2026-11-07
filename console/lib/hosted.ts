@@ -1,7 +1,7 @@
 import { type Caps, FAILURE_CLASSES, capsFromEnv, eventOriginsFromEnv, gateScenario, normalizeOrigin, type Scenario } from "./engine";
 
 /**
- * Everything that makes a hosted run smaller than a local one (R-039). The
+ * Everything that makes a hosted run smaller than a local one. The
  * numbers live here, in code. An environment variable may lower any of them
  * and never raise one, and a malformed variable stops live runs rather than
  * being skipped. Pure, so every rule is tested without a server.
@@ -9,7 +9,7 @@ import { type Caps, FAILURE_CLASSES, capsFromEnv, eventOriginsFromEnv, gateScena
 
 type Env = Record<string, string | undefined>;
 
-/** R-039, with R-043's USD 150 a step so Tiny Bakery's USD 120 invoice runs: 8 steps, USD 400 a run, 1 dispute. */
+/** USD 150 a step so Tiny Bakery's USD 120 invoice runs; 8 steps, USD 400 a run, 1 dispute. */
 export const HOSTED_CAPS: Caps = {
   currency: "USD",
   maxStepAmountMinor: 15_000n,
@@ -21,7 +21,7 @@ export const HOSTED_CAPS: Caps = {
 export type DailyLimits = { readonly global: number; readonly session: number; readonly ip: number };
 
 /**
- * R-049, amending R-039: quotas are per session and global only. Judges behind
+ * Quotas are per session and global only. Judges behind
  * one corporate exit share an address, so a per-address bucket at the session
  * number gave all of them one judge's share. The address bucket stays in the
  * database call but at the global number, where it can never bind first.
@@ -29,9 +29,9 @@ export type DailyLimits = { readonly global: number; readonly session: number; r
 export const HOSTED_RUN_LIMITS: DailyLimits = { global: 20, session: 5, ip: 20 };
 export const HOSTED_MODEL_LIMITS: DailyLimits = { global: 30, session: 8, ip: 30 };
 
-/** The run route's Vercel limit (R-030). Never above 800: that is beta. */
+/** The run route's Vercel limit. Never above 800: that is beta. */
 export const MAX_DURATION_S = 800;
-/** R-039: a plan whose worst case is longer than this does not run hosted. */
+/** A plan whose worst case is longer than this does not run hosted. */
 export const TIME_BUDGET_S = 600;
 /** Kept free before each step, for the saves and the delivery wait that follow it. */
 export const STEP_MARGIN_S = 60;
@@ -72,6 +72,12 @@ export const worstCaseOf = (kind: string): number => STEP_WORST_CASE_S[kind] ?? 
 export function timeBudgetS(scenario: Scenario): number {
   return scenario.steps.reduce((sum, s) => sum + worstCaseOf(s.kind), 0);
 }
+
+/** Longest business description a hosted plan request may send. */
+export const DESCRIPTION_MAX_CHARS = 2000;
+
+/** The engine's own defaults, for the trust panel, which may not import the engine directly. */
+export { DEFAULT_AI_BUDGET, DEFAULT_CAPS, PLANNER_TIMEOUT_MS } from "./engine";
 
 export const KILL_SWITCH_VAR = "CONSOLE_LIVE_RUNS";
 
@@ -157,7 +163,7 @@ export function hostedConfig(env: Env): ConfigResult {
 export type HostedGate = { readonly ok: true; readonly scenario: Scenario; readonly budgetS: number } | { readonly ok: false; readonly errors: string[] };
 
 /**
- * The gate a hosted plan passes, for the dry run and the run alike (R-023):
+ * The gate a hosted plan passes, for the dry run and the run alike:
  * the engine's schema, allowlist and caps with the hosted numbers, then the
  * time budget, so a plan the dry run accepts is one the run accepts.
  */

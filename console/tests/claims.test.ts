@@ -35,7 +35,8 @@ describe("caps claim", () => {
     expect(caps).toMatch(/maxTotalMinor: 200_000n/);
     expect(caps).toMatch(/maxSteps: 30,/);
     expect(caps).toMatch(/maxDisputes: 2,/);
-    for (const shown of ["USD 500.00", "USD 2,000.00", "<dd>30</dd>", "<dd>2</dd>"]) expect(trust).toContain(shown);
+    // Rendered from DEFAULT_CAPS; the figures themselves are pinned above.
+    for (const shown of ["usd(DEFAULT_CAPS.maxStepAmountMinor)", "usd(DEFAULT_CAPS.maxTotalMinor)", "{DEFAULT_CAPS.maxSteps}", "{DEFAULT_CAPS.maxDisputes}"]) expect(trust).toContain(shown);
   });
 
   it("shows the hosted caps from the constants the routes enforce, here and on the gate", () => {
@@ -118,5 +119,29 @@ describe("gate lockout claim", () => {
 
   it("never says a network is locked, since the key is an address", () => {
     expect(gate).not.toMatch(/this network/i);
+  });
+});
+
+// Re-measured for v0.6.1: the trust panel's figures read the constants the
+// code enforces, so a changed cap or budget changes the page with it.
+describe("trust panel figures", () => {
+  it("come from the code's constants, not typed-in numbers", () => {
+    for (const source of [
+      "usd(DEFAULT_CAPS.maxStepAmountMinor)",
+      "usd(DEFAULT_CAPS.maxTotalMinor)",
+      "DEFAULT_CAPS.maxSteps",
+      "DEFAULT_CAPS.maxDisputes",
+      "usd(HOSTED_CAPS.maxStepAmountMinor)",
+      "DEFAULT_AI_BUDGET.maxOutputTokensPerCall",
+      "PLANNER_TIMEOUT_MS / 1000",
+      "count(DESCRIPTION_MAX_CHARS)",
+      "facts.version",
+    ]) {
+      expect(trust, source).toContain(source);
+    }
+    for (const literal of ["USD 500.00", "USD 2,000.00", "4,000 tokens", "4,000 chars", "facts.branch"]) {
+      expect(trust, literal).not.toContain(literal);
+    }
+    expect(trust).toContain("the reports are in the repo under evidence/");
   });
 });

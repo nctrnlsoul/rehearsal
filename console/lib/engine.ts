@@ -23,7 +23,7 @@ export { type ExecutorDeps, SCENARIO_DIGEST_KEY, executeScenario } from "../../s
 export { handlers as defaultHandlers } from "../../src/executor/handlers";
 export type { ClaimResult, HandlerRegistry, StepHandler } from "../../src/executor/types";
 export { dryRunLines } from "../../src/executor/dryRun";
-export { AiBudgetTracker, aiBudgetFromEnv } from "../../src/ai/budget";
-export { DEFAULT_PLANNER_MODEL, type GenerateFn, type PlanOutcome, anthropicGenerator, cleanModelText, planScenario } from "../../src/ai/planner";
+export { AiBudgetTracker, DEFAULT_AI_BUDGET, aiBudgetFromEnv } from "../../src/ai/budget";
+export { DEFAULT_PLANNER_MODEL, type GenerateFn, PLANNER_TIMEOUT_MS, type PlanOutcome, anthropicGenerator, cleanModelText, planScenario } from "../../src/ai/planner";
 export { type ClassResult, runFinder } from "../../src/ai/finder";
 export { FAILURE_CLASSES, type StoreSnapshot, classById } from "../../src/ai/failureClasses";

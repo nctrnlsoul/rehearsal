@@ -92,7 +92,7 @@ export async function executeScenario(
     }
     // Matching ids are not enough: the same ids with bigger amounts would let
     // the two halves of a run together move more than the caps allow. A run
-    // with no recorded digest cannot prove it matches, so it is refused too (R-021).
+    // with no recorded digest cannot prove it matches, so it is refused too.
     const recorded = args.resume.meta[SCENARIO_DIGEST_KEY];
     if (args.scenarioDigest !== undefined && recorded !== args.scenarioDigest) {
       throw new Error(

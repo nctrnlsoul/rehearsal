@@ -202,7 +202,7 @@ export type DeliveryState = {
   /** Distinct cert hosts the deliveries named, so an original and a resend can be compared. */
   certHosts: string[];
   /**
-   * R-044: what ties a delivery to the call that caused it. The distinct ids
+   * What ties a delivery to the call that caused it. The distinct ids
    * the store recorded as the order (the capture, or the event's resource id),
    * and when each delivery was received, earliest first, as ISO timestamps.
    * Verified deliveries only: a refused one carries whatever an anonymous

@@ -8,7 +8,7 @@ import { Mark } from "./chrome";
 
 /**
  * A live run, drawn as it happens, with the replay timeline's lanes and
- * connectors (R-025): every exact call-delivery pair is joined, solid once the
+ * connectors: every exact call-delivery pair is joined, solid once the
  * delivery is seen, dashed in the accent while it is awaited, with the time on
  * the connector. The connector drawing follows ReplayTimeline's; the two
  * should be merged into one board after judging.

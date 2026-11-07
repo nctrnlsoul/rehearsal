@@ -27,19 +27,19 @@ import { MAX_DETAIL_CHARS, type RunEvent, type SeenDeliveries, deliveryEvents, s
 import { DELIVERY_POLL_S, DELIVERY_WAIT_S, STEP_MARGIN_S, worstCaseOf } from "./hosted";
 
 /**
- * Runs one hosted scenario inside the run route's after() (R-028, R-030).
+ * Runs one hosted scenario inside the run route's after().
  *
  * Every save is awaited before the next step can reach PayPal, and every
  * write is fenced: once the reaper has called this run dead, the next save
  * comes back false and the worker stops before sending anything else. Nothing
- * here retries a step (R-020).
+ * here retries a step.
  */
 
 export type WorkerDeps = {
   readonly db: ConsoleDb;
   readonly seller: PaypalClient;
   readonly buyer: PaypalClient;
-  /** The store's token-gated state endpoint (R-040). Null: heartbeats only, no deliveries. */
+  /** The store's token-gated state endpoint. Null: heartbeats only, no deliveries. */
   readonly readStore: ((sinceIso: string) => Promise<StoreSnapshot>) | null;
   readonly now: () => Date;
   readonly sleep: (ms: number) => Promise<void>;
@@ -270,9 +270,9 @@ export type FinderWorkerDeps = WorkerDeps & {
 const MAX_FINDING_CHARS = 300;
 
 /**
- * One finder class, hosted (R-028: one class per request). The engine's finder
+ * One finder class, hosted, one class per request. The engine's finder
  * plans the class's fixed template with one model call, runs it reuse-only,
- * and reads the verdict from the store's own records (R-012). The finder
+ * and reads the verdict from the store's own records. The finder
  * waits for its own evidence, so there is no second delivery wait here.
  */
 export async function runFinderWorker(args: { runId: string; classId: string }, deps: FinderWorkerDeps): Promise<void> {

@@ -76,14 +76,14 @@ export async function handleGatePost(req: Request, deps: GateDeps): Promise<Resp
   if (hash === null || secret === null) return seeOther("/gate?e=closed");
 
   // No counter means no lockout, so the gate stays shut rather than taking
-  // guesses it cannot count (R-038).
+  // guesses it cannot count.
   const attempts = deps.attempts;
   if (attempts === null) return seeOther("/gate?e=unavailable");
 
   // The try takes its slot before the passcode is hashed, so a locked-out
   // caller costs no scrypt work and parallel guesses cannot share one count.
   // Only the caller's own count refuses: past the global ceiling the right
-  // passcode still opens the gate (R-036).
+  // passcode still opens the gate.
   const ip = clientIp(req.headers);
   let check;
   try {

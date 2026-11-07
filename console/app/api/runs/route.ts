@@ -7,7 +7,7 @@ import { runScenarioWorker } from "../../../lib/worker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// R-030: after() keeps working up to the route's maxDuration. 800 is the Pro
+// after() keeps working up to the route's maxDuration. 800 is the Pro
 // limit that is generally available; above it is beta. Never raise this.
 export const maxDuration = 800;
 

@@ -106,7 +106,7 @@ function cliCaps(): Caps {
     return capsFromEnv(process.env);
   } catch {
     console.error(
-      "a cap variable (REHEARSAL_MAX_STEP_AMOUNT, REHEARSAL_MAX_RUN_TOTAL, REHEARSAL_MAX_STEPS or REHEARSAL_MAX_DISPUTES) is malformed, so nothing will run. Fix it in the Windows environment variable screen.",
+      "a cap variable (REHEARSAL_MAX_STEP_AMOUNT, REHEARSAL_MAX_RUN_TOTAL, REHEARSAL_MAX_STEPS or REHEARSAL_MAX_DISPUTES) is malformed, so nothing will run. Fix it where your environment variables are set.",
     );
     process.exit(1);
   }
@@ -639,10 +639,11 @@ function bankList(): void {
 function usage(): void {
   console.log("REHEARSAL");
   console.log("  rehearsal dry-run <scenario.json>        print the plan, no network calls");
-  console.log('  rehearsal plan "<description>"           AI-plan a scenario, shows it only');
+  console.log('  rehearsal plan "<description>" [--out <file>]   AI-plan a scenario, save it, run nothing');
   console.log('  rehearsal plan "<description>" --yes     plan it and then run it');
   console.log("  rehearsal run <scenario.json>            run it against the sandbox");
   console.log("  rehearsal run <scenario.json> --resume <runId> [--retry <stepId>]");
+  console.log('  rehearsal find ["<description>"] [--only <classId>]   run the edge-case finder against the sample store');
   console.log("  rehearsal bank:add [--amount 88.00]      create an order and print its approval link");
   console.log("  rehearsal bank:confirm                   capture approved orders and find buyer txn ids");
   console.log("  rehearsal bank:set-txn --order <id> --txn <id>   supply a buyer txn id by hand");

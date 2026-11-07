@@ -1,5 +1,5 @@
 /**
- * The console's Supabase access (R-040: its own project). Every call is one
+ * The console's Supabase access, in its own project, never the store's. Every call is one
  * of the SQL functions in migrations/, never a table read or write, so each
  * rule lives in one place and runs inside one transaction. Same posture as the
  * store: the key travels on the apikey header only, the host is pinned to

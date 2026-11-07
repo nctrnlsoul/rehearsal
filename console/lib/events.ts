@@ -28,7 +28,7 @@ const MAX_ID_KEY_CHARS = 40;
 const MAX_ID_CHARS = 128;
 const MAX_TEXT_CHARS = 100;
 const MAX_HOSTS = 3;
-/** The store reports at most five of each (R-044). */
+/** The store reports at most five of each. */
 const MAX_DELIVERY_IDS = 5;
 
 const short = (v: unknown, n: number): string | null => (typeof v === "string" && v !== "" ? cleanModelText(v, n) : null);
@@ -65,7 +65,7 @@ export function savedState(s: RunState): RunState {
 /**
  * What changed between two saves of one run. prev is null for the first save.
  * sources maps a step to the step it names in "from" (an invoice payment to
- * its invoice), so the timeline can find the ids a step acted on (R-044).
+ * its invoice), so the timeline can find the ids a step acted on.
  */
 export function stateEvents(prev: RunState | null, next: RunState, sources: ReadonlyMap<string, string> = new Map()): RunEvent[] {
   const events: RunEvent[] = [];
@@ -109,7 +109,7 @@ export type SeenDeliveries = Map<string, number>;
  * New deliveries in a store snapshot. A delivery event is emitted the first
  * time an event id appears, and again whenever its total grows (a resend
  * arriving shows up here). Each carries the ids the store recorded for it and
- * when it received each copy (R-044), which is what ties a delivery to the
+ * when it received each copy, which is what ties a delivery to the
  * call that caused it. Orders are reported too, keyed by capture id, for a
  * store deployed before it reported those.
  */

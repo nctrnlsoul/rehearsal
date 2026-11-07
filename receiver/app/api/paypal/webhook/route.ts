@@ -8,8 +8,9 @@ import { accessToken, forgetToken } from "../../../../lib/paypalToken";
  *
  * It records the arrival durably and, when credentials are present, verifies the
  * signature against PayPal. Verification is the point REHEARSAL makes: events
- * from PayPal's own Webhook Simulator cannot be verified, resent, or looked up,
- * so an app that correctly verifies signatures rejects them. Real events pass.
+ * from PayPal's own Webhook Simulator cannot be verified through the
+ * verify-webhook-signature endpoint or resent (PayPal's webhook simulator docs),
+ * so an app that verifies through that endpoint rejects them. Real events pass.
  *
  * If the ledger cannot be written, this returns a non-2xx on purpose. PayPal
  * retries, so a storage outage delays arrivals instead of losing them. Answering

@@ -1,9 +1,9 @@
 {
   "name": "rehearsal",
-  "version": "0.0.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
-  "description": "REHEARSAL: a PayPal sandbox scenario engine. Day-1 gate scripts only.",
+  "description": "REHEARSAL: builds a business's real PayPal sandbox state from a plan, fires real verifiable webhooks, and finds the edge cases a merchant app mishandles.",
   "license": "MIT",
   "engines": {
     "node": ">=22"

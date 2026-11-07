@@ -2,7 +2,7 @@
  * What the live run page draws, from one poll of GET /api/runs/[runId]. Pure,
  * so every state is tested without a browser.
  *
- * A call is joined to a delivery only where the pairing is exact (R-044): the
+ * A call is joined to a delivery only where the pairing is exact: the
  * store records an id for each delivery (the capture, the refund, the
  * invoice, the dispute), and a delivery joins the one call whose own ids, or
  * whose source step's ids, include it, for an event type that call causes
@@ -95,7 +95,7 @@ export type LedgerRow = {
   readonly joinedTo: readonly string[];
 };
 
-/** The finder's verdict, from the store's own records (R-012). */
+/** The finder's verdict, from the store's own records. */
 export type LiveFinding = {
   readonly classId: string;
   readonly verdict: "bug" | "ok" | "inconclusive";
@@ -131,15 +131,15 @@ const isoList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x !== "") : []);
 
 /**
- * Which deliveries a call causes (R-044): the event types, and which of the
+ * Which deliveries a call causes: the event types, and which of the
  * call's ids the store records for them. The store records resource.id, which
  * is the capture, the order, the refund, the invoice or the dispute. viaFrom
  * ids are the source step's: an invoice payment names its invoice only
  * through the invoice_create step it came from. An event type not listed
  * here (an invoice update, say, which a send and a payment can both cause)
  * is never joined. An invoice's cancel event is not joined either: its type
- * is spelled the British way, which this console's spelling check refuses
- * (R-033), and neither recorded plan cancels an invoice. It stays in the
+ * is spelled the British way, which this console's spelling check refuses,
+ * and neither recorded plan cancels an invoice. It stays in the
  * ledger, unjoined.
  */
 type PairRule = { readonly kind: string; readonly types: readonly string[]; readonly own: readonly string[]; readonly viaFrom: readonly string[]; readonly what: string };

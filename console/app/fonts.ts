@@ -1,6 +1,6 @@
 import localFont from "next/font/local";
 
-// Self-hosted (R-027). Switzer is fetched at build time by scripts/fetch-fonts.mjs
+// Self-hosted. Switzer is fetched at build time by scripts/fetch-fonts.mjs
 // because its license forbids committing the files; DM Mono is OFL and committed.
 export const switzer = localFont({
   src: [

@@ -8,7 +8,7 @@ import { pathsUnder } from "../src/app/runtime";
 import { startServer } from "../src/mcp/server";
 
 /**
- * REHEARSAL MCP server, stdio transport only (R-017). It runs on the
+ * REHEARSAL MCP server, stdio transport only. It runs on the
  * developer's machine with their own environment variables; nothing listens on
  * a port.
  *

@@ -21,8 +21,9 @@ import { errorSummary, pick, runGate, saveState, sleep } from "./_harness";
  * records: what we did, what PayPal says it sent, and what the receiver
  * actually got. Finally resend one event and confirm it arrives twice.
  *
- * PayPal's own Webhook Simulator cannot do any of this: its events cannot be
- * verified, resent, or looked up. That is the gap this gate is measuring.
+ * PayPal's own Webhook Simulator cannot do any of this: per its docs, its events
+ * cannot be verified through verify-webhook-signature or resent, and match no
+ * real transaction. That is the gap this gate is measuring.
  */
 
 const WEBHOOK_PATH = "/api/paypal/webhook";

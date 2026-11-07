@@ -12,7 +12,8 @@ import {
   scenarioDigest,
 } from "./engine";
 import { SESSION_COOKIE, clientIp, hashedKey, readCookie, sessionSecret, verifiedSessionId } from "./gate";
-import { HOSTED_FINDER_CLASSES, type HostedConfig, hostedConfig, hostedGate, liveRunsEnabled } from "./hosted";
+import { DESCRIPTION_MAX_CHARS, HOSTED_FINDER_CLASSES, type HostedConfig, hostedConfig, hostedGate, liveRunsEnabled } from "./hosted";
+export { DESCRIPTION_MAX_CHARS };
 
 export { HOSTED_FINDER_CLASSES };
 import { PLANS } from "./replays";
@@ -49,7 +50,6 @@ export type RunsDeps = LiveDeps & {
 
 export const PLAN_BODY_MAX_BYTES = 8192;
 export const SMALL_BODY_MAX_BYTES = 1024;
-export const DESCRIPTION_MAX_CHARS = 2000;
 export const EVENTS_PAGE_MAX = 200;
 
 const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
@@ -193,7 +193,7 @@ type DryRun = {
   readonly bank: { readonly needed: number; readonly available: number; readonly short: boolean };
 };
 
-/** What a run of this plan would do, by the same gate the run uses (R-023). */
+/** What a run of this plan would do, by the same gate the run uses. */
 async function dryRunOf(plan: LoadedPlan, config: HostedConfig, db: ConsoleDb): Promise<DryRun & { scenario: Scenario | null }> {
   const g = hostedGate(plan.scenario, config);
   if (!g.ok) {
@@ -396,7 +396,7 @@ export type FinderDeps = LiveDeps & {
   readonly startFinder: (args: { runId: string; classId: string; config: HostedConfig; db: ConsoleDb; generate: GenerateFn }) => void;
 };
 
-/** One finder class per request (R-028). It spends one run and one model call, together or not at all. */
+/** One finder class per request. It spends one run and one model call, together or not at all. */
 export async function handleFinderPost(req: Request, deps: FinderDeps): Promise<Response> {
   const s = setup(req, deps, { write: true });
   if (!s.ok) return s.response;

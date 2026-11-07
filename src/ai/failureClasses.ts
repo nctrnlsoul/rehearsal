@@ -83,7 +83,7 @@ export type FailureClass = {
   /** Null only for an unsupported class, which never runs. */
   readonly template: ScenarioTemplate | null;
   readonly needsBankedPurchase: boolean;
-  /** False when v0.2.0 cannot express the scenario; reported, never silently dropped. */
+  /** False when this version cannot express the scenario; reported, never silently dropped. */
   readonly supported: boolean;
   readonly unsupportedReason?: string;
   check(store: StoreSnapshot, run: RunState): Finding;
@@ -631,12 +631,12 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     needsBankedPurchase: true,
     supported: false,
     unsupportedReason:
-      "A dispute can only be opened against a pre-approved purchase drawn from the bank, and a refund step can only target a card_order created in the same run. So there is no way to refund the order that is about to be disputed. Reaching this class needs either a step that refunds a banked purchase, or a dispute that targets a card_order, neither of which v0.2.0 has.",
+      "A dispute can only be opened against a pre-approved purchase drawn from the bank, and a refund step can only target a card_order created in the same run. So there is no way to refund the order that is about to be disputed. Reaching this class needs either a step that refunds a banked purchase, or a dispute that targets a card_order, neither of which this version has.",
     check() {
       return finding(DISPUTE_ON_REFUNDED, "inconclusive", {
         event: "CUSTOMER.DISPUTE.CREATED",
         expected: "a dispute raised against an order that was already refunded",
-        actual: "not reachable with the step kinds v0.2.0 has, so this class was not tested",
+        actual: "not reachable with the step kinds this version has, so this class was not tested",
         likelyFix:
           "add a step that refunds a banked purchase, or let open_dispute target a card_order from the same run",
       });

@@ -112,7 +112,7 @@ export function parseEventAllowlist(
             : "unreadable";
         return {
           ok: false,
-          error: `${source.name} entry ${i + 1} is not a usable origin (${reason}). It must look like https://host. Fix it in the Windows environment variable screen.`,
+          error: `${source.name} entry ${i + 1} is not a usable origin (${reason}). It must look like https://host. Fix it where your environment variables are set.`,
         };
       }
     }

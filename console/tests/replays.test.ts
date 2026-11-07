@@ -30,8 +30,25 @@ describe("run fixtures", () => {
     expect(RUNS.map((r) => r.runId)).toEqual(["20261023231552-60ea96", "20261024011812-208f4e"]);
     for (const r of RUNS) {
       expect(r.runId).toMatch(/^\d{14}-[0-9a-f]{6}$/);
-      expect(r.sources).toContain(`runs/${r.runId}.json`);
+      expect(r.sources).toContain(`evidence/runs/${r.runId}.json`);
       expect(["bug", "ok"]).toContain(r.verdict);
+    }
+  });
+
+  // A judge can open every file a replay cites: each is committed, none is a
+  // local folder or a private note.
+  it("cite only files committed under evidence/, and the store's own endpoint", () => {
+    const repo = join(ROOT, "..");
+    const cited = [...RUNS.flatMap((r) => r.sources), FINDER.before.report, FINDER.after.report];
+    for (const s of cited) {
+      if (s.startsWith("store state endpoint")) continue;
+      expect(s, s).toMatch(/^evidence\//);
+      expect(statSync(join(repo, s)).isFile(), s).toBe(true);
+    }
+    // The state file the replay copies is the one committed.
+    for (const r of RUNS) {
+      const state = JSON.parse(readFileSync(join(repo, "evidence", "runs", `${r.runId}.json`), "utf8")) as { runId: string };
+      expect(state.runId).toBe(r.runId);
     }
   });
 
