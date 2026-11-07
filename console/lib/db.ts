@@ -92,6 +92,8 @@ export function createDb(config: DbConfig, deps: { fetchImpl?: typeof fetch } = 
         cache: "no-store",
       });
       if (!res.ok) throw new ConsoleDbError(name, res.status);
+      // PostgREST answers a function that returns void with 204 and no body.
+      if (res.status === 204) return null;
       return (await res.json()) as unknown;
     },
   };
