@@ -28,10 +28,12 @@ import {
   addPurchase,
   attachTransactionId,
   availablePurchases,
+  checkPurchaseAmount,
   confirmCapture,
   exportForHosted,
   hostedInsertSql,
   markExpired,
+  matchBuyerTransaction,
 } from "../src/core/purchaseBank";
 import { assertAllowedEventTarget, webhookHandlerUrl } from "../src/core/eventTarget";
 import { finderReportLines, runFinder } from "../src/ai/finder";
@@ -361,6 +363,12 @@ async function bankAdd(rest: string[]): Promise<void> {
   const flags = args(rest);
   const amount = flags["amount"] ?? "88.00";
   const currency = flags["currency"] ?? "USD";
+  // Checked before any client exists, so an over-cap purchase never reaches PayPal.
+  const capped = checkPurchaseAmount(amount, currency, cliCaps());
+  if (!capped.ok) {
+    console.error(`${capped.error}, so no order was created`);
+    process.exit(1);
+  }
   const store = bankStore();
 
   const seller = client("seller");
@@ -515,43 +523,28 @@ async function bankConfirm(): Promise<void> {
       );
 
       for (const purchase of stillWaiting) {
-        const candidates = rows
-          .map((r) => (r as Record<string, unknown>)["transaction_info"])
-          .map((info) => ({
-            id: pick(info, ["transaction_id"]),
-            value: pick(info, ["transaction_amount", "value"]),
-            at: pick(info, ["transaction_initiation_date"]) ?? "",
-          }))
-          .filter(
-            (c) =>
-              c.id !== null &&
-              c.value !== null &&
-              c.value.replace("-", "") === purchase.amount &&
-              !alreadyBanked.has(c.id),
-          )
-          .sort((a, b) => b.at.localeCompare(a.at));
+        const match = matchBuyerTransaction(purchase, rows, alreadyBanked);
 
-        if (candidates.length === 0) {
+        if (match.id === null) {
           console.log(
             `order ${purchase.orderId}: no buyer transaction matching ${purchase.currency} ${purchase.amount} is visible yet. Transaction Search can lag up to three hours; run bank:confirm again later.`,
           );
           continue;
         }
-        const chosen = candidates[0]!;
-        if (candidates.length > 1) {
+        if (match.candidates > 1) {
           console.log(
-            `order ${purchase.orderId}: ${candidates.length} transactions match that amount, taking the most recent (${chosen.id})`,
+            `order ${purchase.orderId}: ${match.candidates} transactions match that amount and currency, taking the one closest to the order's creation (${match.id})`,
           );
         }
-        const attached = attachTransactionId(bank, purchase.orderId, chosen.id!);
+        const attached = attachTransactionId(bank, purchase.orderId, match.id);
         if (!attached.ok) {
           console.log(`  ${attached.error}`);
           continue;
         }
-        alreadyBanked.add(chosen.id!);
+        alreadyBanked.add(match.id);
         bank = attached.value;
         store.write(bank);
-        console.log(`order ${purchase.orderId}: buyer transaction ${chosen.id} recorded, now available`);
+        console.log(`order ${purchase.orderId}: buyer transaction ${match.id} recorded, now available`);
       }
     }
   }

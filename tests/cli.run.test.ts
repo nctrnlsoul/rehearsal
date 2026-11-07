@@ -93,3 +93,23 @@ describe("rehearsal run and dry-run <file>", () => {
     expect(`${r.stdout}${r.stderr}`).not.toContain("VALUE-MARKER");
   }, 60_000);
 });
+
+describe("rehearsal bank:add", () => {
+  // Its order is a write, so the per-step cap applies before any client exists.
+  it("refuses an amount over the per-step cap before creating anything", () => {
+    const base: Record<string, string> = {};
+    for (const name of ["PATH", "Path", "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "HOME", "USERPROFILE"]) {
+      const v = process.env[name];
+      if (v !== undefined) base[name] = v;
+    }
+    const r = spawnSync(process.execPath, [TSX, CLI, "bank:add", "--amount", "900.00"], {
+      cwd,
+      env: base,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("purchase of USD 900.00 is over the per-step cap of USD 500.00, so no order was created");
+    expect(existsSync(join(cwd, "bank"))).toBe(false);
+  }, 60_000);
+});

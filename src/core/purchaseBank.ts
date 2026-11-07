@@ -7,6 +7,9 @@
  * dispute. Pure: all transitions here, all file I/O in the adapter.
  */
 
+import type { Caps } from "./caps";
+import { fromMinor, toMinor } from "./money";
+
 export type PurchaseStatus =
   /** Order created, waiting for the human to approve it in a browser. */
   | "awaiting_approval"
@@ -61,6 +64,86 @@ function isDrawable(p: Purchase): boolean {
     p.buyerTransactionId !== null &&
     p.buyerTransactionId.trim() !== ""
   );
+}
+
+/**
+ * The per-step cap, applied to a banked purchase before its order exists, so
+ * "every write keyed and capped" holds for bank:add too. The amount must also
+ * be a plain amount in the caps' currency.
+ */
+export function checkPurchaseAmount(amount: string, currency: string, caps: Caps): BankResult<bigint> {
+  if (currency !== caps.currency) {
+    return { ok: false, error: `a banked purchase must be in ${caps.currency}, the caps' currency, not ${currency}` };
+  }
+  let minor: bigint;
+  try {
+    minor = toMinor(amount, currency);
+  } catch {
+    return { ok: false, error: `amount ${JSON.stringify(amount)} is not a plain amount in ${currency}` };
+  }
+  if (minor <= 0n) return { ok: false, error: "a banked purchase needs an amount above zero" };
+  if (minor > caps.maxStepAmountMinor) {
+    return {
+      ok: false,
+      error: `purchase of ${currency} ${fromMinor(minor, currency)} is over the per-step cap of ${currency} ${fromMinor(caps.maxStepAmountMinor, currency)}`,
+    };
+  }
+  return { ok: true, value: minor };
+}
+
+/** How far before the order a buyer transaction may be stamped and still be its payment: clock skew only. */
+const MATCH_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * The buyer-side transaction that paid for a banked purchase, from rows of
+ * PayPal's Transaction Search. A match needs the same amount (as money, either
+ * sign) and the same currency, no earlier than the order was created; of those,
+ * the one closest in time wins. Amount alone matched another purchase of the
+ * same price, and a dispute against the wrong transaction tests nothing.
+ */
+export function matchBuyerTransaction(
+  purchase: Purchase,
+  rows: readonly unknown[],
+  taken: ReadonlySet<string>,
+): { readonly id: string | null; readonly candidates: number } {
+  const createdMs = Date.parse(purchase.createdAt);
+  const want = toMinor(purchase.amount, purchase.currency);
+  const field = (o: unknown, ...path: string[]): string | null => {
+    let cur: unknown = o;
+    for (const k of path) {
+      if (typeof cur !== "object" || cur === null) return null;
+      cur = (cur as Record<string, unknown>)[k];
+    }
+    return typeof cur === "string" && cur.trim() !== "" ? cur : null;
+  };
+  const candidates = rows
+    .map((r) => (typeof r === "object" && r !== null ? (r as Record<string, unknown>)["transaction_info"] : null))
+    .map((info) => {
+      const value = field(info, "transaction_amount", "value");
+      let minor: bigint | null = null;
+      try {
+        minor = value === null ? null : toMinor(value.replace(/^-/, ""), purchase.currency);
+      } catch {
+        minor = null;
+      }
+      return {
+        id: field(info, "transaction_id"),
+        minor,
+        currency: field(info, "transaction_amount", "currency_code"),
+        atMs: Date.parse(field(info, "transaction_initiation_date") ?? ""),
+      };
+    })
+    .filter(
+      (c): c is { id: string; minor: bigint; currency: string; atMs: number } =>
+        c.id !== null &&
+        !taken.has(c.id) &&
+        c.minor === want &&
+        c.currency === purchase.currency &&
+        !Number.isNaN(c.atMs) &&
+        (Number.isNaN(createdMs) || c.atMs >= createdMs - MATCH_SKEW_MS),
+    )
+    .sort((a, b) => Math.abs(a.atMs - createdMs) - Math.abs(b.atMs - createdMs));
+  return { id: candidates[0]?.id ?? null, candidates: candidates.length };
 }
 
 export function addPurchase(

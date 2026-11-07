@@ -4,6 +4,7 @@ import {
   addPurchase,
   attachTransactionId,
   availablePurchases,
+  checkPurchaseAmount,
   claimPurchase,
   confirmCapture,
   MOVED_TO_HOSTED,
@@ -11,7 +12,9 @@ import {
   exportForHosted,
   hostedInsertSql,
   markExpired,
+  matchBuyerTransaction,
 } from "../src/core/purchaseBank";
+import { DEFAULT_CAPS } from "../src/core/caps";
 
 const T = "2026-10-23T00:00:00.000Z";
 
@@ -248,4 +251,57 @@ describe("exportForHosted and hostedInsertSql (Stage B bank move)", () => {
     expect(hostedInsertSql([{ ...ready("O-1", "2026-10-24T10:00:00Z"), createdAt: "not a time" }], "now").ok).toBe(false);
   });
 
+});
+
+// "Every write keyed and capped" covers bank:add too: its order is a write.
+describe("checkPurchaseAmount", () => {
+  it("takes an amount at or under the per-step cap", () => {
+    expect(checkPurchaseAmount("88.00", "USD", DEFAULT_CAPS)).toEqual({ ok: true, value: 8800n });
+    expect(checkPurchaseAmount("500.00", "USD", DEFAULT_CAPS).ok).toBe(true);
+  });
+
+  it("refuses one over the cap, a malformed or zero amount, and another currency", () => {
+    const over = checkPurchaseAmount("500.01", "USD", DEFAULT_CAPS);
+    expect(over).toEqual({ ok: false, error: "purchase of USD 500.01 is over the per-step cap of USD 500.00" });
+    for (const [amount, currency] of [["1e3", "USD"], ["-5.00", "USD"], ["0.00", "USD"], ["88.00", "EUR"]] as const) {
+      expect(checkPurchaseAmount(amount, currency, DEFAULT_CAPS).ok, `${amount} ${currency}`).toBe(false);
+    }
+  });
+});
+
+// Amount alone matched another purchase of the same price, and a dispute
+// against the wrong transaction tests nothing.
+describe("matchBuyerTransaction", () => {
+  const purchase = {
+    ...seed("O-1", "2026-10-23T12:00:00.000Z"),
+    captureId: "CAP-O-1",
+    buyerTransactionId: null,
+    status: "awaiting_transaction_id" as const,
+    usedByRunId: null,
+    usedAt: null,
+  };
+  const row = (id: string, value: string, currency: string, at: string) => ({
+    transaction_info: {
+      transaction_id: id,
+      transaction_amount: { value, currency_code: currency },
+      transaction_initiation_date: at,
+    },
+  });
+
+  it("matches amount as money in the same currency, closest in time after the order", () => {
+    const rows = [
+      row("T-FAR", "-88.00", "USD", "2026-10-23T18:00:00Z"),
+      row("T-NEAR", "-88.0", "USD", "2026-10-23T12:03:00Z"),
+      row("T-EUR", "-88.00", "EUR", "2026-10-23T12:01:00Z"),
+      row("T-BEFORE", "-88.00", "USD", "2026-10-23T09:00:00Z"),
+      row("T-OTHER", "-87.99", "USD", "2026-10-23T12:02:00Z"),
+    ];
+    expect(matchBuyerTransaction(purchase, rows, new Set())).toEqual({ id: "T-NEAR", candidates: 2 });
+  });
+
+  it("skips a transaction already banked, and answers none rather than guess", () => {
+    const rows = [row("T-NEAR", "-88.00", "USD", "2026-10-23T12:03:00Z")];
+    expect(matchBuyerTransaction(purchase, rows, new Set(["T-NEAR"]))).toEqual({ id: null, candidates: 0 });
+    expect(matchBuyerTransaction(purchase, [null, 7, { transaction_info: "x" }], new Set())).toEqual({ id: null, candidates: 0 });
+  });
 });
