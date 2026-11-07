@@ -172,10 +172,39 @@ export function retryStep(state: RunState, stepId: string, nowIso: string): Retr
       updatedAt: nowIso,
       steps: {
         ...state.steps,
-        [stepId]: { ...step, status: "pending", detail: "", finishedAt: null },
+        // startedAt clears too, or the retried step would read as interrupted.
+        [stepId]: { ...step, status: "pending", detail: "", startedAt: null, finishedAt: null },
       },
     },
   };
+}
+
+/** A step marked started whose outcome was never recorded: the process died mid-step. */
+const inFlight = (step: StepRecord): boolean =>
+  step.status === "pending" && step.startedAt !== null && step.finishedAt === null;
+
+/**
+ * Turns every step that started and never finished into an unknown step, which
+ * halts the run. Such a step may have reached PayPal before the process died,
+ * so running it again on a resume could open a second dispute or repeat a
+ * write past PayPal's request-id window. Only an explicit human retry clears it.
+ */
+export function markInterrupted(state: RunState, nowIso: string): RunState {
+  let next = state;
+  for (const id of state.order) {
+    const step = next.steps[id];
+    if (step === undefined || !inFlight(step)) continue;
+    next = recordOutcome(
+      next,
+      id,
+      {
+        kind: "unknown",
+        detail: `started at ${step.startedAt} and never recorded an outcome, so it may have reached PayPal`,
+      },
+      nowIso,
+    );
+  }
+  return next;
 }
 
 export function haltRun(state: RunState, reason: string, nowIso: string): RunState {
@@ -184,13 +213,17 @@ export function haltRun(state: RunState, reason: string, nowIso: string): RunSta
 
 /**
  * The next step that may run: first in plan order, still pending, with every
- * dependency already succeeded. Returns null when the run is halted or done.
+ * dependency already succeeded. Returns null when the run is halted or done, or
+ * while a step that started has no recorded outcome.
  */
 export function nextRunnableStep(
   state: RunState,
   needsById: ReadonlyMap<string, readonly string[]>,
 ): string | null {
   if (state.halted) return null;
+  // Belt and braces for a caller that skipped markInterrupted: never start a
+  // step while another one's outcome is still undetermined.
+  if (Object.values(state.steps).some(inFlight)) return null;
   for (const id of state.order) {
     const step = state.steps[id];
     if (step === undefined || step.status !== "pending") continue;

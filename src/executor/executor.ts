@@ -6,6 +6,7 @@ import {
   type RunState,
   haltRun,
   initRunState,
+  markInterrupted,
   markStarted,
   nextRunnableStep,
   recordMeta,
@@ -100,8 +101,9 @@ export async function executeScenario(
           : `run ${args.resume.runId} was started from a different scenario, so it cannot be resumed`,
       );
     }
-    state = args.resume;
+    state = markInterrupted(args.resume, iso());
     deps.log(`resuming run ${state.runId} from ${state.updatedAt}`);
+    if (state !== args.resume) await deps.persist(state);
   } else {
     state = initRunState({
       runId,

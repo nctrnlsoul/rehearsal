@@ -19,7 +19,7 @@ import {
 import { SCENARIO_DIGEST_KEY } from "../src/executor/executor";
 import { DEFAULT_CAPS } from "../src/core/caps";
 import { type Bank, emptyBank } from "../src/core/purchaseBank";
-import { initRunState, haltRun } from "../src/core/runState";
+import { initRunState, haltRun, markStarted } from "../src/core/runState";
 import { fakePaypal, makePurchase, scenarioWith } from "./helpers/fakePaypal";
 
 let root: string;
@@ -164,6 +164,30 @@ describe("loadResume", () => {
   it("resumes a run that was interrupted, not halted", () => {
     const r = loadResume(root, write(false), null, "now");
     expect(r.ok).toBe(true);
+  });
+
+  it("refuses a run cut off mid-step without a retry, and resumes it with one", () => {
+    const id = "20261023231552-60ea97";
+    const state = markStarted(
+      initRunState({
+        runId: id,
+        scenarioName: "t",
+        currency: "USD",
+        steps: [{ id: "dispute", kind: "open_dispute" }],
+        order: ["dispute"],
+        nowIso: "2026-10-23T00:00:00.000Z",
+      }),
+      "dispute",
+      "2026-10-23T00:00:01.000Z",
+    );
+    runStateStore(root, id).write(state);
+    const refused = loadResume(root, id, null, "now");
+    expect(refused).toMatchObject({ ok: false, halted: true });
+    if (!refused.ok) expect(refused.error).toMatch(/dispute ended in an unknown state.*may have reached PayPal/);
+
+    const retried = loadResume(root, id, "dispute", "now");
+    expect(retried.ok).toBe(true);
+    if (retried.ok) expect(retried.state.steps["dispute"]!.status).toBe("pending");
   });
 
   it("throws on a traversal id rather than reading outside runs/", () => {

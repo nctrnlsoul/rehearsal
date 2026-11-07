@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { seedOf } from "../src/core/idempotency";
-import { type RunState, initRunState, recordOutcome } from "../src/core/runState";
+import { type RunState, initRunState, markStarted, recordOutcome } from "../src/core/runState";
 import type { Scenario } from "../src/core/scenario";
 import { type ExecutorDeps, executeScenario } from "../src/executor/executor";
 import { resendWebhookHandler } from "../src/executor/handlers/resendWebhook";
@@ -199,6 +199,29 @@ describe("executeScenario resume", () => {
   });
 
   // Resuming onto a different scenario could re-run or skip a money movement.
+  // Covers a caller that hands over saved state without going through loadResume.
+  it("halts on a step that started and never finished, and does not run it again", async () => {
+    ran.length = 0;
+    const scenario = twoStep();
+    const prior = markStarted(
+      initRunState({
+        runId: "run-1",
+        scenarioName: scenario.name,
+        currency: scenario.currency,
+        steps: scenario.steps.map((s) => ({ id: s.id, kind: s.kind })),
+        order: ["o1", "r1"],
+        nowIso: "2026-10-23T11:00:00.000Z",
+      }),
+      "o1",
+      "2026-10-23T11:00:01.000Z",
+    );
+    const h = harness();
+    const state = await executeScenario({ scenario, runId: "run-1", resume: prior }, h.deps);
+    expect(ran).toEqual([]);
+    expect(state.halted).toBe(true);
+    expect(state.steps["o1"]!.status).toBe("unknown");
+  });
+
   it("refuses to resume a run whose steps do not match the scenario", async () => {
     const other = scenarioWith([{ id: "different", kind: "card_order", amount: "1.00" }]);
     const prior = initRunState({

@@ -8,7 +8,7 @@ import { JsonStore } from "../adapters/jsonStore";
 import { type Caps, checkCaps } from "../core/caps";
 import { parseEventAllowlist } from "../core/eventTarget";
 import { type Bank, availablePurchases, claimPurchase, emptyBank } from "../core/purchaseBank";
-import { type RunState, retryStep } from "../core/runState";
+import { type RunState, markInterrupted, retryStep } from "../core/runState";
 import { type Scenario, validateScenario } from "../core/scenario";
 import { type WebhookMode, executeScenario } from "../executor/executor";
 import type { ClaimResult } from "../executor/types";
@@ -125,14 +125,17 @@ export function loadResume(
   retryId: string | null,
   nowIso: string,
 ): ResumeLoad {
-  const state = runStateStore(runsDir, runId).read();
-  if (state === null) {
+  const stored = runStateStore(runsDir, runId).read();
+  if (stored === null) {
     return {
       ok: false,
       error: `no run state found for ${runId}, so there is nothing to resume`,
       halted: false,
     };
   }
+  // A step cut off mid-call becomes unknown here, so it halts the run and
+  // needs the same explicit --retry as any other unknown step.
+  const state = markInterrupted(stored, nowIso);
   if (retryId !== null) {
     const reset = retryStep(state, retryId, nowIso);
     return reset.ok

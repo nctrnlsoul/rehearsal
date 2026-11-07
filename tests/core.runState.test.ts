@@ -3,6 +3,7 @@ import {
   type RunState,
   haltRun,
   initRunState,
+  markInterrupted,
   markStarted,
   nextRunnableStep,
   recordMeta,
@@ -129,6 +130,40 @@ describe("resume behaviour", () => {
     let s = markStarted(fresh(), "a", T1);
     s = markStarted(s, "a", T1);
     expect(s.steps["a"]!.attempts).toBe(2);
+  });
+});
+
+// The double write this closes: a step marked started, then the process died
+// before its outcome was saved. On resume it read as pending and ran again,
+// which for a dispute draws a second banked purchase.
+describe("a step that started and never finished", () => {
+  const cutOff = () => markStarted(fresh(), "a", T1);
+
+  it("is never offered to run again", () => {
+    expect(nextRunnableStep(cutOff(), needs)).toBeNull();
+  });
+
+  it("becomes unknown on load, which halts the run", () => {
+    const s = markInterrupted(cutOff(), T1);
+    expect(s.steps["a"]!.status).toBe("unknown");
+    expect(s.steps["a"]!.detail).toMatch(/started at .* never recorded an outcome, so it may have reached PayPal/);
+    expect(s.halted).toBe(true);
+    expect(nextRunnableStep(s, needs)).toBeNull();
+  });
+
+  it("leaves a run with nothing in flight untouched", () => {
+    const s = recordOutcome(cutOff(), "a", { kind: "success", detail: "ok" }, T1);
+    expect(markInterrupted(s, T1)).toBe(s);
+    expect(markInterrupted(fresh(), T1)).toEqual(fresh());
+  });
+
+  it("runs again only after an explicit retry, which does not read as interrupted", () => {
+    const r = retryStep(markInterrupted(cutOff(), T1), "a", T1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.state.steps["a"]!.startedAt).toBeNull();
+    expect(markInterrupted(r.state, T1)).toBe(r.state);
+    expect(nextRunnableStep(r.state, needs)).toBe("a");
   });
 });
 
