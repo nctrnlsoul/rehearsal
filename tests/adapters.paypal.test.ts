@@ -330,3 +330,22 @@ describe("PaypalClient logging", () => {
     expect(all).toContain("POST /v2/checkout/orders");
   });
 });
+
+// The host pin checks the first URL only. A followed redirect would carry the
+// bearer token, or the Basic credentials, to a host nobody pinned.
+describe("redirects", () => {
+  it("are refused on the token request and on every call", async () => {
+    const seen: unknown[] = [];
+    const fetchImpl = (async (input: unknown, init: Record<string, unknown>) => {
+      seen.push(init["redirect"]);
+      const body = String(input).endsWith("/v1/oauth2/token")
+        ? { access_token: TOKEN, expires_in: 32_400 }
+        : { id: "X" };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const client = new PaypalClient(CREDS, { fetchImpl, sleep: async () => {} });
+    await client.call({ method: "GET", path: "/v2/checkout/orders/X" });
+    await client.call({ method: "POST", path: "/v2/checkout/orders", idempotencySeed: "s", body: {} });
+    expect(seen).toEqual(["error", "error", "error"]);
+  });
+});

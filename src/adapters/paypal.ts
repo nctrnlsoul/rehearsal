@@ -124,6 +124,7 @@ export class PaypalClient {
         Accept: "application/json",
       },
       body: "grant_type=client_credentials",
+      redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
@@ -225,6 +226,9 @@ export class PaypalClient {
           method,
           headers,
           ...(payload === undefined ? {} : { body: payload }),
+          // The host pin checks only the first URL. Following a redirect would
+          // let a reply send the token to a host nobody pinned.
+          redirect: "error",
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         status = res.status;
