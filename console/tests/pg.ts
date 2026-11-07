@@ -45,8 +45,21 @@ async function migrated(upTo?: string): Promise<PGlite> {
 // committed SQL, applied once per test file instead of once per test.
 let template: Promise<PGlite> | null = null;
 
+// Every database a test gets is closed after that test (tests/setup.ts).
+// Each PGlite holds its own WASM Postgres; left open, a file's worth of them
+// used ~6.5 GB and CI runners killed the workers ("The operation was canceled").
+const open = new Set<PGlite>();
+
 export async function freshDb(upTo?: string): Promise<PGlite> {
-  if (upTo !== undefined) return migrated(upTo);
-  template ??= migrated();
-  return (await (await template).clone()) as PGlite;
+  const db =
+    upTo !== undefined ? await migrated(upTo) : ((await (await (template ??= migrated())).clone()) as PGlite);
+  open.add(db);
+  return db;
+}
+
+/** Closes every database handed out since the last call. The template stays open. */
+export async function closeOpenDbs(): Promise<void> {
+  const dbs = [...open];
+  open.clear();
+  await Promise.all(dbs.map((db) => (db.closed ? undefined : db.close())));
 }
