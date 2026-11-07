@@ -122,7 +122,7 @@ describe("gate lockout claim", () => {
   });
 });
 
-// Re-measured for v0.6.1: the trust panel's figures read the constants the
+// Re-measured for v0.7.0: the trust panel's figures read the constants the
 // code enforces, so a changed cap or budget changes the page with it.
 describe("trust panel figures", () => {
   it("come from the code's constants, not typed-in numbers", () => {

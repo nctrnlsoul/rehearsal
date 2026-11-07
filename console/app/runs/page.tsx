@@ -1,34 +1,45 @@
 import Link from "next/link";
-import { Mark, ReplayBanner, SiteFooter, Topbar } from "../../components/chrome";
-import { RUNS, utcTime } from "../../lib/replays";
-import "./timeline.css";
+import { Badge, Icon, ReplayBanner, SiteFooter, Topbar } from "../../components/chrome";
+import { RUNS, replayEndS } from "../../lib/replays";
+import { dur } from "../../lib/runStory";
+import "./run.css";
 
 export default function RunsPage() {
   return (
-    <div className="s-runs">
+    <div className="s-replay">
       <a className="skip" href="#runs">Skip to the runs</a>
-      <ReplayBanner>Recorded runs from REHEARSAL&apos;s own sandbox account. Each one replays on its recorded clock; nothing here is live.</ReplayBanner>
       <Topbar current="runs" />
-      <header className="page">
-        <div>
-          <h1>Recorded runs, replayed on their own clock</h1>
-          <p className="runline">The same run before and after the store&apos;s one-line fix. Ids, times and store rows are the real ones.</p>
+      <ReplayBanner>Recorded runs from Rehearsal&apos;s own sandbox account, each played on its recorded clock. Nothing here is live.</ReplayBanner>
+      <main>
+        <section className="hero" aria-labelledby="runs-h">
+          <div className="wrap">
+            <p className="eyebrow">Replays · no passcode needed</p>
+            <h1 id="runs-h">The same run, before and after a one-line fix.</h1>
+            <p className="lead">Each replay is drawn by the live run&apos;s own view. Ids, times and the store&apos;s rows are the real ones.</p>
+          </div>
+        </section>
+        <div className="wrap lift">
+          <ul className="run-cards" id="runs">
+            {RUNS.map((r) => (
+              <li key={r.runId}>
+                <Link className="card run-card" href={`/runs/${r.runId}`}>
+                  <span className="rc-top">
+                    <Badge kind={r.verdict}>{r.verdict === "bug" ? "BUG found" : "OK after the fix"}</Badge>
+                    <span className="note">{r.startedAt.slice(0, 10)}</span>
+                  </span>
+                  <span className="rc-name">{r.scenarioName}</span>
+                  <span className="rc-line">{r.verdictLine.replace(/^(BUG|OK): /, "")}</span>
+                  <span className="rc-meta">
+                    {r.calls.length} steps · {r.deliveries.length} events from PayPal · {dur(replayEndS(r))} · <span className="mono">{r.runId}</span>
+                  </span>
+                  <span className="rc-go">Watch the replay <Icon name="arrow" /></span>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </div>
-      </header>
-      <main style={{ display: "block" }}>
-        <ul className="run-list" id="runs">
-          {RUNS.map((r) => (
-            <li key={r.runId}>
-              <Link href={`/runs/${r.runId}`}>
-                <span className="nm">{r.scenarioName}</span>
-                <span className="meta">{r.runId} · {r.startedAt.slice(0, 10)} {utcTime(r.startedAt)} UTC · {r.calls.length} calls · {r.deliveries.length} deliveries</span>
-                <span className="v">{r.verdict === "bug" ? <Mark kind="bug">BUG</Mark> : <Mark kind="ok">OK</Mark>}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
       </main>
-      <SiteFooter>REHEARSAL · replays · live runs are behind the passcode</SiteFooter>
+      <SiteFooter />
     </div>
   );
 }

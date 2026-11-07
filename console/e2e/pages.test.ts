@@ -8,6 +8,7 @@ import type { PGlite } from "@electric-sql/pglite";
 import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RUNS } from "../lib/replays";
+import { type Fixture, absolute, recordedAt, tinyBakery, tokenRefused } from "../tests/fixtures/liveRuns";
 import { hashFor } from "../tests/helpers";
 import { TEST_DB_ENV } from "../tests/postgrest";
 import { FAKE_SUPABASE_HOST, startFakeSupabase } from "./fakeSupabase";
@@ -105,7 +106,7 @@ afterAll(async () => {
 type Watch = { problems: string[] };
 
 /** A context that records every CSP violation, page error and console error or warning. */
-async function watched(opts: { javaScriptEnabled?: boolean } = {}): Promise<{ ctx: BrowserContext; page: Page; watch: Watch }> {
+async function watched(opts: { javaScriptEnabled?: boolean; reducedMotion?: "reduce" | "no-preference" } = {}): Promise<{ ctx: BrowserContext; page: Page; watch: Watch }> {
   const ctx = await browser.newContext(opts);
   const page = await ctx.newPage();
   const watch: Watch = { problems: [] };
@@ -227,7 +228,7 @@ describe("the gate, submitted by a real browser", () => {
   });
 });
 
-// R-037: the NorthSchema blossom as maker's mark, white on dark, in the header
+// R-037: the NorthSchema blossom as maker's mark, ink on light (D2), in the header
 // and favicon; the footer credit is text (vault ruling J-023).
 describe("maker's mark", () => {
   it.each(PAGES)("%s shows the blossom in the header and credits NorthSchema in text below", async (path) => {
@@ -237,7 +238,7 @@ describe("maker's mark", () => {
       const r = img.getBoundingClientRect();
       return { loaded: img.complete && img.naturalWidth > 0, natural: [img.naturalWidth, img.naturalHeight], height: r.height, alt: img.alt, src: new URL(img.src).pathname };
     });
-    expect(mark).toEqual({ loaded: true, natural: [76, 72], height: 36, alt: "Made by NorthSchema", src: "/northschema-blossom.png" });
+    expect(mark).toEqual({ loaded: true, natural: [76, 72], height: 36, alt: "Made by NorthSchema", src: "/northschema-blossom-ink.png" });
     expect(await page.locator("footer.site").innerText()).toMatch(/by NorthSchema$/);
     expect(await page.locator("footer.site img").count()).toBe(0);
     await ctx.close();
@@ -293,34 +294,19 @@ async function seedRun(pg: PGlite, id: string, status: string, events: Array<{ s
   }
 }
 
-const orderEvents = (capture: string, delivered: boolean) => [
-  { s: 0, kind: "run_started" },
-  { s: 1, kind: "step_started", step: "order", data: { kind: "card_order", attempt: 1 } },
-  { s: 4, kind: "step_finished", step: "order", data: { kind: "card_order", status: "succeeded", detail: "captured USD 25.00 by card", ids: { order_id: "5O190127TN364715T", capture_id: capture } } },
-  ...(delivered
-    ? [
-        { s: 19, kind: "note", data: { order: { capture_id: capture, fulfilled: 1, refunds: 0, disputes: 0, duplicates_ignored: 0 } } },
-        { s: 19, kind: "delivery", data: { event_id: "WH-E2E-1", event_type: "PAYMENT.CAPTURE.COMPLETED", deliveries: 1, fulfilled: 1, duplicates_ignored: 0, other: 0, refused: 0, cert_hosts: ["api.sandbox.paypal.com"] } },
-      ]
-    : []),
-];
-
-/** Elements whose drawn color is the accent. R-026: spent on the live connector only. */
-const accentElements = (page: Page) =>
-  page.evaluate(() => {
-    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim().toLowerCase();
-    const probe = document.createElement("div");
-    probe.style.color = accent;
-    document.body.appendChild(probe);
-    const rgb = getComputedStyle(probe).color;
-    probe.remove();
-    const hits: string[] = [];
-    for (const el of document.querySelectorAll("main *")) {
-      const cs = getComputedStyle(el);
-      if ([cs.color, cs.stroke, cs.fill, cs.backgroundColor].includes(rgb) && el.closest("[aria-hidden=true], svg, .btn-primary") !== null) hits.push(el.tagName.toLowerCase() + "." + (el.getAttribute("class") ?? ""));
-    }
-    return hits;
-  });
+/** A fixture written as the worker would have, timed so that now is nowS seconds into the run. */
+async function seedFixture(pg: PGlite, id: string, f: Fixture, nowS: number) {
+  const startMs = Date.now() - nowS * 1000;
+  const finished = ["complete", "halted", "abandoned", "failed"].includes(f.status);
+  await pg.query(
+    `insert into public.console_runs (id, kind, plan_source, plan_id, scenario_sha256, session_hash, ip_hash, status, halt_reason, created_at, started_at, heartbeat_at, finished_at)
+     values ($1, 'scenario', 'recorded', 'plan-20261023193216', $2, $3, $3, $4, $5, $6, $6, $7, $8)`,
+    [id, "a".repeat(64), "b".repeat(64), f.status, f.reason ?? null, new Date(startMs).toISOString(), iso(-1), finished ? iso(-1) : null],
+  );
+  for (const e of absolute(f, startMs)) {
+    await pg.query("insert into public.console_run_events (run_id, at, kind, step_id, data) values ($1, $2, $3, $4, $5::jsonb)", [id, e.at, e.kind, e.step_id, JSON.stringify(e.data)]);
+  }
+}
 
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
@@ -355,55 +341,52 @@ describe("the live builder, past the gate", () => {
   });
 });
 
-describe("the live timeline, past the gate", () => {
-  it("draws a complete run: the order joined to its capture, the time on the connector, the delivery in the ledger", async () => {
-    await seedRun(db.pg, "20261025180000-e2e001", "complete", [...orderEvents("CAP-E2E-1", true), { s: 30, kind: "deliveries_wait_started", data: { seconds: 90 } }, { s: 119, kind: "deliveries_wait_ended", data: { events_seen: 1 } }, { s: 119, kind: "run_finished", data: { status: "complete" } }]);
+describe("the live run, past the gate", () => {
+  it("draws a complete run: one row per step, the reply on the same row, answer first", async () => {
+    await seedFixture(db.pg, "20261025180000-e2e001", tinyBakery(40), 41);
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
       const { ctx, page, watch } = await unlocked(viewport);
       await expectCleanPage(page, watch, "/live/20261025180000-e2e001", 200);
-      await page.waitForSelector("path.link.verified");
-      await expect(page.locator(".live-state .headline").innerText()).resolves.toContain("Complete");
-      expect(await page.locator("path.link").count()).toBe(1);
-      await expect(page.locator("g.pill text").first().textContent()).resolves.toBe("within 15 s");
-      await expect(page.locator(".ledger").innerText()).resolves.toContain("WH-E2E-1");
-      // Nothing is live any more, so the accent has left the board.
-      expect(await accentElements(page)).toEqual([]);
+      await page.waitForSelector(".step");
+      await expect(page.locator("#run-h").innerText()).resolves.toBe("All 5 steps done.");
+      await expect(page.locator(".run-hero .lead").innerText()).resolves.toBe("PayPal confirmed 4 of 4 events, every signature verified.");
+      expect(await page.locator(".step").count()).toBe(5);
+      // The call and PayPal's reply share one card.
+      const first = page.locator(".step").first();
+      await expect(first.locator(".sent-title").innerText()).resolves.toBe("Payment captured");
+      await expect(first.locator(".back").innerText()).resolves.toContain("PayPal confirmed: payment completed");
+      await expect(first.locator(".pill").innerText()).resolves.toBe("Replied in 12s");
+      await expect(page.locator(".step.compact").innerText()).resolves.toContain("No event expected for this step.");
+      await expect(page.locator(".other").innerText()).resolves.toContain("INVOICING.INVOICE.UPDATED");
+      expect(await page.locator(".nodes li.in").count()).toBe(4);
       expect(await noSideScroll(page)).toBe(true);
-      if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, `live-complete-${viewport.width}.png`), fullPage: true });
       await ctx.close();
     }
   });
 
-  // R-044: with the store's own receive time the connector carries an exact latency.
-  it("draws an exact pair: the store's receive time on the card and an exact latency on the connector", async () => {
-    await seedRun(db.pg, "20261025180000-e2e005", "complete", [
-      { s: 0, kind: "run_started" },
-      { s: 1, kind: "step_started", step: "order", data: { kind: "card_order", attempt: 1 } },
-      { s: 5, kind: "step_finished", step: "order", data: { kind: "card_order", status: "succeeded", detail: "captured USD 25.00 by card", finished_at: iso(-120 + 4.2), ids: { capture_id: "CAP-E2E-4" } } },
-      { s: 15, kind: "delivery", data: { event_id: "WH-E2E-4", event_type: "PAYMENT.CAPTURE.COMPLETED", deliveries: 1, fulfilled: 1, duplicates_ignored: 0, other: 0, refused: 0, cert_hosts: ["api.sandbox.paypal.com"], capture_ids: ["CAP-E2E-4"], received_at: [iso(-120 + 11.6)] } },
-      { s: 119, kind: "run_finished", data: { status: "complete" } },
-    ]);
+  // The 2026-11-07 run: a 401 on the token, nothing sent, and a banner that says so.
+  it("says a run stopped at step 1 in plain words, with the code kept in Details", async () => {
+    await seedFixture(db.pg, "20261025180000-e2e006", tokenRefused(), 3);
     const { ctx, page, watch } = await unlocked();
-    await expectCleanPage(page, watch, "/live/20261025180000-e2e005", 200);
-    await page.waitForSelector("path.link.verified");
-    await expect(page.locator("g.pill text").first().textContent()).resolves.toBe("7 s");
-    await expect(page.locator(".delivery .env-head").first().innerText()).resolves.toContain("received");
-    await expect(page.locator(".ledger tbody tr").first().innerText()).resolves.toContain("order");
-    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-exact-1440.png"), fullPage: true });
-    expect(watch.problems).toEqual([]);
+    await expectCleanPage(page, watch, "/live/20261025180000-e2e006", 200);
+    await page.waitForSelector(".step.failed");
+    await expect(page.locator("#run-h").innerText()).resolves.toBe("Stopped at step 1.");
+    await expect(page.locator(".run-hero .lead").innerText()).resolves.toBe("PayPal refused the seller app's login (its client id and secret do not match a sandbox app). Nothing was sent.");
+    const body = await page.locator("main").innerText();
+    expect(body).not.toMatch(/handler threw|Every step has run|may have written/);
+    await page.locator(".step.failed summary").click();
+    await expect(page.locator(".step.failed .details-body").innerText()).resolves.toContain("invalid_client");
     await ctx.close();
   });
 
-  it("draws a waiting delivery as the one live, accented connector, counting up", async () => {
-    await seedRun(db.pg, "20261025180000-e2e002", "running", orderEvents("CAP-E2E-2", false), { startedS: -20 });
+  it("draws a waiting reply as a dashed connector, counting up, on the current step", async () => {
+    await seedFixture(db.pg, "20261025180000-e2e002", recordedAt(RUNS[1]!, 10), 10);
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live/20261025180000-e2e002", 200);
-    await page.waitForSelector("path.link.waiting");
-    await expect(page.locator(".delivery.waiting").innerText()).resolves.toContain("waiting on PayPal");
-    const hits = await accentElements(page);
-    expect(hits.length).toBeGreaterThan(0);
-    for (const h of hits) expect(h).toMatch(/^(path\.link waiting|circle\.anchor live|rect\.|text\.)/);
-    if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-waiting-1440.png"), fullPage: true });
+    await page.waitForSelector(".conn.dashed");
+    await expect(page.locator("#run-h").innerText()).resolves.toBe("Running step 2 of 2: Asked PayPal to resend an event.");
+    await expect(page.locator(".step").first().locator(".back").innerText()).resolves.toContain("Waiting for PayPal's webhook");
+    expect(await page.locator(".step.current").count()).toBe(1);
     await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261025180000-e2e002'");
     await ctx.close();
   });
@@ -414,9 +397,9 @@ describe("the live timeline, past the gate", () => {
     });
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live/20261025180000-e2e003", 200);
-    await page.waitForSelector(".call");
-    await expect(page.locator(".live-state").innerText()).resolves.toContain("The server running this stopped.");
-    await expect(page.locator(".call").innerText()).resolves.toMatch(/never confirmed[\s\S]*may have written to PayPal[\s\S]*Nothing here will retry it/);
+    await page.waitForSelector(".step");
+    await expect(page.locator("#run-h").innerText()).resolves.toBe("The server running this stopped.");
+    await expect(page.locator(".step").innerText()).resolves.toMatch(/Never confirmed[\s\S]*may have written to PayPal; nothing here will retry it/);
     await ctx.close();
   });
 
@@ -439,6 +422,18 @@ describe("the live timeline, past the gate", () => {
     const { ctx, page } = await watched();
     await page.goto(base + "/live/20261025180000-e2e001");
     expect(page.url()).toBe(base + "/gate");
+    await ctx.close();
+  });
+});
+
+describe("a replay is drawn by the live run's own view", () => {
+  it("plays the recorded run to its verdict, with the same step cards", async () => {
+    const { ctx, page, watch } = await watched({ reducedMotion: "reduce" });
+    await expectCleanPage(page, watch, "/runs/20261023231552-60ea96", 200);
+    await expect(page.locator("#run-h").innerText()).resolves.toBe("All 2 steps done.");
+    expect(await page.locator(".step").count()).toBe(2);
+    await expect(page.locator(".step").nth(1).locator(".back").innerText()).resolves.toContain("the store fulfilled the order a second time");
+    await expect(page.locator(".verdict-card").innerText()).resolves.toContain("BUG");
     await ctx.close();
   });
 });
@@ -470,5 +465,55 @@ describe("the hosted finder, past the gate", () => {
     await expect(page.locator(".finding").innerText()).resolves.toMatch(/OK[\s\S]*An invoice already past its due date[\s\S]*Observed[\s\S]*OVERDUE/);
     if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-finder-1440.png"), fullPage: true });
     await ctx.close();
+  });
+});
+
+// The D2 build screenshots (brief v0.7.0, section 6), when E2E_SCREENSHOT_DIR is set.
+describe.runIf(SHOTS !== undefined)("D2 screenshots at 1440 and 390", () => {
+  const sizes = [{ width: 1440, height: 900 }, { width: 390, height: 844 }];
+  const shot = (page: Page, name: string, w: number) => page.screenshot({ path: join(SHOTS!, `${name}-${w}.png`), fullPage: true });
+
+  it("public pages: home, plans, replays, replay run, finder, gate", async () => {
+    const pages = [["home", "/"], ["plans", "/build"], ["replays", "/runs"], ["replay-run", "/runs/20261023231552-60ea96"], ["finder", "/finder"], ["gate", "/gate"]] as const;
+    for (const v of sizes) {
+      for (const [name, path] of pages) {
+        const { ctx, page } = await watched({ reducedMotion: "reduce" });
+        await page.setViewportSize(v);
+        await page.goto(base + path, { waitUntil: "networkidle" });
+        await hydrated(page);
+        expect(await noSideScroll(page), `${path} at ${v.width}`).toBe(true);
+        await shot(page, name, v.width);
+        await ctx.close();
+      }
+    }
+  });
+
+  it("live: builder, mid-run, complete, halted", async () => {
+    // The database allows one active run, so each running fixture is seeded, shot, then closed.
+    const runs: ReadonlyArray<readonly [string, () => Fixture, number]> = [
+      ["live-mid-run", () => tinyBakery(20), 20],
+      ["live-mid-run-recorded", () => recordedAt(RUNS[1]!, 10), 10],
+      ["live-complete", () => tinyBakery(40), 41],
+      ["live-halted", () => tokenRefused(), 3],
+    ];
+    let n = 0;
+    for (const v of sizes) {
+      const { ctx, page } = await unlocked(v);
+      await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("Digest"));
+      expect(await noSideScroll(page), `/live at ${v.width}`).toBe(true);
+      await shot(page, "live-builder", v.width);
+      for (const [name, make, nowS] of runs) {
+        const id = `20261107120000-d2a${String(++n).padStart(3, "0")}`;
+        const f = make();
+        await seedFixture(db.pg, id, f, nowS);
+        await page.goto(`${base}/live/${id}`, { waitUntil: "load" });
+        await page.waitForSelector(".step");
+        await page.waitForTimeout(400);
+        expect(await noSideScroll(page), `${name} at ${v.width}`).toBe(true);
+        await shot(page, name, v.width);
+        if (f.status === "running") await db.pg.exec(`update public.console_runs set status = 'complete', finished_at = now() where id = '${id}'`);
+      }
+      await ctx.close();
+    }
   });
 });

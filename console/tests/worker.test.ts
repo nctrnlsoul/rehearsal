@@ -285,6 +285,50 @@ describe("runScenarioWorker", () => {
     expect(left).toBeLessThanOrEqual(80);
   });
 
+  // Run 20261107204843-1da347 waited 90 s for deliveries after a step that sent nothing.
+  it("finishes a halt with nothing written at once, without the delivery wait", async () => {
+    const refused: StepHandler = async () => ({ kind: "failed", detail: "not sent: the seller app's sandbox token request failed with http 401 (invalid_client), before any write" });
+    const h = await harness({ readStore: async () => snapshot([]), handlers: { card_order: refused } });
+    const t0 = h.clockNow();
+    await work(h);
+    const run = await h.run();
+    expect(run.status).toBe("halted");
+    const kinds = (await h.events()).map((e) => e.kind);
+    expect(kinds).not.toContain("deliveries_wait_started");
+    expect(kinds).not.toContain("deliveries_wait_ended");
+    // Well short of the 90 s wait on the worker's own clock.
+    expect(h.clockNow() - t0).toBeLessThan(30_000);
+  });
+
+  it("keeps the delivery wait after a halt that follows a step PayPal accepted", async () => {
+    const refused: StepHandler = async () => ({ kind: "failed", detail: "http 422: PayPal refused the request" });
+    const h = await harness({ readStore: async () => snapshot([]), handlers: { refund: refused } });
+    await work(h);
+    expect((await h.run()).status).toBe("halted");
+    expect((await h.events()).map((e) => e.kind)).toContain("deliveries_wait_started");
+  });
+
+  it("keeps the delivery wait after a halt on an unknown step: it may have written", async () => {
+    const unsure: StepHandler = async () => ({ kind: "unknown", detail: "http 504: the write may or may not have executed" });
+    const h = await harness({ readStore: async () => snapshot([]), handlers: { card_order: unsure } });
+    await work(h);
+    expect((await h.events()).map((e) => e.kind)).toContain("deliveries_wait_started");
+  });
+
+  it("records the plan's steps and amounts once, on the first save", async () => {
+    const h = await harness();
+    await work(h);
+    const notes = (await h.events()).filter((e) => e.kind === "note" && "plan" in e.data);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.data["plan"]).toEqual({
+      currency: "USD",
+      steps: [
+        { id: "o1", kind: "card_order", amount: "40.00" },
+        { id: "r1", kind: "refund", from: "o1", mode: "full" },
+      ],
+    });
+  });
+
   it("fails a dispute with no PayPal call when the hosted bank is empty", async () => {
     const h = await harness({ handlers: { open_dispute: defaultHandlers.open_dispute } });
     await work(h, scenarioWith([{ id: "d1", kind: "open_dispute" }]));

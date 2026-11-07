@@ -4,6 +4,7 @@
     {
       "runId": "20261023231552-60ea96",
       "scenarioName": "Small online shop: card order with webhook resend",
+      "currency": "USD",
       "startedAt": "2026-10-23T23:15:52.697Z",
       "verdict": "bug",
       "verdictLine": "BUG: one event, delivered twice, fulfilled twice. The store had no event-id dedupe yet.",
@@ -21,7 +22,11 @@
           "detail": "captured USD 25.00 by card, no human step",
           "startedAt": "2026-10-23T23:15:53.389Z",
           "acceptedAt": "2026-10-23T23:15:56.706Z",
-          "ids": { "order": "3Y2144672G186725Y", "capture": "80644537PH409550V" }
+          "ids": {
+            "order": "3Y2144672G186725Y",
+            "capture": "80644537PH409550V"
+          },
+          "amount": "25.00"
         },
         {
           "step": "resend-capture",
@@ -31,7 +36,10 @@
           "detail": "asked PayPal to redeliver PAYMENT.CAPTURE.COMPLETED WH-23242717T8452430B-4FP87531JX1278159 to webhook 4DE52141J0303334X",
           "startedAt": "2026-10-23T23:15:56.710Z",
           "acceptedAt": "2026-10-23T23:17:47.257Z",
-          "ids": { "event": "WH-23242717T8452430B-4FP87531JX1278159", "webhook": "4DE52141J0303334X" }
+          "ids": {
+            "event": "WH-23242717T8452430B-4FP87531JX1278159",
+            "webhook": "4DE52141J0303334X"
+          }
         }
       ],
       "deliveries": [
@@ -59,6 +67,7 @@
     {
       "runId": "20261024011812-208f4e",
       "scenarioName": "Small online shop: card order with webhook resend",
+      "currency": "USD",
       "startedAt": "2026-10-24T01:18:12.610Z",
       "verdict": "ok",
       "verdictLine": "OK: fulfilled once, and the redelivery was recognized and ignored. Dedupe by event id was on.",
@@ -76,7 +85,11 @@
           "detail": "captured USD 25.00 by card, no human step",
           "startedAt": "2026-10-24T01:18:13.514Z",
           "acceptedAt": "2026-10-24T01:18:16.848Z",
-          "ids": { "order": "9XW82145R0198523E", "capture": "7FK80862277639113" }
+          "ids": {
+            "order": "9XW82145R0198523E",
+            "capture": "7FK80862277639113"
+          },
+          "amount": "25.00"
         },
         {
           "step": "resend-capture",
@@ -86,7 +99,10 @@
           "detail": "asked PayPal to redeliver PAYMENT.CAPTURE.COMPLETED WH-1XN5343594084053N-3NH67648AD6825106 to webhook 4DE52141J0303334X",
           "startedAt": "2026-10-24T01:18:16.850Z",
           "acceptedAt": "2026-10-24T01:19:17.073Z",
-          "ids": { "event": "WH-1XN5343594084053N-3NH67648AD6825106", "webhook": "4DE52141J0303334X" }
+          "ids": {
+            "event": "WH-1XN5343594084053N-3NH67648AD6825106",
+            "webhook": "4DE52141J0303334X"
+          }
         }
       ],
       "deliveries": [

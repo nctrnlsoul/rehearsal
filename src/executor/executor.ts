@@ -1,4 +1,4 @@
-import type { PaypalClient } from "../adapters/paypal";
+import { type PaypalClient, TokenRequestError } from "../adapters/paypal";
 import { seedOf } from "../core/idempotency";
 import { pick } from "../core/json";
 import { topologicalOrder } from "../core/plan";
@@ -180,15 +180,26 @@ export async function executeScenario(
       log: (line) => deps.log(`  ${line}`),
     };
 
+    const writesBefore = writesSentBy(deps);
     let outcome;
     try {
       outcome = await handler(ctx);
     } catch (e) {
-      // An exception mid-write tells us nothing about whether it landed.
-      outcome = {
-        kind: "unknown" as const,
-        detail: `handler threw: ${(e as Error).name}: ${(e as Error).message}`,
-      };
+      const writesAfter = writesSentBy(deps);
+      if (e instanceof TokenRequestError && writesBefore !== null && writesAfter === writesBefore) {
+        // The token comes before any request it is for, and the counts prove
+        // this step handed no write to either client, so nothing was sent.
+        outcome = {
+          kind: "failed" as const,
+          detail: `not sent: the ${e.role ?? "PayPal"} app's ${e.message}, before any write`,
+        };
+      } else {
+        // An exception mid-write tells us nothing about whether it landed.
+        outcome = {
+          kind: "unknown" as const,
+          detail: `handler threw: ${(e as Error).name}: ${(e as Error).message}`,
+        };
+      }
     }
 
     state = recordOutcome(state, stepId, outcome, iso());
@@ -202,6 +213,13 @@ export async function executeScenario(
   }
 
   return state;
+}
+
+/** Writes both clients have sent so far; null when either cannot say, which never counts as none. */
+function writesSentBy(deps: ExecutorDeps): number | null {
+  const s = (deps.seller as { writesSent?: unknown }).writesSent;
+  const b = (deps.buyer as { writesSent?: unknown }).writesSent;
+  return typeof s === "number" && typeof b === "number" ? s + b : null;
 }
 
 async function registerWebhook(

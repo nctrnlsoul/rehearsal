@@ -427,17 +427,5 @@ export function liveView(read: LiveRead): LiveView {
   };
 }
 
-/** "within 12 s": a delivery is seen when the worker polls, so this is an upper bound. */
-export function withinLabel(seconds: number): string {
-  return `within ${Math.max(0, Math.round(seconds))} s`;
-}
-
-/** An exact latency from the store's receive time, to the second, as the replays print it. */
-export function pairLabel(p: Pick<LivePair, "callT" | "arrivedT" | "exact">): string {
-  if (p.arrivedT === null) return "";
-  const s = p.arrivedT - p.callT;
-  return p.exact ? `${Math.max(0, Math.round(s))} s` : withinLabel(s);
-}
-
 /** The run id shape, kept here so a page can check it without importing the engine. */
 export const RUN_ID_SHAPE = /^\d{14}-[0-9a-f]{6}$/;

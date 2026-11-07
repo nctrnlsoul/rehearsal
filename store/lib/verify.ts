@@ -151,8 +151,8 @@ export async function resolveWebhookId(
   const cached = cachedWebhookIds.get(handlerUrl);
   if (cached !== undefined) return { id: cached };
 
-  const clientId = env["PAYPAL_SELLER_CLIENT_ID"];
-  const clientSecret = env["PAYPAL_SELLER_CLIENT_SECRET"];
+  const clientId = env["PAYPAL_SELLER_CLIENT_ID"]?.trim();
+  const clientSecret = env["PAYPAL_SELLER_CLIENT_SECRET"]?.trim();
   if (!clientId?.trim() || !clientSecret?.trim()) {
     return { id: null, detail: "store holds no PayPal credentials, cannot look up its webhook" };
   }
@@ -244,8 +244,8 @@ export async function verifySignature(
   fetchImpl: typeof fetch = fetch,
   nowMs: number = Date.now(),
 ): Promise<VerifyResult> {
-  const clientId = env["PAYPAL_SELLER_CLIENT_ID"];
-  const clientSecret = env["PAYPAL_SELLER_CLIENT_SECRET"];
+  const clientId = env["PAYPAL_SELLER_CLIENT_ID"]?.trim();
+  const clientSecret = env["PAYPAL_SELLER_CLIENT_SECRET"]?.trim();
   if (!clientId?.trim() || !clientSecret?.trim()) {
     return { verified: null, detail: "store holds no PayPal credentials, cannot verify" };
   }

@@ -57,12 +57,34 @@ export type ClientDeps = {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The token request failed. Every call asks for its token before it sends
+ * anything else, so nothing that call meant to send left this client.
+ * Carries PayPal's status and error code only, never the body.
+ */
+export class TokenRequestError extends Error {
+  readonly status: number;
+  /** PayPal's OAuth error code, such as invalid_client; null when it gave none. */
+  readonly code: string | null;
+  /** The client's label (seller, buyer), so a reader can say whose login failed. */
+  readonly role: string | null;
+
+  constructor(status: number, code: string | null, role: string | null) {
+    super(`sandbox token request failed with http ${status}${code === null ? "" : ` (${code})`}`);
+    this.name = "TokenRequestError";
+    this.status = status;
+    this.code = code;
+    this.role = role;
+  }
+}
+
 export class PaypalClient {
   readonly #creds: Credentials;
   readonly #deps: ClientDeps;
   #token: { value: string; expiresAtMs: number } | null = null;
   #meta: TokenMeta | null = null;
   #lastRequestAtMs = 0;
+  #writesSent = 0;
 
   constructor(creds: Credentials, deps: ClientDeps = {}) {
     this.#creds = creds;
@@ -97,6 +119,15 @@ export class PaypalClient {
   /** Drops the cached token. Called on a 401 so the next call re-authenticates. */
   invalidateToken(): void {
     this.#token = null;
+  }
+
+  /**
+   * Requests other than GET and HEAD handed to fetch, counted before the send,
+   * so one that timed out still counts. The executor compares it across a step
+   * to tell a failure before any write from one after a write.
+   */
+  get writesSent(): number {
+    return this.#writesSent;
   }
 
   /** Metadata from the most recent token fetch. Never contains the token itself. */
@@ -135,14 +166,14 @@ export class PaypalClient {
       this.#log(`POST ${TOKEN_PATH} -> ${res.status}`);
       // PayPal's error code only. The body is not echoed: this message reaches
       // step details, run reports and MCP tool output.
-      let code = "";
+      let code: string | null = null;
       try {
         const e = (JSON.parse(text) as { error?: unknown }).error;
-        if (typeof e === "string" && /^[a-z_]{1,40}$/.test(e)) code = ` (${e})`;
+        if (typeof e === "string" && /^[a-z_]{1,40}$/.test(e)) code = e;
       } catch {
         // Not JSON: the status alone says enough.
       }
-      throw new Error(`sandbox token request failed with http ${res.status}${code}`);
+      throw new TokenRequestError(res.status, code, this.#deps.label ?? null);
     }
     const parsed = JSON.parse(text) as {
       access_token?: unknown;
@@ -223,6 +254,7 @@ export class PaypalClient {
       let transportError: string | null = null;
       const startedAt = this.#nowMs();
 
+      if (method !== "GET" && method !== "HEAD") this.#writesSent += 1;
       try {
         const res = await this.#fetch(url, {
           method,

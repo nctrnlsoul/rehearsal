@@ -58,6 +58,15 @@ describe("credentialsFor", () => {
     });
   });
 
+  // A pasted value often carries a newline; PayPal would answer invalid_client.
+  it("trims surrounding whitespace, which is never part of an id or a secret", () => {
+    const env = { PAYPAL_SELLER_CLIENT_ID: " seller-id\n", PAYPAL_SELLER_CLIENT_SECRET: "\tseller-secret \r\n" };
+    expect(credentialsFor("seller", env)).toEqual({
+      clientId: "seller-id",
+      clientSecret: "seller-secret",
+    });
+  });
+
   it("refuses when half a pair is set", () => {
     expect(() => credentialsFor("buyer", { PAYPAL_BUYER_CLIENT_ID: "x" })).toThrow(
       MissingCredentialError,

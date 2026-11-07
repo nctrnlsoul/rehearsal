@@ -26,7 +26,7 @@ verify. Then its edge-case finder checks how a merchant app handled them.
   The dry run validates the scenario, checks it against the spend caps and
   prints the plan. It makes no network call.
 
-**Status: v0.6.1.** Scenario schema, executor, step handlers, purchase bank,
+**Status: v0.7.0.** Scenario schema, executor, step handlers, purchase bank,
 CLI, AI planner, edge-case finder, a stdio MCP server for Claude Code, and a
 web console with live sandbox runs behind the judge passcode. Day-1 capability
 findings are in [gate/RESULTS.md](gate/RESULTS.md).
@@ -255,19 +255,16 @@ npm install
 npm run dev            # http://localhost:3000
 npm test               # unit tests, including the SQL against a real Postgres (PGlite)
 npm run test:browser   # browser tests (Playwright)
-npm run build          # fetches Switzer first (see below)
+npm run build
 ```
 
 Every variable, required or optional, is listed in
 [console/.env.example](console/.env.example). Set them for Production only.
 The console uses its own Supabase project; apply `console/migrations` first.
 
-**Fonts:**
-- **Switzer** is self-hosted, but its license (ITF FFL 2.0) forbids putting the
-  font files in a repository. So `npm run build` downloads them from Fontshare
-  first, into a gitignored folder, and refuses any file whose sha256 differs
-  from the pinned one.
-- **DM Mono** is OFL and committed, with its license.
+**Fonts:** Instrument Sans and JetBrains Mono, both OFL, are committed with their
+licenses under `console/app/fonts/` and served by the console itself. The build
+fetches nothing.
 
 ## Scenario files
 

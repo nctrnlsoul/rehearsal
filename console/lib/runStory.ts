@@ -1,0 +1,547 @@
+import { type LiveRead, type LiveView, liveView } from "./liveView";
+
+/**
+ * The run page in plain English, from one poll of a live run or one moment of
+ * a replay. Pure, so every state is tested without a browser. liveView does
+ * the exact joining of calls to deliveries; this decides what each step card
+ * and the hero say about them. Raw names (step kinds, event types, PayPal's
+ * own detail) stay available for the Details panels, never in the headline.
+ */
+
+export type SentState = "queued" | "not-run" | "sending" | "accepted" | "refused" | "not-sent" | "unknown" | "never-confirmed";
+export type ReplyState = "none-expected" | "not-yet" | "waiting" | "delivered" | "not-seen" | "none";
+
+export type Reply = {
+  readonly key: string;
+  readonly eventId: string | null;
+  readonly eventType: string;
+  /** "PayPal confirmed: payment completed". */
+  readonly plain: string;
+  readonly arrived: boolean;
+  readonly latencyS: number | null;
+  /** True when the latency runs to the store's own receive time. */
+  readonly exact: boolean;
+  /** 1 for the first event this run saw arrive, and so on; null while waiting. */
+  readonly rank: number | null;
+  readonly receivedAt: string | null;
+  /** Copies the store verified as PayPal's, of all copies it recorded. */
+  readonly verified: number;
+  readonly copies: number;
+  readonly store: string | null;
+  readonly redelivery: boolean;
+};
+
+export type StepCard = {
+  readonly id: string;
+  readonly n: number;
+  readonly kind: string;
+  readonly title: string;
+  readonly amount: string | null;
+  readonly sent: SentState;
+  readonly sentWord: string;
+  readonly reply: ReplyState;
+  readonly replies: readonly Reply[];
+  /** Seconds the oldest unanswered reply has waited, while it waits. */
+  readonly waitingS: number | null;
+  readonly current: boolean;
+  /** A human sentence for a step that did not succeed. */
+  readonly problem: string | null;
+  readonly details: {
+    readonly kind: string;
+    readonly request: string | null;
+    readonly ids: ReadonlyArray<readonly [string, string]>;
+    readonly startedAt: string | null;
+    readonly acceptedAt: string | null;
+    readonly detail: string | null;
+    readonly paypalCode: string | null;
+    readonly from: string | null;
+  };
+};
+
+export type ProofNode = { readonly key: string; readonly label: string; readonly arrived: boolean; readonly latencyS: number | null; readonly verified: boolean };
+
+export type OtherEvent = { readonly eventId: string; readonly eventType: string | null; readonly plain: string; readonly copies: number; readonly store: string; readonly atS: number | null };
+
+export type Tone = "running" | "waiting" | "done" | "stopped" | "queued";
+
+export type RunStory = {
+  readonly tone: Tone;
+  readonly settled: boolean;
+  readonly headline: string;
+  readonly lead: string | null;
+  readonly progress: { readonly at: number; readonly of: number } | null;
+  readonly proof: readonly ProofNode[];
+  readonly proofLine: string;
+  readonly figures: {
+    readonly steps: string;
+    readonly amount: string;
+    readonly amountNote: string | null;
+    readonly slowest: string;
+    readonly signatures: string;
+    readonly signaturesOk: boolean | null;
+  };
+  readonly cards: readonly StepCard[];
+  readonly other: readonly OtherEvent[];
+  readonly notes: readonly string[];
+  readonly view: LiveView;
+};
+
+// ------------------------------------------------------------------ plain-English maps
+
+/** What Rehearsal sent, per step kind. The kind itself is shown in Details. */
+export const STEP_TITLES: Readonly<Record<string, string>> = {
+  card_order: "Payment captured",
+  refund: "Refund sent",
+  payout_batch: "Payout sent",
+  invoice_create: "Invoice created",
+  invoice_send: "Invoice sent",
+  invoice_record_payment: "Invoice payment recorded",
+  invoice_cancel: "Invoice canceled",
+  open_dispute: "Dispute opened",
+  resend_webhook: "Asked PayPal to resend an event",
+};
+
+/** The first request each kind makes, as the handlers send it. */
+export const STEP_REQUESTS: Readonly<Record<string, string>> = {
+  card_order: "POST /v2/checkout/orders",
+  refund: "POST /v2/payments/captures/{capture_id}/refund",
+  payout_batch: "POST /v1/payments/payouts",
+  invoice_create: "POST /v2/invoicing/invoices",
+  invoice_send: "POST /v2/invoicing/invoices/{invoice_id}/send",
+  invoice_record_payment: "POST /v2/invoicing/invoices/{invoice_id}/payments",
+  invoice_cancel: "POST /v2/invoicing/invoices/{invoice_id}/cancel",
+  open_dispute: "POST /v1/customer/disputes",
+  resend_webhook: "POST /v1/notifications/webhooks-events/{event_id}/resend",
+};
+
+/** Kinds liveView joins to a delivery (its PAIR_RULES, plus a resend's second copy). */
+const JOINED_KINDS = new Set(["card_order", "refund", "open_dispute", "invoice_create", "invoice_record_payment", "resend_webhook"]);
+
+/**
+ * The event each joined kind waits for once PayPal accepts it. liveView makes
+ * a waiting pair for a card order and a resend; the others are only joined
+ * once their event arrives, so until then the card waits on this one.
+ */
+const EXPECTED_TYPE: Readonly<Record<string, string>> = {
+  refund: "PAYMENT.CAPTURE.REFUNDED",
+  open_dispute: "CUSTOMER.DISPUTE.CREATED",
+  invoice_create: "INVOICING.INVOICE.CREATED",
+  invoice_record_payment: "INVOICING.INVOICE.PAID",
+};
+
+/**
+ * What PayPal sent back, per event type. Anything not listed reads as a
+ * plain fallback, with the type itself in Details; nothing is guessed from
+ * a type this console does not know.
+ */
+export const EVENT_PLAIN: Readonly<Record<string, string>> = {
+  "PAYMENT.CAPTURE.COMPLETED": "PayPal confirmed: payment completed",
+  "PAYMENT.CAPTURE.PENDING": "PayPal says the payment is pending",
+  "PAYMENT.CAPTURE.DENIED": "PayPal says the payment was denied",
+  "PAYMENT.CAPTURE.REFUNDED": "PayPal confirmed: refund completed",
+  "PAYMENT.CAPTURE.REVERSED": "PayPal says the payment was reversed",
+  "CHECKOUT.ORDER.APPROVED": "PayPal confirmed: order approved",
+  "CHECKOUT.ORDER.COMPLETED": "PayPal confirmed: order completed",
+  "INVOICING.INVOICE.CREATED": "PayPal confirmed: invoice created",
+  "INVOICING.INVOICE.SENT": "PayPal confirmed: invoice sent",
+  "INVOICING.INVOICE.UPDATED": "PayPal says the invoice changed",
+  "INVOICING.INVOICE.PAID": "PayPal confirmed: invoice paid",
+  "CUSTOMER.DISPUTE.CREATED": "PayPal confirmed: dispute opened",
+  "CUSTOMER.DISPUTE.UPDATED": "PayPal says the dispute changed",
+  "CUSTOMER.DISPUTE.RESOLVED": "PayPal says the dispute was resolved",
+  "PAYMENT.PAYOUTSBATCH.SUCCESS": "PayPal confirmed: payout batch done",
+  "PAYMENT.PAYOUTSBATCH.PROCESSING": "PayPal says the payout batch is processing",
+  "PAYMENT.PAYOUTSBATCH.DENIED": "PayPal says the payout batch was denied",
+  "PAYMENT.PAYOUTS-ITEM.SUCCEEDED": "PayPal confirmed: payout item paid",
+  "PAYMENT.PAYOUTS-ITEM.UNCLAIMED": "PayPal says a payout item is unclaimed",
+};
+
+export const eventPlain = (type: string | null): string => (type !== null && EVENT_PLAIN[type] !== undefined ? EVENT_PLAIN[type]! : "PayPal sent an event this console has no plain name for");
+
+/** Short names for the proof strip. */
+const EVENT_SHORT: Readonly<Record<string, string>> = {
+  "PAYMENT.CAPTURE.COMPLETED": "Payment",
+  "PAYMENT.CAPTURE.REFUNDED": "Refund",
+  "CHECKOUT.ORDER.APPROVED": "Order",
+  "CHECKOUT.ORDER.COMPLETED": "Order",
+  "INVOICING.INVOICE.CREATED": "Invoice",
+  "INVOICING.INVOICE.PAID": "Paid",
+  "CUSTOMER.DISPUTE.CREATED": "Dispute",
+};
+
+const STORE_PLAIN: Readonly<Record<string, string>> = {
+  fulfilled: "the store fulfilled the order",
+  duplicate_ignored: "the store saw a repeat and ignored it",
+  refund_recorded: "the store recorded the refund",
+  dispute_noted: "the store noted the dispute",
+  recorded: "the store recorded it",
+  refused: "the store refused it",
+};
+
+/**
+ * A step's or a run's stored detail, as one human sentence. The raw text is
+ * kept for Details. Claims are only made where the detail proves them:
+ * "Nothing was sent" only when the engine recorded "not sent".
+ */
+export function humanReason(raw: string | null): string | null {
+  if (raw === null || raw.trim() === "") return null;
+  let d = raw.trim().replace(/^step \S+ (failed|ended in an unknown state): /, "");
+  const notSent = /\bnot sent\b|before any write/.test(d);
+  const token = /token request failed with http (\d{3})(?: \(([a-z_]+)\))?/.exec(d);
+  if (token !== null) {
+    const role = /the (seller|buyer) app's/.exec(d)?.[1] ?? null;
+    const app = role === null ? "the app's" : `the ${role} app's`;
+    const login =
+      token[1] === "401" && token[2] === "invalid_client"
+        ? `PayPal refused ${app} login (its client id and secret do not match a sandbox app).`
+        : `PayPal's login service answered http ${token[1]} for ${app.replace(/'s$/, "")}.`;
+    if (/could not read the webhook list/.test(d)) return `${login} Nothing was sent.`;
+    return notSent ? `${login} Nothing was sent.` : login;
+  }
+  const left = /^not sent: (\d+) s were left in this server's time, and this step can take (\d+) s/.exec(d);
+  if (left !== null) return `Not sent: this server had ${left[1]} s left, and this step can take ${left[2]} s. Nothing was sent.`;
+  if (/hosted purchase bank has no purchase ready/.test(d)) return "Not sent: no banked purchase is ready to dispute. Nothing was sent.";
+  if (/no webhook is registered at/.test(d)) return "The sample store's webhook is not registered on this sandbox account, so the run stopped before sending anything.";
+  const refused = /^http (\d{3}): PayPal refused the request/.exec(d);
+  if (refused !== null) return `PayPal refused the request (http ${refused[1]}). Nothing was written.`;
+  const ambiguous = /^http (\d{3}): (the write may or may not have executed|server error, state unproven)/.exec(d);
+  if (ambiguous !== null) return `PayPal's reply (http ${ambiguous[1]}) does not say whether the request went through. It may have; nothing here will retry it.`;
+  const threw = /^handler threw: (\w+): /.exec(d);
+  if (threw !== null) return `The step stopped on an error (${threw[1]}). It may have written to PayPal; nothing here will retry it.`;
+  if (/^started and never confirmed/.test(d)) return "Started and never confirmed. It may have written to PayPal; nothing here will retry it.";
+  if (/stopped on an internal error/.test(d)) return "The run stopped on an internal error. A step it had started may have written to PayPal; nothing here will retry it.";
+  if (/the server running this stopped/.test(d)) return "The server running this stopped. A step it had started may have written to PayPal; nothing here will retry it.";
+  d = d.charAt(0).toUpperCase() + d.slice(1);
+  return /[.!?]$/.test(d) ? d : `${d}.`;
+}
+
+/** PayPal's own error code, for Details, when the detail carries one. */
+export function paypalCode(raw: string | null): string | null {
+  return raw === null ? null : (/\(([a-z_]{3,40})\)/.exec(raw)?.[1] ?? null);
+}
+
+/** "12s", "1m 22s". */
+export function dur(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/** "USD 45", "USD 45.50": whole amounts read without the cents. */
+export function money(currency: string, amount: string): string {
+  return `${currency} ${amount.replace(/\.00?$/, "")}`;
+}
+
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th")}`;
+export const arrivalWord = (rank: number) => `${ordinal(rank)} to arrive`;
+
+// ------------------------------------------------------------------ the plan
+
+type PlanStep = { id: string; kind: string; amount: string | null; from: string | null; mode: string | null; basisPoints: number | null };
+type Plan = { currency: string; steps: PlanStep[] };
+
+const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+
+/** The plan note the worker records on the first save; else the saved run state; else the steps seen. */
+function planOf(read: LiveRead, view: LiveView): Plan {
+  for (const e of read.events) {
+    const p = e.kind === "note" ? e.data["plan"] : undefined;
+    if (typeof p !== "object" || p === null || !Array.isArray((p as Record<string, unknown>)["steps"])) continue;
+    const r = p as Record<string, unknown>;
+    const steps = (r["steps"] as unknown[]).flatMap((x): PlanStep[] => {
+      if (typeof x !== "object" || x === null) return [];
+      const s = x as Record<string, unknown>;
+      const id = str(s["id"]);
+      if (id === null) return [];
+      const amount = str(s["amount"]);
+      return [{
+        id,
+        kind: str(s["kind"]) ?? "step",
+        amount: amount !== null && /^\d+(\.\d{1,2})?$/.test(amount) ? amount : null,
+        from: str(s["from"]),
+        mode: str(s["mode"]),
+        basisPoints: typeof s["basisPoints"] === "number" ? s["basisPoints"] : null,
+      }];
+    });
+    if (steps.length > 0) return { currency: str(r["currency"]) ?? "USD", steps };
+  }
+  const state = read.run.state as Record<string, unknown> | null;
+  if (state !== null && typeof state === "object" && Array.isArray(state["order"]) && typeof state["steps"] === "object" && state["steps"] !== null) {
+    const recs = state["steps"] as Record<string, Record<string, unknown> | undefined>;
+    const steps = (state["order"] as unknown[]).flatMap((id): PlanStep[] =>
+      typeof id === "string" ? [{ id, kind: str(recs[id]?.["kind"]) ?? "step", amount: null, from: null, mode: null, basisPoints: null }] : [],
+    );
+    if (steps.length > 0) return { currency: str(state["currency"]) ?? "USD", steps };
+  }
+  return { currency: "USD", steps: view.calls.map((c) => ({ id: c.step, kind: c.kind, amount: null, from: c.from, mode: null, basisPoints: null })) };
+}
+
+function titleOf(step: PlanStep): string {
+  if (step.kind === "refund") {
+    if (step.mode === "partial" && step.basisPoints !== null) return `Partial refund sent (${step.basisPoints / 100}%)`;
+    return step.mode === "full" ? "Full refund sent" : "Refund sent";
+  }
+  return STEP_TITLES[step.kind] ?? "Step sent";
+}
+
+const centsOf = (amount: string): bigint => {
+  const [w, f = ""] = amount.split(".");
+  return BigInt(w!) * 100n + BigInt(f.padEnd(2, "0").slice(0, 2));
+};
+const fromCents = (c: bigint) => `${c / 100n}.${String(c % 100n).padStart(2, "0")}`;
+
+// ------------------------------------------------------------------ the story
+
+export function runStory(read: LiveRead): RunStory {
+  const view = liveView(read);
+  const plan = planOf(read, view);
+  const nowS = view.elapsedS;
+  const dead = view.phase === "abandoned" || view.phase === "failed";
+  const haltEvent = read.events.find((e) => e.kind === "run_halted");
+  const halted = view.phase === "halted" || haltEvent !== undefined || (dead && view.calls.some((c) => c.status !== "succeeded"));
+
+  const calls = new Map(view.calls.map((c) => [c.step, c]));
+  const deliveries = new Map(view.deliveries.map((d) => [d.key, d]));
+  const ledger = new Map(view.ledger.map((l) => [l.eventId, l]));
+
+  // Arrival rank, across every joined delivery seen so far.
+  const arrivedPairs = view.pairs.filter((p) => p.arrivedT !== null).sort((a, b) => a.arrivedT! - b.arrivedT! || a.deliveryKey.localeCompare(b.deliveryKey));
+  const rankOf = new Map(arrivedPairs.map((p, i) => [p.deliveryKey, i + 1]));
+
+  const repliesOf = (callKey: string): Reply[] =>
+    view.pairs
+      .filter((p) => p.callKey === callKey)
+      .map((p): Reply => {
+        const d = deliveries.get(p.deliveryKey);
+        const eventId = d?.facts.find(([k]) => k === "event")?.[1] ?? null;
+        const l = eventId === null ? undefined : ledger.get(eventId);
+        const redelivery = p.deliveryKey.startsWith("d:redelivery:");
+        const type = d === undefined ? (p.what.includes("capture") ? "PAYMENT.CAPTURE.COMPLETED" : null) : d.title.replace(/ · 2nd delivery$/, "");
+        const store = d?.facts.find(([k]) => k === "store")?.[1] ?? null;
+        const copies = l?.deliveries ?? (d === undefined ? 0 : 1);
+        return {
+          key: p.deliveryKey,
+          eventId,
+          eventType: type ?? "event",
+          plain: redelivery ? `PayPal delivered it again; ${/^fulfilled/.test(store ?? "") ? "the store fulfilled the order a second time" : (STORE_PLAIN[store ?? ""] ?? "the store recorded it")}` : eventPlain(type),
+          arrived: p.arrivedT !== null,
+          latencyS: p.arrivedT === null ? null : Math.max(0, p.arrivedT - p.callT),
+          exact: p.exact,
+          rank: rankOf.get(p.deliveryKey) ?? null,
+          receivedAt: d?.at ?? null,
+          verified: l === undefined ? copies : Math.max(0, l.deliveries - l.refused),
+          copies,
+          store,
+          redelivery,
+        };
+      })
+      .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
+
+  let currentId: string | null = null;
+  const cards: StepCard[] = plan.steps.map((step, i) => {
+    const call = calls.get(step.id);
+    const kind = call?.kind ?? step.kind;
+    let replies = call === undefined ? [] : repliesOf(call.key);
+    if (call?.status === "succeeded" && replies.length === 0 && EXPECTED_TYPE[kind] !== undefined) {
+      const type = EXPECTED_TYPE[kind]!;
+      replies = [{ key: `d:expected:${step.id}`, eventId: null, eventType: type, plain: eventPlain(type), arrived: false, latencyS: null, exact: false, rank: null, receivedAt: null, verified: 0, copies: 0, store: null, redelivery: false }];
+    }
+    // A step still pending once the run has ended or stopped will never run.
+    let sent: SentState = view.settled || halted ? "not-run" : "queued";
+    if (call !== undefined) {
+      if (call.status === "in-flight") sent = "sending";
+      else if (call.status === "never-confirmed") sent = "never-confirmed";
+      else if (call.status === "succeeded") sent = "accepted";
+      else if (call.status === "failed") sent = /^not sent\b/.test(call.detail) ? "not-sent" : "refused";
+      else sent = "unknown";
+    }
+    let reply: ReplyState = "none";
+    let waitingS: number | null = null;
+    if (sent === "accepted") {
+      if (replies.length === 0) reply = JOINED_KINDS.has(kind) ? "not-yet" : "none-expected";
+      else if (replies.every((r) => r.arrived)) reply = "delivered";
+      else if (view.settled || dead) reply = "not-seen";
+      else {
+        reply = "waiting";
+        waitingS = Math.max(0, nowS - (call?.t ?? nowS));
+      }
+      // A resend whose second copy has not been seen yet is still waiting, not "none".
+      if (reply === "not-yet") {
+        if (view.settled) reply = "none-expected";
+        else waitingS = Math.max(0, nowS - (call?.t ?? nowS));
+      }
+    } else if (sent === "queued" && JOINED_KINDS.has(kind)) {
+      reply = "not-yet";
+    } else if (sent === "queued" || sent === "sending") {
+      reply = JOINED_KINDS.has(kind) ? "not-yet" : "none-expected";
+    }
+    const amount = step.amount === null ? null : money(plan.currency, step.amount);
+    const detail = call?.detail ?? null;
+    const card: StepCard = {
+      id: step.id,
+      n: i + 1,
+      kind,
+      title: titleOf({ ...step, kind }),
+      amount,
+      sent,
+      sentWord: SENT_WORDS[sent],
+      reply,
+      replies,
+      waitingS,
+      current: false,
+      problem: sent === "refused" || sent === "not-sent" || sent === "unknown" || sent === "never-confirmed" ? humanReason(detail) ?? humanReason(read.run.halt_reason) : null,
+      details: {
+        kind,
+        request: STEP_REQUESTS[kind] ?? null,
+        ids: call === undefined ? [] : Object.entries(call.ids),
+        startedAt: read.events.find((e) => e.kind === "step_started" && e.step_id === step.id)?.at ?? null,
+        acceptedAt: call !== undefined && call.status !== "in-flight" && call.status !== "never-confirmed" ? call.at : null,
+        detail,
+        paypalCode: paypalCode(detail),
+        from: call?.from ?? step.from,
+      },
+    };
+    return card;
+  });
+
+  if (!view.settled && !dead) {
+    currentId = cards.find((c) => c.sent === "sending")?.id ?? cards.find((c) => c.reply === "waiting" || (c.sent === "accepted" && c.reply === "not-yet"))?.id ?? null;
+  }
+  const finalCards = cards.map((c) => (c.id === currentId ? { ...c, current: true } : c));
+
+  // Figures.
+  const total = finalCards.length;
+  const done = finalCards.filter((c) => c.sent === "accepted").length;
+  let planned = 0n;
+  let accepted = 0n;
+  for (const [i, c] of finalCards.entries()) {
+    const a = plan.steps[i]!.amount;
+    if (a === null) continue;
+    planned += centsOf(a);
+    if (c.sent === "accepted") accepted += centsOf(a);
+  }
+  const allReplies = finalCards.flatMap((c) => c.replies);
+  const latencies = allReplies.flatMap((r) => (r.latencyS === null ? [] : [r.latencyS]));
+  const copies = view.ledger.reduce((a, l) => a + l.deliveries, 0);
+  const passed = view.ledger.reduce((a, l) => a + Math.max(0, l.deliveries - l.refused), 0);
+  const expected = allReplies.length;
+  const confirmed = allReplies.filter((r) => r.arrived).length;
+  const waiting = allReplies.filter((r) => !r.arrived).length;
+
+  // The hero, which must match the run's state at every moment.
+  const haltedAt = finalCards.find((c) => c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed");
+  // A dead server's own reason says more than the step it left unconfirmed.
+  const reason = (dead ? humanReason(read.run.halt_reason) : null) ?? humanReason(haltedAt?.details.detail ?? null) ?? humanReason(read.run.halt_reason) ?? humanReason(str(haltEvent?.data["reason"]));
+  const evidence =
+    expected === 0
+      ? copies === 0
+        ? null
+        : `PayPal sent ${copies} ${copies === 1 ? "event" : "events"}, none tied to a step.`
+      : `PayPal confirmed ${confirmed} of ${expected} ${expected === 1 ? "event" : "events"}${confirmed === 0 ? "" : passed === copies ? ", every signature verified" : `, ${passed} of ${copies} signatures verified`}.`;
+  let tone: Tone;
+  let headline: string;
+  let lead: string | null;
+  const stepsWord = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
+  if (view.phase === "queued") {
+    tone = "queued";
+    headline = "Queued.";
+    lead = "Waiting for the server to start it.";
+  } else if (halted) {
+    tone = "stopped";
+    headline = haltedAt === undefined ? (done === 0 ? "Stopped before step 1." : "Stopped.") : `Stopped at step ${haltedAt.n}.`;
+    if (dead) headline = view.phase === "abandoned" ? "The server running this stopped." : "The run stopped on an internal error.";
+    const after = !view.settled && waiting > 0 ? ` Still listening for ${waiting} ${waiting === 1 ? "event" : "events"} from the steps PayPal accepted.` : "";
+    lead = [reason, done > 0 && expected > 0 ? evidence : null].filter((x) => x !== null).join(" ") + after || null;
+  } else if (dead) {
+    tone = "stopped";
+    headline = view.phase === "abandoned" ? "The server running this stopped." : "The run stopped on an internal error.";
+    lead = reason;
+  } else if (view.phase === "complete") {
+    tone = "done";
+    headline = `All ${stepsWord(total)} done.`;
+    const missing = allReplies.filter((r) => !r.arrived).length;
+    lead =
+      missing === 0
+        ? evidence
+        : `${evidence ?? ""} ${missing} expected ${missing === 1 ? "event was" : "events were"} not seen before the wait ended. That is not proof the store missed ${missing === 1 ? "it" : "them"}: PayPal's sandbox has delivered later than that before.`.trim();
+  } else {
+    const sending = finalCards.find((c) => c.sent === "sending");
+    const next = finalCards.find((c) => c.sent === "queued");
+    if (sending !== undefined || next !== undefined) {
+      tone = "running";
+      const c = (sending ?? next)!;
+      headline = `Running step ${c.n} of ${total}: ${c.title}.`;
+      lead = sending !== undefined ? "Sending it to PayPal's sandbox now." : done === 0 ? "Starting the first step." : "PayPal accepted the last step; the next one starts now.";
+      if (confirmed > 0 || waiting > 0) lead = `${lead} ${confirmed} of ${expected} ${expected === 1 ? "event" : "events"} back from PayPal so far.`;
+    } else {
+      tone = "waiting";
+      headline = `All ${stepsWord(total)} sent.`;
+      lead = waiting > 0 ? `Waiting on PayPal for ${waiting} ${waiting === 1 ? "event" : "events"}. ${confirmed} of ${expected} confirmed so far.` : evidence ?? "Finishing up.";
+    }
+  }
+
+  const progress = tone === "running" ? { at: Math.min(total, finalCards.filter((c) => c.sent !== "queued").length), of: total } : null;
+
+  const proof: ProofNode[] = [
+    ...arrivedPairs.map((p): ProofNode => {
+      const r = allReplies.find((x) => x.key === p.deliveryKey)!;
+      return { key: p.deliveryKey, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: true, latencyS: r.latencyS, verified: r.verified > 0 };
+    }),
+    ...allReplies.filter((r) => !r.arrived).map((r): ProofNode => ({ key: r.key, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: false, latencyS: null, verified: false })),
+  ];
+  const proofLine =
+    expected === 0
+      ? done === 0 && (view.settled || halted)
+        ? "Nothing was sent, so there was nothing for PayPal to confirm."
+        : view.settled
+          ? "No event was expected from the steps that ran."
+          : "Events appear here as PayPal sends them."
+      : `${confirmed} of ${expected} confirmed.${confirmed === 0 ? "" : passed === copies ? ` All ${passed} ${passed === 1 ? "signature" : "signatures"} passed.` : ` ${passed} of ${copies} signatures passed.`}`;
+
+  const other: OtherEvent[] = view.ledger
+    .filter((l) => l.joinedTo.length === 0)
+    .map((l) => ({
+      eventId: l.eventId,
+      eventType: l.eventType,
+      plain: eventPlain(l.eventType),
+      copies: l.deliveries,
+      store: l.duplicatesIgnored > 0 ? "duplicate_ignored" : l.fulfilled > 0 ? "fulfilled" : l.refused > 0 ? "refused" : "recorded",
+      atS: l.firstReceivedT ?? l.firstSeenT,
+    }));
+
+  const notes: string[] = [];
+  if (!view.settled && view.lastContactS !== null && view.lastContactS > 30) notes.push(`No word from the server for ${Math.round(view.lastContactS)} s. After 90 s the run is marked stopped.`);
+  if (view.storeUnread) notes.push("The store's state endpoint could not be read at least once, so an event may show late or not at all.");
+
+  return {
+    tone,
+    settled: view.settled,
+    headline,
+    lead,
+    progress,
+    proof,
+    proofLine,
+    figures: {
+      steps: `${done} of ${total}`,
+      amount: planned === 0n ? "none" : money(plan.currency, fromCents(accepted)),
+      amountNote: planned === 0n || accepted === planned ? null : `of ${money(plan.currency, fromCents(planned))} planned`,
+      slowest: latencies.length === 0 ? (waiting > 0 ? "waiting" : "none") : dur(Math.max(...latencies)),
+      signatures: copies === 0 ? (view.settled ? "none" : "none yet") : `${passed} of ${copies} passed`,
+      signaturesOk: copies === 0 ? null : passed === copies,
+    },
+    cards: finalCards,
+    other,
+    notes,
+    view,
+  };
+}
+
+const SENT_WORDS: Record<SentState, string> = {
+  queued: "Queued",
+  "not-run": "Not run",
+  sending: "Sending to PayPal",
+  accepted: "PayPal accepted",
+  refused: "PayPal refused",
+  "not-sent": "Not sent",
+  unknown: "Outcome unknown",
+  "never-confirmed": "Never confirmed",
+};

@@ -1,16 +1,19 @@
 import Link from "next/link";
 import { SiteFooter, Topbar } from "../components/chrome";
-import "./gate/gate.css";
 
 export default function NotFound() {
   return (
-    <div className="s-gate">
+    <div className="s-missing">
       <Topbar current="runs" />
-      <main style={{ display: "block", maxWidth: 760 }}>
-        <h1>Nothing recorded here.</h1>
-        <p className="lede">Only recorded runs replay, and this address is not one of them. <Link href="/runs">See the recorded runs</Link>.</p>
+      <main>
+        <section className="hero" aria-labelledby="nf-h">
+          <div className="wrap">
+            <h1 id="nf-h">Nothing recorded here.</h1>
+            <p className="lead">Only recorded runs replay, and this address is not one of them. <Link href="/runs">See the recorded runs</Link>.</p>
+          </div>
+        </section>
       </main>
-      <SiteFooter>REHEARSAL · not found</SiteFooter>
+      <SiteFooter />
     </div>
   );
 }

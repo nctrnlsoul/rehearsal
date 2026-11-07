@@ -3,6 +3,8 @@ import { seedOf } from "../src/core/idempotency";
 import { type RunState, initRunState, markStarted, recordOutcome } from "../src/core/runState";
 import type { Scenario } from "../src/core/scenario";
 import { type ExecutorDeps, executeScenario } from "../src/executor/executor";
+import { PaypalClient } from "../src/adapters/paypal";
+import { cardOrderHandler } from "../src/executor/handlers/cardOrder";
 import { resendWebhookHandler } from "../src/executor/handlers/resendWebhook";
 import type { HandlerRegistry, StepHandler } from "../src/executor/types";
 import { type FakeResponse, fakePaypal, scenarioWith } from "./helpers/fakePaypal";
@@ -160,6 +162,51 @@ describe("executeScenario fails closed", () => {
     expect(state.steps["o1"]!.status).toBe("unknown");
     expect(state.steps["o1"]!.detail).toMatch(/socket hang up/);
     expect(state.halted).toBe(true);
+  });
+
+  // Run 20261107203953-bd8593: a 401 on the token request read "unknown: may have written".
+  it("fails a step whose token request is refused, as not sent, and sends no write", async () => {
+    const requests: string[] = [];
+    const refusing = new PaypalClient({ clientId: "id", clientSecret: "secret" }, {
+      label: "seller",
+      fetchImpl: (async (input: unknown) => {
+        requests.push(new URL(String(input)).pathname);
+        return new Response(JSON.stringify({ error: "invalid_client" }), { status: 401 });
+      }) as unknown as typeof fetch,
+    });
+    const h = harness({ seller: refusing, handlers: registry({ card_order: cardOrderHandler }) });
+    const state = await executeScenario({ scenario: twoStep(), runId: "run-1" }, h.deps);
+    // The token endpoint only: no order request was ever issued.
+    expect(requests).toEqual(["/v1/oauth2/token"]);
+    expect(state.steps["o1"]!.status).toBe("failed");
+    expect(state.steps["o1"]!.detail).toBe("not sent: the seller app's sandbox token request failed with http 401 (invalid_client), before any write");
+    expect(state.haltReason).toMatch(/^step o1 failed: not sent/);
+    expect(state.steps["r1"]!.status).toBe("pending");
+  });
+
+  it("keeps a token failure after a write in the same step as unknown: that write may have landed", async () => {
+    let token = 0;
+    const client = new PaypalClient({ clientId: "id", clientSecret: "secret" }, {
+      label: "seller",
+      fetchImpl: (async (input: unknown) => {
+        if (new URL(String(input)).pathname === "/v1/oauth2/token") {
+          token += 1;
+          // The first token works and expires at once; the refresh is refused.
+          return token === 1
+            ? new Response(JSON.stringify({ access_token: "t", expires_in: 0 }), { status: 200 })
+            : new Response(JSON.stringify({ error: "invalid_client" }), { status: 401 });
+        }
+        return new Response(JSON.stringify({ id: "O-1", status: "CREATED" }), { status: 201 });
+      }) as unknown as typeof fetch,
+    });
+    const twoWrites: StepHandler = async (ctx) => {
+      await ctx.seller.call({ method: "POST", path: "/v2/checkout/orders", body: {}, idempotencySeed: ctx.seed });
+      await ctx.seller.call({ method: "POST", path: "/v2/checkout/orders/O-1/capture", body: {}, idempotencySeed: ctx.seedFor("capture") });
+      return { kind: "success", detail: "unreachable" };
+    };
+    const h = harness({ seller: client, handlers: registry({ card_order: twoWrites }) });
+    const state = await executeScenario({ scenario: twoStep(), runId: "run-1" }, h.deps);
+    expect(state.steps["o1"]!.status).toBe("unknown");
   });
 
   it("halts when a step kind has no handler", async () => {

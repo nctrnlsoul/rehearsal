@@ -1,65 +1,43 @@
-/* Live surfaces. Reuses the replay timeline's classes (.s-runs) and adds only what a live run needs. */
-.live-banner { display: flex; gap: 12px; align-items: baseline; padding: 8px 24px; border-bottom: 1px solid var(--rule); font-size: 13px; color: var(--text-2); }
-.live-banner strong { color: var(--state-ok); letter-spacing: 0.1em; font-weight: 600; }
+/* Live surfaces: the builder. The run page itself uses runs/run.css. */
+.s-live .start-card { padding: 24px 28px; }
+.live-grid { margin-top: 24px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.limits-card { padding: 22px 24px; display: grid; gap: 14px; }
+.limits-card h2 { font-size: 17px; }
+.limits-card .facts { font-size: 14px; }
 
-.s-live .live-state { margin: 0 0 20px; display: grid; gap: 6px; }
-.s-live .live-state .headline .mark { font-size: 15px; }
-.s-live .live-state .detail { font-size: 14px; color: var(--text-2); max-width: 70ch; }
-.s-live .live-state .clock { font-size: 13px; color: var(--text-3); }
+.builder { display: grid; gap: 16px; }
+.builder > .card { padding: 22px 24px; display: grid; gap: 14px; }
+.builder h2 { display: flex; align-items: center; gap: 12px; font-size: 18px; }
+.step-num { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 15px; font-weight: 600; flex: none; }
+.modes { width: max-content; max-width: 100%; }
+.plans { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+.plan-option { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 10px; padding: 14px 16px; border: 1px solid var(--rule); border-radius: var(--radius-control); cursor: pointer; transition: border-color var(--dur-hover) var(--ease); }
+.plan-option:hover { border-color: var(--control-line); }
+.plan-option.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.plan-option input { grid-row: 1 / span 3; width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.plan-option .nm { font-weight: 600; }
+.plan-option .sum { color: var(--text); }
+.plan-option .id { font-size: 13px; color: var(--text-2); }
+.plan-option q { font-size: 14px; color: var(--text-2); }
+.describe { display: grid; gap: 10px; }
+.describe label { font-size: 15px; color: var(--text-2); max-width: 70ch; }
+.describe textarea { width: 100%; background: var(--bg-card); color: var(--text); border: 1px solid var(--control-line); border-radius: var(--radius-control); padding: 12px 14px; font: 400 16px var(--font-sans); resize: vertical; }
+.row-end { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dry .name { font-weight: 600; font-size: 17px; }
+.plan-lines, .json pre { margin: 0; padding: 14px 16px; background: var(--bg-muted); border: 1px solid var(--rule); border-radius: var(--radius-control); font-size: 13px; line-height: 1.6; white-space: pre; overflow-x: auto; max-width: 100%; }
+.dry .facts { font-size: 14px; }
+.dry .digest { font-size: 12px; font-weight: 400; }
+.errors { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 15px; color: var(--text-2); }
+.problem-line { font-size: 15px; }
+.json summary { color: var(--accent); font-weight: 600; font-size: 15px; min-height: 24px; }
+.json pre { margin-top: 10px; }
+.go .btn { width: max-content; }
 
-/* A wait that ended without the delivery: neutral, dashed, not moving, not the accent. */
-.s-live .link.stopped { stroke: var(--text-3); stroke-dasharray: 4 4; }
-
-.s-live .terminal { border: 1px solid var(--rule); border-radius: var(--card-radius); padding: 16px 18px; max-width: 70ch; }
-.s-live .terminal h2 { font-size: 17px; margin: 0 0 6px; }
-.s-live .terminal p { color: var(--text-2); font-size: 14px; }
-
-.s-live .ledger { margin-top: 28px; display: grid; gap: 10px; }
-.s-live .table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--card-radius); }
-.s-live table { border-collapse: collapse; width: 100%; font-size: 13px; }
-.s-live th { text-align: left; font-weight: 500; color: var(--text-3); padding: 8px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-.s-live td { padding: 8px 10px; border-bottom: 1px solid var(--rule); color: var(--text-2); vertical-align: top; }
-.s-live tr:last-child td { border-bottom: 0; }
-.s-live td.mono { font-size: 12.5px; overflow-wrap: anywhere; }
-
-@media (max-width: 860px) {
-  .live-banner { padding: 8px 16px; }
-}
-
-.s-live .builder { display: grid; gap: 28px; }
-.s-live .builder section { display: grid; gap: 12px; }
-.s-live .modes { display: inline-flex; width: max-content; border: 1px solid var(--rule); border-radius: var(--control-radius); }
-.s-live .modes .speed { font-family: var(--font-sans); }
-.s-live .plans { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
-.s-live .plan-option { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 8px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: var(--card-radius); cursor: pointer; }
-.s-live .plan-option input { grid-row: 1 / span 3; width: 18px; height: 18px; margin-top: 2px; accent-color: var(--text); }
-.s-live .plan-option .nm { font-weight: 500; }
-.s-live .plan-option .id { font-size: 12px; color: var(--text-3); }
-.s-live .plan-option q { font-size: 13px; color: var(--text-2); }
-.s-live .describe { display: grid; gap: 8px; }
-.s-live .describe label { font-size: 14px; color: var(--text-2); max-width: 70ch; }
-.s-live .describe textarea { width: 100%; background: var(--bg-card); color: var(--text); border: 1px solid var(--rule); border-radius: var(--card-radius); padding: 10px 12px; font: 400 15px var(--font-sans); resize: vertical; }
-.s-live .describe .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.s-live .dry .name { font-weight: 600; font-size: 16px; }
-.s-live .plan-lines, .s-live .json { margin: 0; padding: 12px; background: var(--bg-card); border: 1px solid var(--rule); border-radius: var(--card-radius); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.s-live .errors { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 14px; color: var(--text-2); }
-.s-live .problem { font-size: 14px; }
-.s-live .dry .facts dd { overflow-wrap: anywhere; }
-.s-live details summary { cursor: pointer; font-size: 14px; color: var(--text-2); min-height: 24px; }
-.s-live .go .btn { width: max-content; }
-
-/* Human words inside a machine-data line stay in the sans. */
-.s-live .words, .s-live .facts .word { font-family: var(--font-sans); font-variant-numeric: normal; }
-.s-live .facts span.word { font-family: var(--font-sans); }
-
-.s-live .finding { margin-top: 28px; display: grid; gap: 10px; max-width: 760px; }
-.s-live .finding .verdict-line { font-size: 15px; }
-.s-live .finding .facts { grid-template-columns: max-content 1fr; }
-.s-live .finding .facts dd { text-align: left; }
-
-/* Three modes do not fit side by side on a phone: stack them. */
+@media (max-width: 960px) { .live-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) {
-  .s-live .modes { display: grid; width: 100%; }
-  .s-live .modes .speed { min-height: 44px; text-align: left; padding: 0 14px; }
-  .s-live .modes .speed + .speed { border-left: 0; border-top: 1px solid var(--rule); }
+  .modes { display: grid; width: 100%; }
+  .modes button { min-height: 44px; text-align: left; }
+  .modes button + button { border-left: 0; border-top: 1px solid var(--rule); }
+  .s-live .start-card { padding: 20px 18px; }
+  .builder > .card { padding: 20px 18px; }
 }

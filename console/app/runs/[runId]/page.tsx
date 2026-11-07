@@ -1,58 +1,41 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReplayBanner, SiteFooter, Topbar } from "../../../components/chrome";
-import { ReplayTimeline } from "../../../components/ReplayTimeline";
-import { RUNS, runById, utcTime } from "../../../lib/replays";
-import "../timeline.css";
+import { ReplayRun } from "../../../components/ReplayRun";
+import { RUNS, runById } from "../../../lib/replays";
+import "../run.css";
 
 /** Only recorded run ids resolve; anything else is a 404, never a guess. */
 export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
   const run = runById(runId);
   if (run === undefined) notFound();
-
-  const verified = run.deliveries.filter((d) => d.verified).length;
   const other = RUNS.find((r) => r.runId !== run.runId);
 
   return (
-    <div className="s-runs">
-      <a className="skip" href="#timeline">Skip to the run timeline</a>
-      <ReplayBanner>Recorded run {run.runId}, {run.startedAt.slice(0, 10)}. Replayed on its recorded clock; nothing here is live.</ReplayBanner>
+    <div className="s-replay">
+      <a className="skip" href="#run-h">Skip to the run</a>
       <Topbar current="runs" />
-      <header className="page">
-        <div>
-          <h1>{run.scenarioName}</h1>
-          <p className="runline">
-            Run <span className="mono">{run.runId}</span> · started <span className="mono">{utcTime(run.startedAt)} UTC</span> · {run.calls.length} calls · {run.deliveries.length} deliveries
-          </p>
-        </div>
-      </header>
+      <ReplayBanner>Recorded run from {run.startedAt.slice(0, 10)}, played on its recorded clock by the same view a live run uses. Nothing here is live.</ReplayBanner>
       <main>
-        <div id="timeline"><ReplayTimeline run={run} /></div>
-        <aside aria-label="Run facts">
-          <section className="facts-block">
-            <h2 className="label">Deliveries verified</h2>
-            <dl className="facts">
-              <dt>Verified as PayPal&apos;s</dt><dd>{verified} of {run.deliveries.length}</dd>
-              <dt>Event target</dt><dd className="word">sample store only</dd>
-              <dt>Webhook</dt><dd>4DE52141J0303334X</dd>
-            </dl>
-          </section>
-          <section className="facts-block">
-            <h2 className="label">Where this replay comes from</h2>
+        <ReplayRun run={run} />
+        <div className="wrap">
+          <details className="card how">
+            <summary>Where this replay comes from</summary>
             <ul className="sources">
               {run.sources.map((s) => <li key={s}>{s}</li>)}
             </ul>
-            <p className="note" style={{ marginTop: 8 }}>The store records deliveries to the second, so latencies are shown to the second.</p>
-          </section>
+            <p>The store records events to the second, so latencies are shown to the second. Events went to the sample store&apos;s webhook <span className="mono">4DE52141J0303334X</span>.</p>
+          </details>
           {other !== undefined && (
-            <section className="facts-block">
-              <h2 className="label">{run.verdict === "bug" ? "After the fix" : "Before the fix"}</h2>
-              <p><a href={`/runs/${other.runId}`}>{other.runId}</a></p>
-            </section>
+            <p className="note other-run">
+              {run.verdict === "bug" ? "After the store's one-line fix: " : "Before the store's one-line fix: "}
+              <Link href={`/runs/${other.runId}`}>run <span className="mono">{other.runId}</span></Link>
+            </p>
           )}
-        </aside>
+        </div>
       </main>
-      <SiteFooter>REHEARSAL · replay of a recorded run · every id and time is from the run&apos;s own records</SiteFooter>
+      <SiteFooter />
     </div>
   );
 }

@@ -23,7 +23,7 @@ import {
   summarize,
   webhookHandlerUrl,
 } from "./engine";
-import { MAX_DETAIL_CHARS, type RunEvent, type SeenDeliveries, deliveryEvents, savedState, stateEvents } from "./events";
+import { MAX_DETAIL_CHARS, type PlanFacts, type RunEvent, type SeenDeliveries, deliveryEvents, planFacts, savedState, stateEvents } from "./events";
 import { DELIVERY_POLL_S, DELIVERY_WAIT_S, STEP_MARGIN_S, worstCaseOf } from "./hosted";
 
 /**
@@ -144,10 +144,11 @@ async function runTracked(
   let fenced = false;
   // Set once the scenario is known; read by every save after that.
   let sources: ReadonlyMap<string, string> = new Map();
+  let plan: PlanFacts | null = null;
 
   const persist = async (s: RunState) => {
     if (fenced) throw new FencedError();
-    if (!(await rpcOk("console_save_state", { p_state: savedState(s), p_events: stateEvents(prev, s, sources) }))) {
+    if (!(await rpcOk("console_save_state", { p_state: savedState(s), p_events: stateEvents(prev, s, sources, plan) }))) {
       fenced = true;
       throw new FencedError();
     }
@@ -159,6 +160,7 @@ async function runTracked(
 
   const execute: Execute = (scenario, digest) => {
     sources = new Map(scenario.steps.flatMap((st) => ("from" in st && typeof st.from === "string" ? [[st.id, st.from] as const] : [])));
+    plan = planFacts(scenario);
     return executeScenario(
       { scenario, runId, resume: null, webhookMode: "reuse-only", scenarioDigest: digest },
       {
@@ -229,7 +231,10 @@ async function runTracked(
   }
 
   bodyDone = true;
-  if (opts.deliveryWaitS > 0) {
+  // Nothing PayPal accepted means nothing for it to deliver, so a halted run
+  // with no write that may have landed finishes now rather than wait 90 s.
+  const wait = opts.deliveryWaitS > 0 && !haltedBeforeAnyWrite(result.state);
+  if (wait) {
     waitUntilMs = Math.min(deps.now().getTime() + opts.deliveryWaitS * 1000, deps.deadlineMs - FINISH_MARGIN_MS);
     if (!fenced) {
       await rpcOk("console_add_events", { p_events: [{ kind: "deliveries_wait_started", data: { seconds: opts.deliveryWaitS } }] }).catch(() => false);
@@ -240,7 +245,7 @@ async function runTracked(
   await poller;
   if (fenced) return;
   const closing: RunEvent[] = [...(result.events ?? [])];
-  if (opts.deliveryWaitS > 0) {
+  if (wait) {
     closing.push({ kind: "deliveries_wait_ended", data: { events_seen: [...seen.keys()].filter((k) => k.startsWith("event:")).length } });
   }
   if (closing.length > 0) await rpcOk("console_add_events", { p_events: closing }).catch(() => false);
@@ -253,6 +258,16 @@ async function runTracked(
   } else {
     await finishQuietly(deps, runId, "complete", "");
   }
+}
+
+/**
+ * True only for a halted run whose every step is still pending or failed. A
+ * succeeded step was accepted by PayPal and an unknown one may have been, so
+ * either keeps the wait; a failed step is a refusal, which writes nothing.
+ */
+export function haltedBeforeAnyWrite(state: RunState | null): boolean {
+  if (state === null) return true;
+  return state.halted && Object.values(state.steps).every((s) => s.status === "pending" || s.status === "failed");
 }
 
 export async function runScenarioWorker(args: { runId: string; scenario: Scenario; digest: string }, deps: WorkerDeps): Promise<void> {

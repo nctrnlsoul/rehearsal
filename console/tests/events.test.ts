@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunState, StoreSnapshot } from "../lib/engine";
-import { type SeenDeliveries, deliveryEvents, stateEvents } from "../lib/events";
+import { type SeenDeliveries, deliveryEvents, planFacts, stateEvents } from "../lib/events";
+import { initRunState } from "../../src/core/runState";
 
 /**
  * The timeline events the worker saves, from what the run saved and what the
@@ -125,5 +126,40 @@ describe("stateEvents (R-044)", () => {
   it("names no source when it is given none", () => {
     const [, finished] = stateEvents(null, state({ a: step("a", "card_order") }));
     expect(finished!.data).not.toHaveProperty("from");
+  });
+});
+
+describe("planFacts", () => {
+  it("names each step's kind and amount, and sums a payout's items in cents", () => {
+    const facts = planFacts({
+      currency: "USD",
+      steps: [
+        { id: "o1", kind: "card_order", amount: "45.00", needs: [] },
+        { id: "p1", kind: "payout_batch", items: [{ amount: "10.10" }, { amount: "0.95" }], needs: [] },
+        { id: "r1", kind: "refund", from: "o1", mode: "partial", basisPoints: 2500, needs: ["o1"] },
+      ],
+    });
+    expect(facts).toEqual({
+      currency: "USD",
+      steps: [
+        { id: "o1", kind: "card_order", amount: "45.00" },
+        { id: "p1", kind: "payout_batch", amount: "11.05" },
+        { id: "r1", kind: "refund", from: "o1", mode: "partial", basisPoints: 2500 },
+      ],
+    });
+  });
+
+  // An event over the 4 KB check would fail the first save, and with it the run.
+  it("stays under the event size check however long the plan", () => {
+    const steps = Array.from({ length: 30 }, (_, i) => ({ id: `step-${"x".repeat(40)}-${i}`, kind: "resend_webhook", from: "y".repeat(64), eventType: "Z".repeat(120), needs: [] }));
+    const facts = planFacts({ currency: "USD", steps });
+    expect(new TextEncoder().encode(JSON.stringify({ plan: facts })).length).toBeLessThanOrEqual(3000);
+    expect(facts.steps.length).toBeGreaterThan(0);
+  });
+
+  it("is recorded once, with the first save only", () => {
+    const plan = planFacts({ currency: "USD", steps: [{ id: "o1", kind: "card_order", amount: "1.00", needs: [] }] });
+    const first = stateEvents(null, initRunState({ runId: "r", scenarioName: "s", currency: "USD", steps: [{ id: "o1", kind: "card_order" }], order: ["o1"], nowIso: "2026-11-07T00:00:00Z" }), new Map(), plan);
+    expect(first.filter((e) => e.kind === "note" && "plan" in (e.data ?? {}))).toHaveLength(1);
   });
 });
