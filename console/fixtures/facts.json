@@ -4,9 +4,9 @@
   "version": "v0.7.0",
   "tests": {
     "engine": 619,
-    "store": 141,
+    "store": 142,
     "receiver": 76,
     "console": 323,
-    "total": 1159
+    "total": 1160
   }
 }
