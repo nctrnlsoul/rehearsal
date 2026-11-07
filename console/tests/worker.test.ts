@@ -402,10 +402,10 @@ describe("timeGuarded", () => {
 
   // Each kind at exactly its worst case plus the 60 s margin, and a millisecond under.
   it.each([
-    ["card_order", 30],
-    ["refund", 30],
-    ["open_dispute", 130],
-    ["resend_webhook", 150],
+    ["card_order", 60],
+    ["refund", 60],
+    ["open_dispute", 160],
+    ["resend_webhook", 270],
   ])("sends %s with %i s plus the margin left, and not a millisecond less", async (kind, worst) => {
     expect(STEP_MARGIN_S).toBe(60);
     expect(await sent(kind, worst + STEP_MARGIN_S)).toBe(true);
@@ -413,7 +413,7 @@ describe("timeGuarded", () => {
   });
 
   it("keeps a dispute that a card order would fit in", async () => {
-    expect(await sent("card_order", 100)).toBe(true);
-    expect(await sent("open_dispute", 100)).toBe(false);
+    expect(await sent("card_order", 150)).toBe(true);
+    expect(await sent("open_dispute", 150)).toBe(false);
   });
 });

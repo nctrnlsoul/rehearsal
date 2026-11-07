@@ -328,7 +328,7 @@ describe("the live builder, past the gate", () => {
   it("hydrates, passes Tiny Bakery (R-043), and blocks the dispute plan on an empty bank", async () => {
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live", 200);
-    await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("150 s"));
+    await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("330 s"));
     await expect(page.locator(".dry").innerText()).resolves.toContain("PayPal still delivers this account's events to every webhook registered on it");
     await expect(page.locator(".dry").innerText()).resolves.not.toContain("per-step cap");
     await expect(page.locator(".go .btn-primary").isDisabled()).resolves.toBe(false);

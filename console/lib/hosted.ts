@@ -40,15 +40,32 @@ export const DELIVERY_WAIT_S = 90;
 export const DELIVERY_POLL_S = 5;
 
 /**
- * The longest each step kind can take. A dispute polls up to 120 s for its
- * status; a resend retries PayPal's 404 for up to about 80 s before it can be
- * sent, then waits; everything else is a few calls.
+ * The longest each step kind can take, so no step starts that cannot finish
+ * inside the route's time. A PayPal call that answers takes seconds; one that
+ * times out takes 30 s and may be retried once with backoff, so every call is
+ * counted at 30 s. Polls run to their budget and the last poll can start just
+ * before it ends.
+ *
+ * - card order, refund, invoice send, record payment, cancel: 1 to 2 calls, 60 s
+ * - invoice create: 3 calls (number, create, read back), 90 s
+ * - payout batch: create, then polls for 90 s, 130 s
+ * - dispute: create, then polls for 120 s, 160 s
+ * - resend: polls the event list for up to 120 s, then retries PayPal's
+ *   not-found answer for up to 120 s more, 270 s
  */
 export const STEP_WORST_CASE_S: Readonly<Record<string, number>> = {
-  open_dispute: 130,
-  resend_webhook: 150,
+  card_order: 60,
+  refund: 60,
+  invoice_create: 90,
+  invoice_send: 60,
+  invoice_record_payment: 60,
+  invoice_cancel: 60,
+  payout_batch: 130,
+  open_dispute: 160,
+  resend_webhook: 270,
 };
-export const DEFAULT_STEP_WORST_CASE_S = 30;
+/** For a step kind added later and not yet measured: the largest bound above. */
+export const DEFAULT_STEP_WORST_CASE_S = 270;
 
 export const worstCaseOf = (kind: string): number => STEP_WORST_CASE_S[kind] ?? DEFAULT_STEP_WORST_CASE_S;
 

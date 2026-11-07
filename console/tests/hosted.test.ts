@@ -2,11 +2,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import plans from "../fixtures/plans.json";
+import { defaultHandlers } from "../lib/engine";
 import {
+  DEFAULT_STEP_WORST_CASE_S,
   HOSTED_CAPS,
   HOSTED_MODEL_LIMITS,
   HOSTED_RUN_LIMITS,
   MAX_DURATION_S,
+  STEP_WORST_CASE_S,
   TIME_BUDGET_S,
   hostedConfig,
   hostedGate,
@@ -123,14 +126,14 @@ describe("liveRunsEnabled", () => {
 describe("hostedGate", () => {
   // R-043: the per-step cap is USD 150 so the main recorded plan, whose
   // invoice is USD 120.00, runs hosted for judges.
-  it("passes both recorded plans: Tiny Bakery in 150 s, the dispute plan in 130 s", () => {
+  it("passes both recorded plans: Tiny Bakery in 330 s, the dispute plan in 160 s", () => {
     const c = config();
     const [bakery, dispute] = plans.plans;
     const b = hostedGate(bakery!.scenario, c);
     expect(b.ok, !b.ok ? b.errors.join("; ") : "").toBe(true);
-    expect(b.ok && b.budgetS).toBe(150);
+    expect(b.ok && b.budgetS).toBe(330);
     const d = hostedGate(dispute!.scenario, c);
-    expect(d.ok && d.budgetS).toBe(130);
+    expect(d.ok && d.budgetS).toBe(160);
   });
 
   it("refuses Tiny Bakery on its USD 120 step once a setting lowers the step cap to USD 100", () => {
@@ -167,10 +170,29 @@ describe("hostedGate", () => {
     const c = config();
     // 5 disputes would also break the dispute cap, so lift that one to isolate the time rule.
     const loose = { ...c, caps: { ...c.caps, maxDisputes: 8 } };
-    const g = hostedGate(scenario(Array.from({ length: 5 }, (_, i) => ({ id: `d${i}`, kind: "open_dispute", needs: [] }))), loose);
+    const g = hostedGate(scenario(Array.from({ length: 4 }, (_, i) => ({ id: `d${i}`, kind: "open_dispute", needs: [] }))), loose);
     expect(g.ok).toBe(false);
-    expect(!g.ok && g.errors[0]).toContain("650 s");
-    expect(timeBudgetS({ steps: [{ kind: "open_dispute" }, { kind: "card_order" }] } as never)).toBe(160);
+    expect(!g.ok && g.errors[0]).toContain("640 s");
+    expect(timeBudgetS({ steps: [{ kind: "open_dispute" }, { kind: "card_order" }] } as never)).toBe(220);
+  });
+
+  // The old bounds (30 s for most steps, 150 s for a resend) were below what
+  // the handlers can take, so a step could start that could not finish.
+  it("bounds each step kind by what its handler can take, and every kind has a bound", () => {
+    expect(STEP_WORST_CASE_S).toEqual({
+      card_order: 60,
+      refund: 60,
+      invoice_create: 90,
+      invoice_send: 60,
+      invoice_record_payment: 60,
+      invoice_cancel: 60,
+      payout_batch: 130,
+      open_dispute: 160,
+      resend_webhook: 270,
+    });
+    expect(Object.keys(STEP_WORST_CASE_S).sort()).toEqual(Object.keys(defaultHandlers).sort());
+    // A kind added later and not measured is assumed slow, never fast.
+    expect(DEFAULT_STEP_WORST_CASE_S).toBe(Math.max(...Object.values(STEP_WORST_CASE_S)));
   });
 });
 

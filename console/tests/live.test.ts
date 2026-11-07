@@ -180,7 +180,7 @@ describe("POST /api/plan", () => {
     const dry = b["dryRun"] as Record<string, unknown>;
     expect(dry["ok"]).toBe(true);
     expect(dry["sha256"]).toMatch(/^[0-9a-f]{64}$/);
-    expect(dry["budgetS"]).toBe(30);
+    expect(dry["budgetS"]).toBe(60);
     const saved = await h.pg.query<{ description: string; sha256: string }>("select description, sha256 from public.console_plans");
     expect(saved.rows).toEqual([{ description: "a candle shop that takes card orders", sha256: dry["sha256"] }]);
     expect(await h.used("model_global")).toBe(1);
@@ -257,7 +257,7 @@ describe("POST /api/dry-run", () => {
   it("shows a recorded dispute plan as blocked on an empty bank, and runnable with one purchase", async () => {
     const h = await harness();
     const before = await bodyOf(await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: DISPUTE!.plan } })));
-    expect(before).toMatchObject({ ok: false, sha256: DISPUTE!.sha256, budgetS: 130, bank: { needed: 1, available: 0, short: true } });
+    expect(before).toMatchObject({ ok: false, sha256: DISPUTE!.sha256, budgetS: 160, bank: { needed: 1, available: 0, short: true } });
     await h.addPurchase();
     const after = await bodyOf(await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: DISPUTE!.plan } })));
     expect(after).toMatchObject({ ok: true, bank: { needed: 1, available: 1, short: false } });
@@ -265,10 +265,10 @@ describe("POST /api/dry-run", () => {
   });
 
   // R-043: Tiny Bakery runs hosted. It draws nothing from the bank.
-  it("passes Tiny Bakery with its own digest, no bank draw and a 150 s budget", async () => {
+  it("passes Tiny Bakery with its own digest, no bank draw and a 330 s budget", async () => {
     const h = await harness();
     const b = await bodyOf(await h.dry(req("/api/dry-run", { body: { source: "recorded", planId: BAKERY!.plan } })));
-    expect(b).toMatchObject({ ok: true, sha256: BAKERY!.sha256, budgetS: 150, errors: [], bank: { needed: 0, short: false } });
+    expect(b).toMatchObject({ ok: true, sha256: BAKERY!.sha256, budgetS: 330, errors: [], bank: { needed: 0, short: false } });
     // R-045: it declares no webhook, and the dry run no longer says that stops deliveries.
     const lines = (b["lines"] as string[]).join(" | ");
     expect(lines).toContain("none declared by this plan; PayPal still delivers this account's events to every webhook registered on it");
