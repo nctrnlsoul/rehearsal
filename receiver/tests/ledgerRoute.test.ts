@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "../app/api/paypal/ledger/route";
+import { MAX_ROWS } from "../lib/ledger";
 
 /**
  * Route-level tests for the read endpoint's gates. The handler is a plain
@@ -100,5 +101,29 @@ describe("ledger read endpoint gates", () => {
   it("refuses a half-configured store rather than reading without it", async () => {
     process.env["SUPABASE_SERVICE_ROLE_KEY"] = "not-a-real-key";
     expect((await get()).status).toBe(503);
+  });
+
+  // The length rule reads the trimmed value, so the compare must too: a value
+  // pasted with a trailing newline otherwise locks out the right caller.
+  it("compares against the trimmed token, as the length rule reads it", async () => {
+    process.env["REHEARSAL_RECEIVER_TOKEN"] = `  ${TOKEN}\n`;
+    expect((await get()).status).not.toBe(401);
+    expect((await get("", `Bearer ${TOKEN}x`)).status).toBe(401);
+  });
+
+  // A count read from a window the cap cut is short, and must say so.
+  it("says when the read hit its row cap", async () => {
+    process.env["SUPABASE_URL"] = "https://testproject.supabase.co";
+    process.env["SUPABASE_SERVICE_ROLE_KEY"] = "test-only-key";
+    const reply = (n: number) => async () =>
+      Response.json(Array.from({ length: n }, (_, i) => ({ event_id: `WH-${i}`, received_at: "2026-10-25T18:00:00Z" })));
+    try {
+      vi.stubGlobal("fetch", reply(MAX_ROWS));
+      expect(await (await get()).json()).toMatchObject({ truncated: true });
+      vi.stubGlobal("fetch", reply(MAX_ROWS - 1));
+      expect(await (await get()).json()).toMatchObject({ truncated: false });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

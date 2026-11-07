@@ -134,15 +134,15 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
     new Headers({
       "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
       "paypal-auth-algo": "SHA256withRSA",
-      "paypal-transmission-id": "T-1",
+      "paypal-transmission-id": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
       "paypal-transmission-sig": "sig",
-      "paypal-transmission-time": "2026-10-23T00:00:00Z",
+      "paypal-transmission-time": new Date().toISOString(),
     });
 
   it("returns verified null, and never asks PayPal to verify, when only a bare-origin webhook exists", async () => {
     const origin = freshOrigin();
     const { fetchImpl, calls } = fakePaypal([{ id: "WH-BARE", url: origin }]);
-    const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    const out = await verifySignature(signedHeaders(), JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBeNull();
     expect(calls.some((c) => c.endsWith("/verify-webhook-signature"))).toBe(false);
   });
@@ -154,7 +154,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
       { id: "WH-A", url },
       { id: "WH-B", url },
     ]);
-    const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    const out = await verifySignature(signedHeaders(), JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBeNull();
     expect(out.detail).toContain("2 webhooks");
     expect(calls.some((c) => c.endsWith("/verify-webhook-signature"))).toBe(false);
@@ -166,7 +166,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
       { id: "WH-BARE", url: origin },
       { id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` },
     ]);
-    const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    const out = await verifySignature(signedHeaders(), JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBe(true);
     expect(verifyBodies).toEqual([expect.objectContaining({ webhook_id: "WH-STORE" })]);
   });
@@ -178,7 +178,7 @@ describe("verifySignature does not act when the webhook id is ambiguous", () => 
       const { fetchImpl } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }], {
         verificationStatus: status,
       });
-      const out = await verifySignature(signedHeaders(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+      const out = await verifySignature(signedHeaders(), JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
       expect(out.verified, String(status)).toBe(false);
     }
   });
@@ -189,15 +189,15 @@ describe("verifySignature refuses junk before any PayPal call", () => {
     new Headers({
       "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
       "paypal-auth-algo": "SHA256withRSA",
-      "paypal-transmission-id": "T-1",
+      "paypal-transmission-id": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
       "paypal-transmission-sig": "sig",
-      "paypal-transmission-time": "2026-10-23T00:00:00Z",
+      "paypal-transmission-time": new Date().toISOString(),
     });
 
   it("refuses an unsigned request with no network call at all", async () => {
     const origin = freshOrigin();
     const { fetchImpl, calls } = fakePaypal([{ id: "WH-STORE", url: `${origin}${STORE_WEBHOOK_PATH}` }]);
-    const out = await verifySignature(new Headers(), { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    const out = await verifySignature(new Headers(), JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBe(false);
     expect(out.detail).toContain("paypal-transmission-sig");
     expect(calls).toEqual([]);
@@ -208,7 +208,7 @@ describe("verifySignature refuses junk before any PayPal call", () => {
     const { fetchImpl, calls } = fakePaypal([]);
     const h = full();
     h.delete("paypal-transmission-time");
-    const out = await verifySignature(h, { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    const out = await verifySignature(h, JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out).toEqual({ verified: false, detail: "missing paypal-transmission-time" });
     expect(calls).toEqual([]);
   });
@@ -218,7 +218,7 @@ describe("verifySignature refuses junk before any PayPal call", () => {
     const { fetchImpl, calls } = fakePaypal([]);
     const h = full();
     h.set("paypal-cert-url", "https://evil.test/cert");
-    const out = await verifySignature(h, { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+    const out = await verifySignature(h, JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
     expect(out.verified).toBe(false);
     expect(calls).toEqual([]);
   });
@@ -229,20 +229,117 @@ describe("verifySignature refuses junk before any PayPal call", () => {
       const { fetchImpl, calls } = fakePaypal([]);
       const h = full();
       h.set("paypal-cert-url", bad);
-      const out = await verifySignature(h, { id: "E-1" }, { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
+      const out = await verifySignature(h, JSON.stringify({ id: "E-1" }), { ...CREDS, REHEARSAL_STORE_ORIGIN: origin }, fetchImpl);
       expect(out.verified, bad).toBe(false);
       expect(calls, bad).toEqual([]);
     }
   });
 });
 
+describe("verifySignature header checks and replies", () => {
+  const ID = "69cd13f0-d67a-11e5-baa3-778b53f4ae55";
+  const NOW = Date.parse("2026-11-07T12:00:00Z");
+  const headers = (over: Record<string, string> = {}) =>
+    new Headers({
+      "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
+      "paypal-auth-algo": "SHA256withRSA",
+      "paypal-transmission-id": ID,
+      "paypal-transmission-sig": "sig",
+      "paypal-transmission-time": new Date(NOW).toISOString(),
+      ...over,
+    });
+  const ENV = { ...CREDS, REHEARSAL_STORE_WEBHOOK_ID: "WH-PINNED" };
+  /** A PayPal that answers the token call, then the verify call with `reply`. */
+  const paypal = (reply: () => Response) => {
+    const bodies: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init: RequestInit = {}) => {
+      if (String(input).endsWith("/v1/oauth2/token")) {
+        return new Response(JSON.stringify({ access_token: "tok", expires_in: 32400 }), { status: 200 });
+      }
+      bodies.push(String(init.body));
+      return reply();
+    }) as typeof fetch;
+    return { fetchImpl, bodies };
+  };
+  const success = () => Response.json({ verification_status: "SUCCESS" });
+
+  it("refuses, with no PayPal call, any algorithm but SHA256withRSA, an id of the wrong shape, or a stale or future time", async () => {
+    const cases: Record<string, string>[] = [
+      { "paypal-auth-algo": "none" },
+      { "paypal-transmission-id": "T 1; drop" },
+      { "paypal-transmission-time": new Date(NOW - 11 * 60_000).toISOString() },
+      { "paypal-transmission-time": new Date(NOW + 11 * 60_000).toISOString() },
+      { "paypal-transmission-time": "yesterday" },
+    ];
+    for (const over of cases) {
+      const p = paypal(success);
+      const out = await verifySignature(headers(over), "{}", ENV, p.fetchImpl, NOW);
+      expect(out.verified, JSON.stringify(over)).toBe(false);
+      expect(p.bodies, JSON.stringify(over)).toEqual([]);
+    }
+    const p = paypal(success);
+    const fresh = headers({ "paypal-transmission-time": new Date(NOW - 9 * 60_000).toISOString() });
+    expect((await verifySignature(fresh, "{}", ENV, p.fetchImpl, NOW)).verified).toBe(true);
+  });
+
+  // PayPal signed the bytes it sent. A re-serialized copy can differ in
+  // escapes and number forms, and then a genuine delivery fails to verify.
+  it("forwards the delivery exactly as received, and the cert URL in its parsed form", async () => {
+    const raw = '{"id":"WH-1","summary":"caf\\u00e9 \\/ 1.50","amount":1.50}';
+    const p = paypal(success);
+    await verifySignature(headers({ "paypal-cert-url": "https://API.sandbox.paypal.com/v1/notifications/certs/C" }), raw, ENV, p.fetchImpl, NOW);
+    expect(p.bodies).toHaveLength(1);
+    expect(p.bodies[0]!.endsWith(`"webhook_event":${raw}}`)).toBe(true);
+    const sent = JSON.parse(p.bodies[0]!) as Record<string, unknown>;
+    expect(sent["cert_url"]).toBe("https://api.sandbox.paypal.com/v1/notifications/certs/C");
+    expect(sent["webhook_id"]).toBe("WH-PINNED");
+  });
+
+  // An outage is not a forgery: "could not check" makes PayPal retry later.
+  it("calls a PayPal outage or a lost reply could-not-check, never a failed signature", async () => {
+    for (const status of [500, 503, 429, 408, 401]) {
+      const p = paypal(() => new Response("{}", { status }));
+      const out = await verifySignature(headers(), "{}", ENV, p.fetchImpl, NOW);
+      expect(out.verified, String(status)).toBeNull();
+    }
+    const thrown = paypal(() => {
+      throw new TypeError("fetch failed");
+    });
+    expect((await verifySignature(headers(), "{}", ENV, thrown.fetchImpl, NOW)).verified).toBeNull();
+    const refused = paypal(() => new Response("{}", { status: 400 }));
+    expect((await verifySignature(headers(), "{}", ENV, refused.fetchImpl, NOW)).verified).toBe(false);
+  });
+});
+
 describe("checkCertUrl", () => {
-  it("accepts https on the four PayPal API hosts, whatever the path", () => {
+  it("accepts https on the four PayPal API hosts, under PayPal's cert path, and hands back the parsed form", () => {
     for (const host of PAYPAL_CERT_HOSTS) {
-      expect(checkCertUrl(`https://${host}/v1/notifications/certs/CERT-1`), host).toEqual({ ok: true });
+      expect(checkCertUrl(`https://${host}/v1/notifications/certs/CERT-1`), host).toEqual({
+        ok: true,
+        href: `https://${host}/v1/notifications/certs/CERT-1`,
+      });
     }
     // URL parsing lower-cases the host, so case alone is not a way round the list.
-    expect(checkCertUrl("https://API.Sandbox.PayPal.com/c")).toEqual({ ok: true });
+    expect(checkCertUrl("https://API.Sandbox.PayPal.com/v1/notifications/certs/C")).toEqual({
+      ok: true,
+      href: "https://api.sandbox.paypal.com/v1/notifications/certs/C",
+    });
+  });
+
+  // The URL is forwarded to PayPal, which fetches it. Only the parsed form
+  // leaves the app, and only a cert path on a pinned host.
+  it("refuses a backslash, any other path, a query, and a dot-segment way out of the cert path", () => {
+    const bs = String.fromCharCode(92);
+    for (const bad of [
+      `https://api.sandbox.paypal.com${bs}@evil.test/v1/notifications/certs/C`,
+      `https://api.sandbox.paypal.com/v1/notifications/certs/${bs}..${bs}..${bs}oauth2/token`,
+      "https://api.sandbox.paypal.com/v1/oauth2/token",
+      "https://api.sandbox.paypal.com/v1/notifications/certs/../../oauth2/token",
+      "https://api.sandbox.paypal.com/v1/notifications/certs/C?x=1",
+      "https://api.sandbox.paypal.com/c",
+    ]) {
+      expect(checkCertUrl(bad), bad).toMatchObject({ ok: false });
+    }
   });
 
   it("requires https", () => {

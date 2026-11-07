@@ -41,6 +41,11 @@ export type StoreSnapshot = {
   readonly eventCount: number;
   readonly unverifiedCount: number;
   readonly dedupeEnabled?: boolean;
+  /**
+   * True when the store's read of verified rows hit its row cap, so evidence
+   * may be missing from the window. Absent on a store that predates the flag.
+   */
+  readonly truncated?: boolean;
 };
 
 export type Verdict = "bug" | "ok" | "inconclusive";
@@ -638,6 +643,21 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
     },
   },
 ];
+
+/**
+ * A class's verdict on a store snapshot. A window the store had to cut may be
+ * missing the very rows the class counts, so no verdict is given on one.
+ */
+export function judge(cls: FailureClass, store: StoreSnapshot, run: RunState): Finding {
+  const finding = cls.check(store, run);
+  if (store.truncated !== true) return finding;
+  return {
+    ...finding,
+    verdict: "inconclusive",
+    actual: `the store's window held more verified rows than it returns, so rows this class counts may be missing (would have read: ${finding.verdict})`,
+    likelyFix: "re-run when the store is quieter, or read a shorter window",
+  };
+}
 
 export function classById(id: string): FailureClass | undefined {
   return FAILURE_CLASSES.find((c) => c.id === id);

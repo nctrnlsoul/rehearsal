@@ -56,8 +56,8 @@ const capture = { id: "WH-1", event_type: "PAYMENT.CAPTURE.COMPLETED", resource:
 const post = (body: string, headers: Record<string, string> = {}) =>
   POST(new Request(URL_BASE, { method: "POST", body, headers }));
 const signedLooking = (over: Record<string, string> = {}) => ({
-  "paypal-transmission-id": "T-1",
-  "paypal-transmission-time": "2026-10-23T00:00:00Z",
+  "paypal-transmission-id": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
+  "paypal-transmission-time": new Date().toISOString(),
   "paypal-transmission-sig": "sig",
   "paypal-auth-algo": "SHA256withRSA",
   "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/C",

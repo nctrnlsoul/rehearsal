@@ -41,8 +41,19 @@ export const PAYPAL_CERT_HOSTS: ReadonlySet<string> = new Set([
   "api-m.sandbox.paypal.com",
 ]);
 
-/** The cert URL's own checks, local and pure, so they run before any network call. */
-export function checkCertUrl(raw: string): { ok: true } | { ok: false; detail: string } {
+/** Where PayPal serves its signing certs. Anything else on the host is not a cert. */
+export const PAYPAL_CERT_PATH = "/v1/notifications/certs/";
+
+/**
+ * The cert URL's own checks, local and pure, so they run before any network
+ * call. On success it hands back the URL as parsed, and only that form is
+ * forwarded: a raw string that a different parser could read differently
+ * never leaves this app.
+ */
+export function checkCertUrl(raw: string): { ok: true; href: string } | { ok: false; detail: string } {
+  // WHATWG parsing turns "\" into "/", which other parsers do not, so a
+  // backslash is how one string names two different URLs.
+  if (raw.includes("\\")) return { ok: false, detail: "paypal-cert-url contains a backslash" };
   let url: URL;
   try {
     url = new URL(raw);
@@ -58,8 +69,52 @@ export function checkCertUrl(raw: string): { ok: true } | { ok: false; detail: s
     const host = url.hostname.length <= 253 ? url.hostname : "an overlong host";
     return { ok: false, detail: `paypal-cert-url host ${host} is not a PayPal API host` };
   }
+  if (!url.pathname.startsWith(PAYPAL_CERT_PATH) || url.search !== "" || url.hash !== "") {
+    return { ok: false, detail: "paypal-cert-url is not under PayPal's cert path" };
+  }
+  return { ok: true, href: url.href };
+}
+
+/** The only signing algorithm PayPal uses for webhooks. */
+export const PAYPAL_AUTH_ALGO = "SHA256withRSA";
+/** A delivery signed further than this from now is refused, so a captured one cannot be replayed later. */
+export const TRANSMISSION_WINDOW_MS = 10 * 60 * 1000;
+const TRANSMISSION_ID = /^[A-Za-z0-9-]{8,64}$/;
+
+/**
+ * Cheap header checks that need no network, so a post that cannot be a fresh
+ * PayPal delivery costs nothing: the algorithm PayPal signs with, an id of
+ * PayPal's shape, and a transmission time within ten minutes of now.
+ */
+export function checkTransmission(headers: Headers, nowMs: number): { ok: true } | { ok: false; detail: string } {
+  if (headers.get("paypal-auth-algo") !== PAYPAL_AUTH_ALGO) {
+    return { ok: false, detail: `paypal-auth-algo is not ${PAYPAL_AUTH_ALGO}` };
+  }
+  if (!TRANSMISSION_ID.test(headers.get("paypal-transmission-id") ?? "")) {
+    return { ok: false, detail: "paypal-transmission-id is not an id" };
+  }
+  const raw = headers.get("paypal-transmission-time") ?? "";
+  const at = raw.length <= 40 ? Date.parse(raw) : Number.NaN;
+  if (Number.isNaN(at)) return { ok: false, detail: "paypal-transmission-time is not a time" };
+  if (Math.abs(nowMs - at) > TRANSMISSION_WINDOW_MS) {
+    return { ok: false, detail: "paypal-transmission-time is more than 10 minutes from now" };
+  }
   return { ok: true };
 }
+
+/**
+ * The verify request body, written by hand around the raw delivery. PayPal
+ * signs the bytes it sent; re-serializing a parsed copy can change escapes and
+ * number forms, and then a genuine delivery fails to verify. rawEvent has
+ * already parsed as JSON, so the result is JSON.
+ */
+export function verifyRequestBody(fields: Record<string, string>, rawEvent: string): string {
+  const head = JSON.stringify(fields);
+  return `${head.slice(0, -1)},"webhook_event":${rawEvent}}`;
+}
+
+/** Answers that mean PayPal could not check, not that the signature is bad. */
+const couldNotCheck = (status: number): boolean => status === 401 || status === 408 || status === 429 || status >= 500;
 
 /** Every PayPal delivery carries these. Lacking any one, it is not a delivery. */
 const REQUIRED_HEADERS = [
@@ -177,9 +232,10 @@ export function storeOrigin(
 
 export async function verifySignature(
   headers: Headers,
-  event: unknown,
+  rawEvent: string,
   env: Record<string, string | undefined>,
   fetchImpl: typeof fetch = fetch,
+  nowMs: number = Date.now(),
 ): Promise<VerifyResult> {
   const clientId = env["PAYPAL_SELLER_CLIENT_ID"];
   const clientSecret = env["PAYPAL_SELLER_CLIENT_SECRET"];
@@ -194,11 +250,12 @@ export async function verifySignature(
     return { verified: false, detail: `missing ${missing.join(", ")}` };
   }
 
-  const certUrl = headers.get("paypal-cert-url") ?? "";
   // cert_url arrives from the request and PayPal will fetch it. We do not fetch
-  // it, but we refuse to forward anything but a PayPal API URL.
-  const cert = checkCertUrl(certUrl);
+  // it, but we refuse to forward anything but a PayPal cert URL.
+  const cert = checkCertUrl(headers.get("paypal-cert-url") ?? "");
   if (!cert.ok) return { verified: false, detail: cert.detail };
+  const transmission = checkTransmission(headers, nowMs);
+  if (!transmission.ok) return { verified: false, detail: transmission.detail };
 
   // A pinned webhook id needs no origin; otherwise the origin comes from env.
   const pinnedId = (env["REHEARSAL_STORE_WEBHOOK_ID"] ?? "").trim() !== "";
@@ -217,19 +274,23 @@ export async function verifySignature(
       {
         method: "POST",
         headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          auth_algo: headers.get("paypal-auth-algo"),
-          cert_url: certUrl,
-          transmission_id: headers.get("paypal-transmission-id"),
-          transmission_sig: headers.get("paypal-transmission-sig"),
-          transmission_time: headers.get("paypal-transmission-time"),
-          webhook_id: webhookId,
-          webhook_event: event,
-        }),
+        body: verifyRequestBody(
+          {
+            auth_algo: headers.get("paypal-auth-algo") ?? "",
+            cert_url: cert.href,
+            transmission_id: headers.get("paypal-transmission-id") ?? "",
+            transmission_sig: headers.get("paypal-transmission-sig") ?? "",
+            transmission_time: headers.get("paypal-transmission-time") ?? "",
+            webhook_id: webhookId,
+          },
+          rawEvent,
+        ),
         signal: AbortSignal.timeout(8000),
       },
     );
     if (res.status === 401) forgetToken();
+    // A PayPal outage is not a forgery: 503 makes PayPal retry, 401 would not.
+    if (couldNotCheck(res.status)) return { verified: null, detail: `could not check: verify http ${res.status}` };
     if (!res.ok) return { verified: false, detail: `verify http ${res.status}` };
     const out = (await res.json()) as { verification_status?: string };
     return {
@@ -237,6 +298,7 @@ export async function verifySignature(
       detail: out.verification_status ?? "no verification_status",
     };
   } catch (e) {
-    return { verified: false, detail: `verify threw: ${(e as Error).name}` };
+    // A timeout or a dropped connection says nothing about the signature.
+    return { verified: null, detail: `could not check: verify threw ${(e as Error).name}` };
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type RunState, initRunState, recordOutcome } from "../src/core/runState";
-import { FAILURE_CLASSES, type StoreSnapshot, classById } from "../src/ai/failureClasses";
+import { FAILURE_CLASSES, type StoreSnapshot, classById, judge } from "../src/ai/failureClasses";
 import { DUE_DATE_UNREAD, NOT_PAST_DUE, READS_OVERDUE } from "../src/executor/handlers/invoice";
 import { ITEM_STATUS_MISMATCH } from "../src/executor/handlers/payout";
 
@@ -514,5 +514,31 @@ describe("overdue-invoice", () => {
 
   it("is inconclusive when nothing was sent", () => {
     expect(check("overdue-invoice", store(), runWith([])).verdict).toBe("inconclusive");
+  });
+});
+
+// Junk or a busy window can push rows past the store's row cap. A cut window
+// may be missing the very rows a verdict counts, so it gives no verdict.
+describe("judge on a truncated store window", () => {
+  const resent: StepSpec[] = [
+    { id: "o1", kind: "card_order", status: "succeeded" },
+    { id: "r1", kind: "resend_webhook", status: "succeeded", ids: { resent_event_id: "WH-1" } },
+  ];
+  const okStore = (truncated?: boolean) =>
+    store({
+      deliveries: [{ eventId: "WH-1", fulfilled: 1, duplicatesIgnored: 1, other: 0 }],
+      ...(truncated === undefined ? {} : { truncated }),
+    });
+
+  it("passes a whole window's verdict through", () => {
+    const cls = classById("duplicate-webhook")!;
+    expect(judge(cls, okStore(), runWith(resent)).verdict).toBe("ok");
+    expect(judge(cls, okStore(false), runWith(resent)).verdict).toBe("ok");
+  });
+
+  it("turns any verdict on a cut window into inconclusive, and says why", () => {
+    const f = judge(classById("duplicate-webhook")!, okStore(true), runWith(resent));
+    expect(f.verdict).toBe("inconclusive");
+    expect(f.actual).toMatch(/more verified rows than it returns.*would have read: ok/);
   });
 });

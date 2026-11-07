@@ -64,6 +64,14 @@ describe("store state endpoint gates", () => {
     expect(await res.json()).toEqual({ error: "store not configured" });
   });
 
+  // The length rule reads the trimmed value, so the compare must too: a value
+  // pasted with a trailing newline otherwise locks out the right caller.
+  it("compares against the trimmed token, as the length rule reads it", async () => {
+    process.env["REHEARSAL_STORE_TOKEN"] = `  ${TOKEN}\n`;
+    expect((await get()).status).not.toBe(401);
+    expect((await get("", `Bearer ${TOKEN}x`)).status).toBe(401);
+  });
+
   it("accepts a token of exactly 32 characters", async () => {
     const exact = "e".repeat(32);
     process.env["REHEARSAL_STORE_TOKEN"] = exact;
@@ -111,6 +119,7 @@ describe("store state reply", () => {
       const res = await get();
       expect(res.status).toBe(200);
       const body = (await res.json()) as { deliveries: Array<Record<string, unknown>> };
+      expect(body).toMatchObject({ truncated: false, refusalsTruncated: false });
       expect(body.deliveries).toEqual([
         expect.objectContaining({ eventId: "WH-1", captureIds: ["CAP-1"], receivedAt: ["2026-10-25T18:00:07.125Z", "2026-10-25T18:00:40.250Z"] }),
       ]);

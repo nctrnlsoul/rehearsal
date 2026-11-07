@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { BOOTED_AT_MS, INSTANCE_ID, createLedger, readConfig } from "../../../../lib/ledger";
+import { BOOTED_AT_MS, INSTANCE_ID, MAX_ROWS, createLedger, readConfig } from "../../../../lib/ledger";
 
 /**
  * Read side of the arrival ledger. Requires a shared secret, because the rows
@@ -24,14 +24,15 @@ function secretsMatch(presented: string, expected: string): boolean {
 }
 
 export async function GET(req: Request): Promise<Response> {
-  const expected = process.env["REHEARSAL_RECEIVER_TOKEN"];
+  // Trimmed once, so the length rule and the compare read the same value.
+  const expected = (process.env["REHEARSAL_RECEIVER_TOKEN"] ?? "").trim();
   // Fail closed: an unset token locks the endpoint rather than opening it.
-  if (expected === undefined || expected.trim() === "") {
+  if (expected === "") {
     return Response.json({ error: "receiver not configured" }, { status: 503 });
   }
   // A short shared secret can be guessed, so it locks the endpoint too (audit
   // 2026-10-25 L5). The log names the length rule, never the value.
-  if (expected.trim().length < MIN_TOKEN_CHARS) {
+  if (expected.length < MIN_TOKEN_CHARS) {
     console.error(`REHEARSAL_RECEIVER_TOKEN is shorter than ${MIN_TOKEN_CHARS} characters`);
     return Response.json({ error: "receiver not configured" }, { status: 503 });
   }
@@ -86,6 +87,9 @@ export async function GET(req: Request): Promise<Response> {
       bootedAtMs: BOOTED_AT_MS,
       nowMs: Date.now(),
       rows,
+      // The read keeps the newest MAX_ROWS rows; at the cap, older arrivals in
+      // the window may be missing, and a count read from it must say so.
+      truncated: rows.length >= MAX_ROWS,
     },
     { status: 200, headers: { "cache-control": "no-store" } },
   );
