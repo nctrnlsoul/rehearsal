@@ -30,7 +30,7 @@ export default function RunsPage() {
                   <span className="rc-name">{r.scenarioName}</span>
                   <span className="rc-line">{r.verdictLine.replace(/^(BUG|OK): /, "")}</span>
                   <span className="rc-meta">
-                    {r.calls.length} steps · {r.deliveries.length} events from PayPal · {dur(replayEndS(r))} · <span className="mono">{r.runId}</span>
+                    {r.calls.length} steps · {r.deliveries.length} deliveries from PayPal · {dur(replayEndS(r))} · <span className="mono">{r.runId}</span>
                   </span>
                   <span className="rc-go">Watch the replay <Icon name="arrow" /></span>
                 </Link>

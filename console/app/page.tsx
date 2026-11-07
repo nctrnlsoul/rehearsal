@@ -52,7 +52,7 @@ export default function HomePage() {
 
           <div className="section-head">
             <h2 id="facts-h">What it can and cannot do</h2>
-            <p>Every figure here is read from the code, not typed in</p>
+            <p>Each limit is read from the code; test counts are measured</p>
           </div>
           <div className="trust" id="facts">
             <section className="card trust-block" aria-labelledby="reach-h">

@@ -74,9 +74,9 @@ export type PlanStepFact = {
 };
 export type PlanFacts = { readonly currency: string; readonly steps: readonly PlanStepFact[] };
 
-const MAX_PLAN_STEPS = 30;
-/** Well under the 4 KB pg_column_size check, which also counts jsonb's own overhead. */
-const MAX_PLAN_BYTES = 3000;
+const MAX_PLAN_STEPS = 12;
+/** Half the 4 KB pg_column_size check, since jsonb adds per-key and per-value overhead to the text size. */
+const MAX_PLAN_BYTES = 2000;
 const AMOUNT_SHAPE = /^\d{1,9}(\.\d{1,2})?$/;
 
 /** The plan's steps, bounded like every other field, for the note the first save records. */
@@ -216,6 +216,16 @@ export function deliveryEvents(snapshot: StoreSnapshot, seen: SeenDeliveries, se
       kind: "note",
       data: { order: { capture_id: captureId, fulfilled, refunds, disputes, duplicates_ignored: duplicates }, seen_at: seenAtIso },
     });
+  }
+  // Copies the store refused carry no event id, so they never show as a
+  // delivery above. Their count in this run's window is said whenever it
+  // grows, so the page can never call every signature verified past one.
+  const raw = snapshot as unknown as Record<string, unknown>;
+  const loose = raw["unattributedRefusals"] as Record<string, unknown> | undefined;
+  const refused = Math.max(count(loose?.["count"]), count(raw["unverifiedCount"]));
+  if (refused > (seen.get("refused") ?? 0)) {
+    seen.set("refused", refused);
+    events.push({ kind: "note", data: { refused_in_window: refused, seen_at: seenAtIso } });
   }
   return events;
 }

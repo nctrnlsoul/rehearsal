@@ -153,7 +153,7 @@ function ProofPanel({ story }: { story: RunStory }) {
             <li key={p.key} className={p.arrived ? "in" : "out"}>
               <span className="node" aria-hidden="true">{p.arrived ? <Icon name="check" /> : <Icon name="clock" />}</span>
               <span className="node-label">{p.label}</span>
-              <span className="node-meta">{p.arrived ? (p.latencyS === null ? "arrived" : dur(p.latencyS)) : story.settled ? "not seen" : "waiting"}</span>
+              <span className="node-meta">{p.arrived ? (p.early ? "during the step" : p.latencyS === null ? "arrived" : `${p.exact ? "" : "at most "}${dur(p.latencyS)}`) : story.settled ? "not seen" : "waiting"}</span>
             </li>
           ))}
         </ol>
@@ -186,7 +186,7 @@ function Step({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
             <span className="step-n">Step {c.n}</span>
             <span className="compact-title">{c.title}{c.amount !== null && <>, {c.amount}</>}</span>
             <span className="compact-state">{c.sent === "queued" ? <Mark kind="stop">Queued</Mark> : c.sent === "not-run" ? <Mark kind="stop">Not run</Mark> : null}</span>
-            <span className="compact-note">{c.sent === "not-run" ? "The run stopped before this step, so it was never sent." : "No event expected for this step."}</span>
+            <span className="compact-note">{c.sent === "not-run" ? "The run stopped before this step, so it was never sent." : "No PayPal event is tied to this kind of step."}</span>
           </div>
         ) : (
           <div className="row">
@@ -232,6 +232,15 @@ function SentMark({ card: c }: { card: StepCard }) {
 function Middle({ card: c }: { card: StepCard }) {
   const last = c.replies.filter((r) => r.latencyS !== null);
   const slowest = last.length === 0 ? null : last.reduce((a, b) => ((b.latencyS ?? 0) > (a.latencyS ?? 0) ? b : a));
+  if (c.reply === "delivered" && slowest === null) {
+    return (
+      <div className="mid done">
+        <span className="pill"><Icon name="clock" />Arrived during the step</span>
+        <span className="conn" aria-hidden="true" />
+        <span className="mid-note">while it was still checking with PayPal</span>
+      </div>
+    );
+  }
   if (c.reply === "delivered" && slowest !== null) {
     const ranks = c.replies.flatMap((r) => (r.rank === null ? [] : [r.rank]));
     return (
@@ -282,7 +291,8 @@ function Back({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
     return (
       <>
         <p className="back-label">PayPal reply</p>
-        <p className="back-title">{c.sent === "not-sent" || c.sent === "refused" ? "Nothing to wait for" : "Unknown"}</p>
+        <p className="back-title">{c.sent === "not-sent" ? "Nothing to wait for" : c.sent === "refused" ? "No event tied to this step" : "Unknown"}</p>
+        {c.sent === "refused" && <p className="reply-meta">If PayPal sends one anyway, it is listed under Other events PayPal sent.</p>}
       </>
     );
   }
@@ -359,7 +369,7 @@ function Details({ card: c }: { card: StepCard }) {
           <dt>Received</dt><dd className="mono">{r.arrived ? utc(r.receivedAt) : "not yet"}</dd>
           <dt>Signature check</dt><dd>{r.arrived ? (r.verified === r.copies ? `passed: PayPal's verify call said SUCCESS (${r.copies} of ${r.copies} ${r.copies === 1 ? "copy" : "copies"})` : `${r.verified} of ${r.copies} copies passed`) : "not yet"}</dd>
           <dt>Store action</dt><dd className="mono">{r.store ?? "not yet"}</dd>
-          <dt>Latency</dt><dd>{r.latencyS === null ? "not yet" : r.exact ? `${dur(r.latencyS)}, from PayPal accepting the call to the store recording the event` : `at most ${dur(r.latencyS)}: seen when the console read the store`}</dd>
+          <dt>Latency</dt><dd>{r.early ? "the store recorded it before the step finished, while the step was still checking with PayPal" : r.latencyS === null ? "not yet" : r.exact ? `${dur(r.latencyS)}, from the step finishing to the store recording the event` : `at most ${dur(r.latencyS)}: seen when the console read the store`}</dd>
         </dl>
       ))}
       {c.reply === "none-expected" && <p className="note">This console ties no PayPal event to a {d.kind} step. Any event PayPal sends for it is listed under Other events PayPal sent.</p>}

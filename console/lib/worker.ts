@@ -261,13 +261,21 @@ async function runTracked(
 }
 
 /**
- * True only for a halted run whose every step is still pending or failed. A
- * succeeded step was accepted by PayPal and an unknown one may have been, so
- * either keeps the wait; a failed step is a refusal, which writes nothing.
+ * Failed details that prove nothing reached PayPal: the engine's "not sent"
+ * (a refused token before any write, or the time guard) and the empty bank,
+ * which fails before any call. Any other failure may follow an accepted
+ * write: a payout batch created then DENIED, a dispute created then read in
+ * the wrong state, an order created then not captured.
+ */
+const WRITE_FREE_FAILURE = /^(not sent:|the hosted purchase bank has no purchase ready)/;
+
+/**
+ * True only for a halted run whose every step is still pending, or failed with
+ * a detail that proves nothing was sent. Anything else keeps the wait.
  */
 export function haltedBeforeAnyWrite(state: RunState | null): boolean {
   if (state === null) return true;
-  return state.halted && Object.values(state.steps).every((s) => s.status === "pending" || s.status === "failed");
+  return state.halted && Object.values(state.steps).every((s) => s.status === "pending" || (s.status === "failed" && WRITE_FREE_FAILURE.test(s.detail)));
 }
 
 export async function runScenarioWorker(args: { runId: string; scenario: Scenario; digest: string }, deps: WorkerDeps): Promise<void> {

@@ -308,6 +308,15 @@ describe("runScenarioWorker", () => {
     expect((await h.events()).map((e) => e.kind)).toContain("deliveries_wait_started");
   });
 
+  // Verifier finding 2: a payout batch created then DENIED fails, but PayPal accepted a write and will send an event.
+  it("keeps the delivery wait after a failure that may follow an accepted write", async () => {
+    const denied: StepHandler = async () => ({ kind: "failed", detail: "status DENIED" });
+    const h = await harness({ readStore: async () => snapshot([]), handlers: { card_order: denied } });
+    await work(h);
+    expect((await h.run()).status).toBe("halted");
+    expect((await h.events()).map((e) => e.kind)).toContain("deliveries_wait_started");
+  });
+
   it("keeps the delivery wait after a halt on an unknown step: it may have written", async () => {
     const unsure: StepHandler = async () => ({ kind: "unknown", detail: "http 504: the write may or may not have executed" });
     const h = await harness({ readStore: async () => snapshot([]), handlers: { card_order: unsure } });

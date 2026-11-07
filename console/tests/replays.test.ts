@@ -138,7 +138,7 @@ describe("a replay, drawn by the live run's own view", () => {
 
   it("walks the states a live run shows: sending, accepted and waiting, delivered", () => {
     const sending = runStory(replayRead(before, 2));
-    expect(sending.headline).toBe("Running step 1 of 2: Payment captured.");
+    expect(sending.headline).toBe("Running step 1 of 2: Capture a card payment.");
     expect(sending.cards[0]!.sent).toBe("sending");
     expect(sending.cards[0]!.current).toBe(true);
 

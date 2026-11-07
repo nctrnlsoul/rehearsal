@@ -356,7 +356,7 @@ describe("the live run, past the gate", () => {
       await expect(first.locator(".sent-title").innerText()).resolves.toBe("Payment captured");
       await expect(first.locator(".back").innerText()).resolves.toContain("PayPal confirmed: payment completed");
       await expect(first.locator(".pill").innerText()).resolves.toBe("Replied in 12s");
-      await expect(page.locator(".step.compact").innerText()).resolves.toContain("No event expected for this step.");
+      await expect(page.locator(".step.compact").innerText()).resolves.toContain("No PayPal event is tied to this kind of step.");
       await expect(page.locator(".other").innerText()).resolves.toContain("INVOICING.INVOICE.UPDATED");
       expect(await page.locator(".nodes li.in").count()).toBe(4);
       expect(await noSideScroll(page)).toBe(true);
@@ -384,7 +384,7 @@ describe("the live run, past the gate", () => {
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live/20261025180000-e2e002", 200);
     await page.waitForSelector(".conn.dashed");
-    await expect(page.locator("#run-h").innerText()).resolves.toBe("Running step 2 of 2: Asked PayPal to resend an event.");
+    await expect(page.locator("#run-h").innerText()).resolves.toBe("Running step 2 of 2: Ask PayPal to resend an event.");
     await expect(page.locator(".step").first().locator(".back").innerText()).resolves.toContain("Waiting for PayPal's webhook");
     expect(await page.locator(".step.current").count()).toBe(1);
     await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261025180000-e2e002'");

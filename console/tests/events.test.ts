@@ -163,3 +163,13 @@ describe("planFacts", () => {
     expect(first.filter((e) => e.kind === "note" && "plan" in (e.data ?? {}))).toHaveLength(1);
   });
 });
+
+describe("refused copies (verifier finding 3)", () => {
+  it("says how many copies the store refused in the window, once per change", () => {
+    const seen: SeenDeliveries = new Map();
+    const snap = (n: number) => ({ orders: [], deliveries: [], eventCount: 0, unverifiedCount: 0, unattributedRefusals: { count: n, reasons: [] } }) as unknown as StoreSnapshot;
+    expect(deliveryEvents(snap(0), seen, SEEN_AT)).toEqual([]);
+    expect(deliveryEvents(snap(2), seen, SEEN_AT)).toEqual([{ kind: "note", data: { refused_in_window: 2, seen_at: SEEN_AT } }]);
+    expect(deliveryEvents(snap(2), seen, SEEN_AT)).toEqual([]);
+  });
+});

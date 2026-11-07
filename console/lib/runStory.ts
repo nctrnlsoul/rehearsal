@@ -21,6 +21,8 @@ export type Reply = {
   readonly latencyS: number | null;
   /** True when the latency runs to the store's own receive time. */
   readonly exact: boolean;
+  /** The store recorded it before the step finished, while the step was still checking with PayPal. */
+  readonly early: boolean;
   /** 1 for the first event this run saw arrive, and so on; null while waiting. */
   readonly rank: number | null;
   readonly receivedAt: string | null;
@@ -58,7 +60,7 @@ export type StepCard = {
   };
 };
 
-export type ProofNode = { readonly key: string; readonly label: string; readonly arrived: boolean; readonly latencyS: number | null; readonly verified: boolean };
+export type ProofNode = { readonly key: string; readonly label: string; readonly arrived: boolean; readonly latencyS: number | null; readonly exact: boolean; readonly early: boolean; readonly verified: boolean };
 
 export type OtherEvent = { readonly eventId: string; readonly eventType: string | null; readonly plain: string; readonly copies: number; readonly store: string; readonly atS: number | null };
 
@@ -99,6 +101,19 @@ export const STEP_TITLES: Readonly<Record<string, string>> = {
   invoice_cancel: "Invoice canceled",
   open_dispute: "Dispute opened",
   resend_webhook: "Asked PayPal to resend an event",
+};
+
+/** What a step asks for, before PayPal has accepted it. */
+export const STEP_ASKS: Readonly<Record<string, string>> = {
+  card_order: "Capture a card payment",
+  refund: "Send a refund",
+  payout_batch: "Send a payout",
+  invoice_create: "Create an invoice",
+  invoice_send: "Send the invoice",
+  invoice_record_payment: "Record the invoice payment",
+  invoice_cancel: "Cancel the invoice",
+  open_dispute: "Open a dispute",
+  resend_webhook: "Ask PayPal to resend an event",
 };
 
 /** The first request each kind makes, as the handlers send it. */
@@ -191,12 +206,13 @@ export function humanReason(raw: string | null): string | null {
   if (token !== null) {
     const role = /the (seller|buyer) app's/.exec(d)?.[1] ?? null;
     const app = role === null ? "the app's" : `the ${role} app's`;
+    const proven = notSent || /could not read the webhook list/.test(d);
+    if (!proven) return `PayPal refused ${app} login partway through the step (http ${token[1]}${token[2] === undefined ? "" : `, ${token[2]}`}). It may already have written to PayPal; nothing here will retry it.`;
     const login =
       token[1] === "401" && token[2] === "invalid_client"
         ? `PayPal refused ${app} login (its client id and secret do not match a sandbox app).`
         : `PayPal's login service answered http ${token[1]} for ${app.replace(/'s$/, "")}.`;
-    if (/could not read the webhook list/.test(d)) return `${login} Nothing was sent.`;
-    return notSent ? `${login} Nothing was sent.` : login;
+    return `${login} Nothing was sent.`;
   }
   const left = /^not sent: (\d+) s were left in this server's time, and this step can take (\d+) s/.exec(d);
   if (left !== null) return `Not sent: this server had ${left[1]} s left, and this step can take ${left[2]} s. Nothing was sent.`;
@@ -213,6 +229,13 @@ export function humanReason(raw: string | null): string | null {
   if (/the server running this stopped/.test(d)) return "The server running this stopped. A step it had started may have written to PayPal; nothing here will retry it.";
   d = d.charAt(0).toUpperCase() + d.slice(1);
   return /[.!?]$/.test(d) ? d : `${d}.`;
+}
+
+/** An outcome nobody can prove gets the warning, whatever its detail says. */
+function withWarning(sent: SentState, sentence: string | null): string | null {
+  if (sent !== "unknown" && sent !== "never-confirmed") return sentence;
+  if (sentence !== null && /may (already )?have written/.test(sentence)) return sentence;
+  return `${sentence === null ? "" : `${sentence} `}It may have written to PayPal; nothing here will retry it.`;
 }
 
 /** PayPal's own error code, for Details, when the detail carries one. */
@@ -275,11 +298,10 @@ function planOf(read: LiveRead, view: LiveView): Plan {
   return { currency: "USD", steps: view.calls.map((c) => ({ id: c.step, kind: c.kind, amount: null, from: c.from, mode: null, basisPoints: null })) };
 }
 
-function titleOf(step: PlanStep): string {
-  if (step.kind === "refund") {
-    if (step.mode === "partial" && step.basisPoints !== null) return `Partial refund sent (${step.basisPoints / 100}%)`;
-    return step.mode === "full" ? "Full refund sent" : "Refund sent";
-  }
+function titleOf(step: PlanStep, accepted: boolean): string {
+  const part = step.mode === "partial" && step.basisPoints !== null ? ` (${step.basisPoints / 100}%)` : "";
+  if (!accepted) return step.kind === "refund" ? `Send a ${step.mode === "partial" ? "partial" : step.mode === "full" ? "full" : ""} refund${part}`.replace("a  refund", "a refund") : (STEP_ASKS[step.kind] ?? "Run a step");
+  if (step.kind === "refund") return step.mode === "partial" ? `Partial refund sent${part}` : step.mode === "full" ? "Full refund sent" : "Refund sent";
   return STEP_TITLES[step.kind] ?? "Step sent";
 }
 
@@ -324,8 +346,9 @@ export function runStory(read: LiveRead): RunStory {
           eventType: type ?? "event",
           plain: redelivery ? `PayPal delivered it again; ${/^fulfilled/.test(store ?? "") ? "the store fulfilled the order a second time" : (STORE_PLAIN[store ?? ""] ?? "the store recorded it")}` : eventPlain(type),
           arrived: p.arrivedT !== null,
-          latencyS: p.arrivedT === null ? null : Math.max(0, p.arrivedT - p.callT),
+          latencyS: p.arrivedT === null || p.arrivedT < p.callT ? null : p.arrivedT - p.callT,
           exact: p.exact,
+          early: p.arrivedT !== null && p.arrivedT < p.callT,
           rank: rankOf.get(p.deliveryKey) ?? null,
           receivedAt: d?.at ?? null,
           verified: l === undefined ? copies : Math.max(0, l.deliveries - l.refused),
@@ -343,7 +366,7 @@ export function runStory(read: LiveRead): RunStory {
     let replies = call === undefined ? [] : repliesOf(call.key);
     if (call?.status === "succeeded" && replies.length === 0 && EXPECTED_TYPE[kind] !== undefined) {
       const type = EXPECTED_TYPE[kind]!;
-      replies = [{ key: `d:expected:${step.id}`, eventId: null, eventType: type, plain: eventPlain(type), arrived: false, latencyS: null, exact: false, rank: null, receivedAt: null, verified: 0, copies: 0, store: null, redelivery: false }];
+      replies = [{ key: `d:expected:${step.id}`, eventId: null, eventType: type, plain: eventPlain(type), arrived: false, latencyS: null, exact: false, early: false, rank: null, receivedAt: null, verified: 0, copies: 0, store: null, redelivery: false }];
     }
     // A step still pending once the run has ended or stopped will never run.
     let sent: SentState = view.settled || halted ? "not-run" : "queued";
@@ -380,7 +403,7 @@ export function runStory(read: LiveRead): RunStory {
       id: step.id,
       n: i + 1,
       kind,
-      title: titleOf({ ...step, kind }),
+      title: titleOf({ ...step, kind }, sent === "accepted"),
       amount,
       sent,
       sentWord: SENT_WORDS[sent],
@@ -388,7 +411,7 @@ export function runStory(read: LiveRead): RunStory {
       replies,
       waitingS,
       current: false,
-      problem: sent === "refused" || sent === "not-sent" || sent === "unknown" || sent === "never-confirmed" ? humanReason(detail) ?? humanReason(read.run.halt_reason) : null,
+      problem: sent === "refused" || sent === "not-sent" || sent === "unknown" || sent === "never-confirmed" ? withWarning(sent, humanReason(detail) ?? humanReason(read.run.halt_reason)) : null,
       details: {
         kind,
         request: STEP_REQUESTS[kind] ?? null,
@@ -420,8 +443,11 @@ export function runStory(read: LiveRead): RunStory {
     if (c.sent === "accepted") accepted += centsOf(a);
   }
   const allReplies = finalCards.flatMap((c) => c.replies);
-  const latencies = allReplies.flatMap((r) => (r.latencyS === null ? [] : [r.latencyS]));
-  const copies = view.ledger.reduce((a, l) => a + l.deliveries, 0);
+  const timed = allReplies.filter((r) => r.latencyS !== null);
+  const slowestReply = timed.length === 0 ? null : timed.reduce((a, b) => (b.latencyS! > a.latencyS! ? b : a));
+  // The store keeps no event id on a copy it refused, so those come from its own count for this run's window.
+  const refusedInWindow = read.events.reduce((m, e) => (e.kind === "note" && typeof e.data["refused_in_window"] === "number" ? Math.max(m, e.data["refused_in_window"] as number) : m), 0);
+  const copies = view.ledger.reduce((a, l) => a + l.deliveries, 0) + refusedInWindow;
   const passed = view.ledger.reduce((a, l) => a + Math.max(0, l.deliveries - l.refused), 0);
   const expected = allReplies.length;
   const confirmed = allReplies.filter((r) => r.arrived).length;
@@ -430,7 +456,11 @@ export function runStory(read: LiveRead): RunStory {
   // The hero, which must match the run's state at every moment.
   const haltedAt = finalCards.find((c) => c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed");
   // A dead server's own reason says more than the step it left unconfirmed.
-  const reason = (dead ? humanReason(read.run.halt_reason) : null) ?? humanReason(haltedAt?.details.detail ?? null) ?? humanReason(read.run.halt_reason) ?? humanReason(str(haltEvent?.data["reason"]));
+  const reason =
+    (dead ? humanReason(read.run.halt_reason) : null) ??
+    (haltedAt === undefined ? null : haltedAt.problem) ??
+    humanReason(read.run.halt_reason) ??
+    humanReason(str(haltEvent?.data["reason"]));
   const evidence =
     expected === 0
       ? copies === 0
@@ -484,13 +514,13 @@ export function runStory(read: LiveRead): RunStory {
   const proof: ProofNode[] = [
     ...arrivedPairs.map((p): ProofNode => {
       const r = allReplies.find((x) => x.key === p.deliveryKey)!;
-      return { key: p.deliveryKey, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: true, latencyS: r.latencyS, verified: r.verified > 0 };
+      return { key: p.deliveryKey, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: true, latencyS: r.latencyS, exact: r.exact, early: r.early, verified: r.verified > 0 };
     }),
-    ...allReplies.filter((r) => !r.arrived).map((r): ProofNode => ({ key: r.key, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: false, latencyS: null, verified: false })),
+    ...allReplies.filter((r) => !r.arrived).map((r): ProofNode => ({ key: r.key, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: false, latencyS: null, exact: false, early: false, verified: false })),
   ];
   const proofLine =
     expected === 0
-      ? done === 0 && (view.settled || halted)
+      ? finalCards.every((c) => c.sent === "not-sent" || c.sent === "not-run" || c.sent === "queued") && (view.settled || halted)
         ? "Nothing was sent, so there was nothing for PayPal to confirm."
         : view.settled
           ? "No event was expected from the steps that ran."
@@ -523,8 +553,11 @@ export function runStory(read: LiveRead): RunStory {
     figures: {
       steps: `${done} of ${total}`,
       amount: planned === 0n ? "none" : money(plan.currency, fromCents(accepted)),
-      amountNote: planned === 0n || accepted === planned ? null : `of ${money(plan.currency, fromCents(planned))} planned`,
-      slowest: latencies.length === 0 ? (waiting > 0 ? "waiting" : "none") : dur(Math.max(...latencies)),
+      amountNote:
+        planned === 0n || accepted === planned
+          ? null
+          : `of ${money(plan.currency, fromCents(planned))} planned${finalCards.some((c) => c.sent === "unknown" || c.sent === "never-confirmed") ? "; one step's outcome is unknown" : ""}`,
+      slowest: slowestReply === null ? (waiting > 0 ? "waiting" : "none") : `${slowestReply.exact ? "" : "at most "}${dur(slowestReply.latencyS!)}`,
       signatures: copies === 0 ? (view.settled ? "none" : "none yet") : `${passed} of ${copies} passed`,
       signaturesOk: copies === 0 ? null : passed === copies,
     },

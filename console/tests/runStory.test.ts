@@ -35,11 +35,11 @@ describe("the live state sequence, on a Tiny Bakery run", () => {
   it("names every step and its amount before any of them runs", () => {
     const s = story(tinyBakery(0.5), 0.5);
     expect(s.cards.map((c) => `${c.title}${c.amount === null ? "" : `, ${c.amount}`}`)).toEqual([
-      "Payment captured, USD 45",
-      "Payment captured, USD 60",
-      "Invoice created, USD 120",
-      "Invoice sent",
-      "Invoice payment recorded, USD 120",
+      "Capture a card payment, USD 45",
+      "Capture a card payment, USD 60",
+      "Create an invoice, USD 120",
+      "Send the invoice",
+      "Record the invoice payment, USD 120",
     ]);
     expect(s.cards.every((c) => c.sent === "queued")).toBe(true);
     expect(s.figures.amountNote).toBe("of USD 345 planned");
@@ -47,7 +47,9 @@ describe("the live state sequence, on a Tiny Bakery run", () => {
 
   it("goes queued, sending, accepted and waiting, delivered, with the current step highlighted", () => {
     const sending = story(tinyBakery(5.5), 5.5);
-    expect(sending.headline).toBe("Running step 3 of 5: Invoice created.");
+    expect(sending.headline).toBe("Running step 3 of 5: Create an invoice.");
+    // Past tense only once PayPal has accepted it.
+    expect(sending.cards[0]!.title).toBe("Payment captured");
     expect(sending.progress).toEqual({ at: 3, of: 5 });
     expect(sending.cards[2]!).toMatchObject({ sent: "sending", sentWord: "Sending to PayPal", current: true });
     expect(sending.cards[0]!).toMatchObject({ sent: "accepted", reply: "waiting" });
@@ -96,7 +98,7 @@ describe("a halted run, as run 20261107203953-bd8593 halted", () => {
 
   it("never claims nothing was sent for the old record, which could not prove it", () => {
     expect(humanReason("step card-order-1 ended in an unknown state: handler threw: Error: sandbox token request failed with http 401 (invalid_client)")).toBe(
-      "PayPal refused the app's login (its client id and secret do not match a sandbox app).",
+      "PayPal refused the app's login partway through the step (http 401, invalid_client). It may already have written to PayPal; nothing here will retry it.",
     );
   });
 
@@ -142,7 +144,60 @@ describe("a recorded run cut into a live fixture", () => {
   it("reads the same as its replay at that moment", () => {
     const run = RUNS[1]!;
     const s = story(recordedAt(run, 10), 10);
-    expect(s.headline).toBe("Running step 2 of 2: Asked PayPal to resend an event.");
+    expect(s.headline).toBe("Running step 2 of 2: Ask PayPal to resend an event.");
     expect(s.cards[0]!).toMatchObject({ sent: "accepted", reply: "waiting", amount: "USD 25" });
+  });
+});
+
+// The independent verifier's findings on 9f6e65e, each pinned.
+describe("claims the data cannot back are never made", () => {
+  const unknownFirst = (): Fixture => {
+    const f = tokenRefused();
+    return {
+      ...f,
+      reason: "step card-order-1 ended in an unknown state: http 504: the write may or may not have executed",
+      events: f.events.map((e) =>
+        e.kind === "step_finished" ? { ...e, data: { ...e.data, status: "unknown", detail: "http 504: the write may or may not have executed" } } : e.kind === "run_halted" ? { ...e, data: { reason: "step card-order-1 ended in an unknown state: http 504" } } : e,
+      ),
+    };
+  };
+
+  it("never says nothing was sent when a step's outcome is unknown", () => {
+    const s = story(unknownFirst(), 3);
+    expect(s.proofLine).not.toMatch(/Nothing was sent/);
+    expect(s.lead).toMatch(/may have; nothing here will retry it|may have written to PayPal/);
+    expect(s.figures.amountNote).toBe("of USD 345 planned; one step's outcome is unknown");
+  });
+
+  it("counts a copy the store refused, so it never says every signature verified past one", () => {
+    const f = tinyBakery(40);
+    f.events.push({ s: 30, kind: "note", data: { refused_in_window: 1 } });
+    const s = story(f, 41);
+    expect(s.figures).toMatchObject({ signatures: "5 of 6 passed", signaturesOk: false });
+    expect(s.lead).not.toMatch(/every signature/);
+  });
+
+  it("says an event that landed while the step was still checking arrived during it, never 'in 0s'", () => {
+    const f = tinyBakery(40);
+    // The step finished at 2.4 s; this copy is recorded at 1.8 s.
+    const ev = f.events.find((e) => e.kind === "delivery" && e.data?.["event_id"] === "WH-E2E-CAPTURE-1")!;
+    ev.data = { ...ev.data, received_at: [{ rel: 1.8 }] };
+    const r = story(f, 41).cards[0]!.replies[0]!;
+    expect(r.early).toBe(true);
+    expect(r.latencyS).toBeNull();
+  });
+
+  it("marks an upper-bound latency as one wherever it is printed", () => {
+    const f = tinyBakery(40);
+    for (const e of f.events) if (e.kind === "delivery") e.data = { ...e.data, received_at: [] };
+    const s = story(f, 41);
+    expect(s.figures.slowest).toMatch(/^at most /);
+    expect(s.proof.every((p) => !p.exact)).toBe(true);
+  });
+
+  it("names a step by what it asks for until PayPal accepts it", () => {
+    const s = story(tokenRefused(), 3);
+    expect(s.cards[0]!.title).toBe("Capture a card payment");
+    expect(s.cards[2]!.title).toBe("Create an invoice");
   });
 });
