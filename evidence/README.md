@@ -22,3 +22,9 @@ The fix between the first two is commit `d6b8ff6`
 These reports predate v0.6.1. Under v0.6.1's rules the two OK verdicts still
 hold: each rests on PayPal accepting every step under test and the store's
 own rows.
+
+One file here is not a CLI report:
+
+| File | What it shows |
+|---|---|
+| `hosted-run-20261107230012-f3bb0a.json` | A hosted live run on the web console (v0.7.0) of the recorded Tiny Bakery plan: two card orders and an invoice created, sent and marked paid, all complete, and five webhook events delivered to the sample store, none refused. Exported by the author from the console's database (`console_runs` and `console_run_events`), rows unchanged; session and IP hashes are not exported. The console's hosted replay reads a byte-identical copy in `console/fixtures/`. |

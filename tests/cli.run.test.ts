@@ -65,9 +65,10 @@ describe("rehearsal run and dry-run <file>", () => {
   }, 60_000);
 
   it("lets a scenario inside the caps through to execution", () => {
-    // It then stops on the missing credentials, which proves the gate passed it.
+    // It then stops on the missing credentials, which are only read after the
+    // gate, so naming one proves the gate passed it.
     const r = runCli(card("12.00"));
-    expect(r.stdout).toMatch(/^run \d{14}-[0-9a-f]{6}: cli caps check$/m);
+    expect(r.status).toBe(2);
     expect(r.stderr).toContain("PAYPAL_SELLER_CLIENT_ID");
     expect(r.stderr).not.toContain("exceeds the spend caps");
   }, 60_000);
@@ -92,6 +93,66 @@ describe("rehearsal run and dry-run <file>", () => {
     expect(r.stderr).toContain("REHEARSAL_MAX_STEP_AMOUNT");
     expect(`${r.stdout}${r.stderr}`).not.toContain("VALUE-MARKER");
   }, 60_000);
+});
+
+describe("rehearsal without its keys", () => {
+  const spawnCli = (argv: string[], env: Record<string, string> = {}) => {
+    const base: Record<string, string> = {};
+    for (const name of ["PATH", "Path", "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "HOME", "USERPROFILE"]) {
+      const v = process.env[name];
+      if (v !== undefined) base[name] = v;
+    }
+    const r = spawnSync(process.execPath, [TSX, CLI, ...argv], {
+      cwd,
+      env: { ...base, ...env },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const lines = `${r.stdout}${r.stderr}`.split(/\r?\n/).filter((l) => l.trim() !== "");
+    return { status: r.status, stderr: r.stderr, lines };
+  };
+  const noStack = (lines: string[]) => expect(lines.filter((l) => /^\s*at /.test(l))).toEqual([]);
+
+  // A first-time user who has not set the keys yet should see what to set, not
+  // a Node stack trace, and a script should be able to tell this from a halt.
+  it("run prints one plain line naming the missing variable and exits 2", () => {
+    const file = join(cwd, "scenario.json");
+    writeFileSync(file, JSON.stringify(card("12.00")));
+    const r = spawnCli(["run", file]);
+    expect(r.status).toBe(2);
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toContain("PAYPAL_SELLER_CLIENT_ID");
+    expect(r.stderr).toContain("PAYPAL_SELLER_CLIENT_ID");
+    noStack(r.lines);
+    // Stopped before a run id was issued, so there is no half-started run to resume.
+    expect(existsSync(join(cwd, "runs"))).toBe(false);
+  }, 60_000);
+
+  it("names the next missing variable and never prints a value that is set", () => {
+    const file = join(cwd, "scenario.json");
+    writeFileSync(file, JSON.stringify(card("12.00")));
+    const r = spawnCli(["run", file], { PAYPAL_SELLER_CLIENT_ID: "ID-VALUE-MARKER" });
+    expect(r.status).toBe(2);
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toContain("PAYPAL_SELLER_CLIENT_SECRET");
+    expect(r.lines.join("\n")).not.toContain("VALUE-MARKER");
+    noStack(r.lines);
+  }, 60_000);
+
+  it("treats every command that needs a key the same way", () => {
+    for (const [argv, name] of [
+      [["bank:add", "--amount", "12.00"], "PAYPAL_SELLER_CLIENT_ID"],
+      [["bank:confirm"], "PAYPAL_SELLER_CLIENT_ID"],
+      [["plan", "a candle shop"], "ANTHROPIC_API_KEY"],
+      [["find"], "ANTHROPIC_API_KEY"],
+    ] as const) {
+      const r = spawnCli([...argv]);
+      expect(r.status, argv[0]).toBe(2);
+      expect(r.lines, argv[0]).toHaveLength(1);
+      expect(r.lines[0], argv[0]).toContain(name);
+      noStack(r.lines);
+    }
+  }, 240_000);
 });
 
 describe("rehearsal bank:add", () => {
@@ -119,7 +180,7 @@ describe("rehearsal with no command", () => {
     const r = spawnSync(process.execPath, [TSX, CLI], { cwd, env: { PATH: process.env["PATH"] ?? "" }, encoding: "utf8", timeout: 60_000 });
     expect(r.status).toBe(0);
     const cli = readFileSync(CLI, "utf8");
-    const commands = [...cli.matchAll(/^ {2}case "([a-z:-]+)":$/gm)].map((m) => m[1]!);
+    const commands = [...cli.matchAll(/^ {4}case "([a-z:-]+)":$/gm)].map((m) => m[1]!);
     expect(commands.length).toBeGreaterThanOrEqual(9);
     for (const c of commands) expect(r.stdout, c).toContain(`rehearsal ${c}`);
   }, 60_000);

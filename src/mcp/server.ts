@@ -72,7 +72,7 @@ export type ServerDeps = {
 };
 
 export const SERVER_NAME = "rehearsal";
-export const SERVER_VERSION = "0.7.1";
+export const SERVER_VERSION = "0.7.3";
 
 export const MAX_DESCRIPTION_CHARS = 4000;
 export const MAX_SCENARIO_JSON_CHARS = 32_768;
@@ -542,7 +542,7 @@ export function createRehearsalServer(deps: ServerDeps): McpServer {
     {
       title: "Find edge cases in the sample store",
       description:
-        "Runs the edge-case finder against the configured sample store when confirm is true: per failure class, one model call fills a fixed scenario template, the run reuses the store's already registered webhook (never registers one), and the verdict comes from the store's recorded evidence. Without confirm, reports which classes would run and executes nothing.",
+        "Runs the edge-case finder against the configured sample store when confirm is true: per failure class, one model call fills a fixed scenario template, the run reuses the store's already registered webhook (never registers one), and the verdict comes, per class, from the store's verified rows for this run (duplicate-webhook, refund-after-partial) or from PayPal's own read-back of the record (unclaimed-payout, overdue-invoice). Without confirm, reports which classes would run and executes nothing.",
       inputSchema: {
         description: descriptionInput.optional(),
         only: classIdInput,

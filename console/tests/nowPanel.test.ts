@@ -57,17 +57,17 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
         { label: "Sending to PayPal", short: "Sending", state: "now" },
         { label: "PayPal accepted", short: "Accepted", state: "todo" },
         { label: "Waiting for PayPal's webhook", short: "Webhook", state: "todo" },
-        { label: "Verified by the store", short: "Verified", state: "todo" },
+        { label: "Signature verified", short: "Verified", state: "todo" },
       ],
     });
-    expect(p.label).toBe("0 of 5 sent, 0 of 4 verified");
+    expect(p.label).toBe("0 of 5 accepted, 0 of 4 verified");
   });
 
   it("names an invoice step as the brief does, and a step with no event as having none", () => {
     const invoice = at(7.5);
     expect(invoice.key).toBe("step:invoice-1");
     expect(invoice.body.kind === "step" && invoice.body.activity).toBe("Creating the invoice, USD 120");
-    expect(invoice.label).toBe("2 of 5 sent, 0 of 4 verified");
+    expect(invoice.label).toBe("2 of 5 accepted, 0 of 4 verified");
     const send = at(8.5);
     expect(send.body.kind === "step" && send.body.activity).toBe("Sending the invoice");
     expect(send.body.kind === "step" && send.body.stages.slice(2).map((s) => s.state)).toEqual(["none", "none"]);
@@ -76,17 +76,17 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
   it("after the last call, waits on PayPal's webhooks with one chip per expected event", () => {
     const p = at(12);
     expect(p.key).toBe("webhooks");
-    expect(p.label).toBe("5 of 5 sent, 0 of 4 verified");
+    expect(p.label).toBe("5 of 5 accepted, 0 of 4 verified");
     expect(p.body.kind === "webhooks" && p.body.title).toBe("Waiting for PayPal's webhooks: 0 of 4 arrived");
     expect(p.body.kind === "webhooks" && p.body.chips.map((c) => [c.label, c.state])).toEqual([
       ["Step 1 payment", "out"],
       ["Step 2 payment", "out"],
       ["Step 3 invoice", "out"],
-      ["Step 5 paid", "out"],
+      ["Step 5 invoice paid", "out"],
     ]);
     const one = at(20);
     expect(one.body.kind === "webhooks" && one.body.title).toBe("Waiting for PayPal's webhooks: 1 of 4 arrived");
-    expect(one.label).toBe("5 of 5 sent, 1 of 4 verified");
+    expect(one.label).toBe("5 of 5 accepted, 1 of 4 verified");
     expect(one.body.kind === "webhooks" && one.body.chips[0]!.state).toBe("in");
   });
 
@@ -105,11 +105,11 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
       kind: "final",
       tone: "done",
       title: "All 5 steps done.",
-      text: "4 of 4 webhooks verified.",
-      note: "PayPal also sent 1 event that no step causes, listed below under Other events.",
+      text: "4 of 4 webhooks arrived, all verified.",
+      note: "PayPal also sent 1 event not tied to a step by this console, listed below under Other events.",
       chips: expect.any(Array),
     });
-    expect(p.label).toBe("5 of 5 sent, 4 of 4 verified");
+    expect(p.label).toBe("5 of 5 accepted, 4 of 4 verified");
     expect(p.segments.map((s) => [s.sent, s.confirmed, s.expects])).toEqual([
       [true, true, true],
       [true, true, true],
@@ -189,10 +189,13 @@ describe("the Now running panel, at the edges", () => {
     expect(p.key).toBe("final");
     expect(p.sticky).toBe(false);
     expect(p.body.kind === "final" && [p.body.tone, p.body.title]).toEqual(["stopped", "Stopped at step 1."]);
-    expect(p.body.kind === "final" && p.body.text).toBe("PayPal refused the seller app's login (its client id and secret do not match a sandbox app). Nothing was sent.");
+    // The reason is the hero's lead; the panel never repeats it (audit 2026-11-07 evening: said three times).
+    const s = runStory(readOf(f, "halted", 3));
+    expect(s.lead).toBe("PayPal refused the seller app's login (its client id and secret do not match a sandbox app). Nothing was sent.");
+    expect(p.body.kind === "final" && p.body.text).toBeNull();
     expect(p.segments[0]!.failed).toBe(true);
     // Steps that never ran expect nothing, so only the sent count is left to say.
-    expect(p.label).toBe("0 of 5 sent");
+    expect(p.label).toBe("0 of 5 accepted");
   });
 
   it("a queued run says so and fills nothing", () => {
@@ -211,14 +214,14 @@ describe("the Now running panel, after the verifier pass", () => {
     const events = record.events.map((e) => (e.kind === "delivery" && e.data["event_id"] === "WH-9NJ5058544606690H-55R672889N360970C" ? { ...e, data: { ...e.data, refused: 1 } } : e));
     const changed = { ...hosted, record: { ...record, events } };
     const p = nowPanel(runStory(hostedRead(changed, 40)));
-    expect(p.label).toBe("5 of 5 sent, 3 of 4 verified");
+    expect(p.label).toBe("5 of 5 accepted, 3 of 4 verified");
     expect(p.body.kind === "webhooks" && p.body.chips.map((c) => c.state)).toEqual(["bad", "in", "in", "in"]);
     expect(p.segments[0]!.confirmed).toBe(false);
   });
 
   it("makes no timing promise while it waits", () => {
     const p = at(12);
-    expect(p.body.kind === "webhooks" && p.body.text).toBe("Each one turns to a check when the store records it and PayPal's signature check passes.");
+    expect(p.body.kind === "webhooks" && p.body.text).toBe("Each one turns to a check when it arrives and its signature is verified.");
   });
 
   it("before the plan is read, the hero and the panel both say the run is starting", () => {

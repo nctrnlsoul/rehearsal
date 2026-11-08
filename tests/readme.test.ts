@@ -45,8 +45,36 @@ describe("README", () => {
     }
   }, 60_000);
 
+  // Followed literally on a clean machine, the old block ran the browser tests
+  // before any build and with no browser installed.
+  it("builds the console and installs its browser before the browser tests", () => {
+    const block = readme.slice(readme.indexOf("cd console\n"));
+    const at = (s: string) => {
+      const i = block.indexOf(s);
+      expect(i, s).toBeGreaterThan(-1);
+      return i;
+    };
+    expect(at("npm run build")).toBeLessThan(at("npx playwright install chromium"));
+    expect(at("npx playwright install chromium")).toBeLessThan(at("npm run test:browser"));
+  });
+
   it("no longer describes the older product", () => {
-    for (const stale of ["No web\nconsole yet", "No web console yet", "Stage A", "Two environment variables", "Nothing in Stage A calls PayPal", "C:/", "Windows environment"]) {
+    for (const stale of [
+      "No web\nconsole yet",
+      "No web console yet",
+      "Stage A",
+      "Two environment variables",
+      "Nothing in Stage A calls PayPal",
+      "C:/",
+      "Windows environment",
+      // The store's bug was planted; the finder reproduces it, it did not discover it.
+      "the bug it found",
+      "caught a real bug",
+      // False for the 600 s budget and the one-run-at-a-time rule.
+      "can lower each one",
+      // Unlinked; the Webhook Simulator and Agent Toolkit are named and linked instead.
+      "PayPal's own tools",
+    ]) {
       expect(readme, stale).not.toContain(stale);
     }
   });

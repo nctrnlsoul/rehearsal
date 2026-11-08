@@ -87,14 +87,13 @@ export function LiveRun({ runId, names }: { runId: string; names: Readonly<Recor
     );
   }
   const lostForS = contact.kind === "lost" ? Math.round((Date.now() - contact.sinceMs) / 1000) : null;
-  const finding = story.view.finding;
   const name = names[run!.plan_id] ?? (run!.kind === "finder" ? "Finder run" : "Your plan");
   return (
     <>
       {lostForS !== null && (
         <div className="wrap"><p className="note" role="status">This page lost contact with the console {lostForS} s ago and is retrying. The run carries on without it.</p></div>
       )}
-      <RunView story={story} name={name} runId={runId} mode="live" finding={finding} />
+      <RunView story={story} name={name} runId={runId} mode="live" />
     </>
   );
 }

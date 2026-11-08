@@ -335,6 +335,28 @@ describe("invoice handlers", () => {
     }
   });
 
+  // A create whose first attempt landed but whose reply was lost would, if
+  // replayed, meet a 422 and read "failed" while a draft sits in the account.
+  it("sends an ambiguous invoice create once and calls it unknown, never failed", async () => {
+    const numbered = { status: 200, body: { invoice_number: "0007" } };
+    const refusedOnReplay = { status: 422, body: { name: "UNPROCESSABLE_ENTITY" } };
+    for (const status of [503, 500, 408, 409]) {
+      const seller = fakePaypal([numbered, { status }, refusedOnReplay]);
+      const out = await invoiceCreateHandler(makeContext({ scenario, stepId: "i1", seller: seller.client }).ctx);
+      expect(out.kind, String(status)).toBe("unknown");
+      const creates = seller.calls.filter((c) => c.path === "/v2/invoicing/invoices");
+      expect(creates, String(status)).toHaveLength(1);
+    }
+    // Nothing queued after the number, so the create's fetch throws: a lost reply.
+    const lost = fakePaypal([numbered]);
+    const out = await invoiceCreateHandler(makeContext({ scenario, stepId: "i1", seller: lost.client }).ctx);
+    expect(out.kind).toBe("unknown");
+    expect(lost.calls.filter((c) => c.path === "/v2/invoicing/invoices")).toHaveLength(1);
+
+    const refused = fakePaypal([numbered, refusedOnReplay]);
+    expect((await invoiceCreateHandler(makeContext({ scenario, stepId: "i1", seller: refused.client }).ctx)).kind).toBe("failed");
+  });
+
   it("records a payment and confirms the invoice status", async () => {
     const seller = fakePaypal([
       { status: 200, body: { payment_id: "EXTR-1" } },

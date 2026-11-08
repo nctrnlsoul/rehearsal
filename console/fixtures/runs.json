@@ -62,7 +62,16 @@
           "certHost": "api.sandbox.paypal.com",
           "repeat": true
         }
-      ]
+      ],
+      "finding": {
+        "classId": "duplicate-webhook",
+        "verdict": "bug",
+        "title": "A redelivered capture event fulfills the order twice",
+        "expected": "one fulfillment for an event id, however many times it is delivered",
+        "actual": "event WH-23242717T8452430B-4FP87531JX1278159 was delivered 2 times and fulfilled 2 times",
+        "likelyFix": "treat the webhook event id as an idempotency key: record it and ignore an event already seen before fulfilling",
+        "source": "evidence/finder/2026-10-23-duplicate-webhook-before-fix.md"
+      }
     },
     {
       "runId": "20261024011812-208f4e",
@@ -125,7 +134,16 @@
           "certHost": null,
           "repeat": true
         }
-      ]
+      ],
+      "finding": {
+        "classId": "duplicate-webhook",
+        "verdict": "ok",
+        "title": "A redelivered capture event fulfills the order twice",
+        "expected": "one fulfillment for an event id, however many times it is delivered",
+        "actual": "event WH-1XN5343594084053N-3NH67648AD6825106 was fulfilled once and its 1 redelivery(s) recognized and ignored",
+        "likelyFix": "none needed",
+        "source": "evidence/finder/2026-10-24-duplicate-webhook-after-fix.md"
+      }
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -359,7 +359,9 @@ describe("the live builder, past the gate", () => {
     await page.locator(".plan-option", { hasText: "Open Dispute" }).click();
     await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("draws 1 of 1"));
     await expect(page.locator(".go .btn-primary").isEnabled()).resolves.toBe(true);
-    await expect(page.locator("#go-note").innerText()).resolves.toMatch(/digest [0-9a-f]{12}/);
+    await expect(page.locator("#go-note").innerText()).resolves.toContain("Sends the plan id and its fingerprint.");
+    // The 64-character fingerprint sits behind Details, never in the plan a person reads.
+    await expect(page.locator(".dry .json .digest").isVisible()).resolves.toBe(false);
     expect(await noSideScroll(page)).toBe(true);
     if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-builder-390.png"), fullPage: true });
     expect(watch.problems).toEqual([]);
@@ -375,16 +377,19 @@ describe("the live run, past the gate", () => {
       await expectCleanPage(page, watch, "/live/20261025180000-e2e001", 200);
       await page.waitForSelector(".step");
       await expect(page.locator("#run-h").innerText()).resolves.toBe("All 5 steps done.");
-      await expect(page.locator(".run-hero .lead").innerText()).resolves.toBe("PayPal confirmed 4 of 4 events, every signature verified.");
+      await expect(page.locator(".run-hero .lead").innerText()).resolves.toBe("4 of 4 expected events arrived, all verified.");
       expect(await page.locator(".step").count()).toBe(5);
       // The call and PayPal's reply share one card.
       const first = page.locator(".step").first();
       await expect(first.locator(".sent-title").innerText()).resolves.toBe("Payment captured");
-      await expect(first.locator(".back").innerText()).resolves.toContain("PayPal confirmed: payment completed");
-      await expect(first.locator(".pill").innerText()).resolves.toBe("Replied in 12s");
+      await expect(first.locator(".back").innerText()).resolves.toContain("Payment completed");
+      await expect(first.locator(".pill").innerText()).resolves.toBe("Arrived 12s after the call");
       await expect(page.locator(".step.compact").innerText()).resolves.toContain("No PayPal event is tied to this kind of step.");
       await expect(page.locator(".other").innerText()).resolves.toContain("INVOICING.INVOICE.UPDATED");
       expect(await page.locator(".nodes li.in").count()).toBe(4);
+      // Step 3's invoice event beat step 2's payment in this fixture, and the strip says so.
+      await expect(page.locator(".proof-order").innerText()).resolves.toBe("Step 3's webhook arrived before step 2's. PayPal does not deliver webhooks in order; your app has to handle that.");
+      await expect(page.locator(".nodes li.in .node-label").first().innerText()).resolves.toBe("Step 1, payment");
       expect(await noSideScroll(page)).toBe(true);
       await ctx.close();
     }
@@ -434,7 +439,7 @@ describe("the live run, past the gate", () => {
     await expectCleanPage(page, watch, "/live/20261025180000-e2e003", 200);
     await page.waitForSelector(".step");
     await expect(page.locator("#run-h").innerText()).resolves.toBe("The server running this stopped.");
-    await expect(page.locator(".step").innerText()).resolves.toMatch(/Never confirmed[\s\S]*may have written to PayPal; nothing here will retry it/);
+    await expect(page.locator(".step").innerText()).resolves.toMatch(/Outcome never recorded[\s\S]*may have written to PayPal; nothing here will retry it/);
     await ctx.close();
   });
 
@@ -465,7 +470,9 @@ describe("a replay is drawn by the live run's own view", () => {
   it("plays the recorded run to its verdict, with the same step cards", async () => {
     const { ctx, page, watch } = await watched({ reducedMotion: "reduce" });
     await expectCleanPage(page, watch, "/runs/20261023231552-60ea96", 200);
-    await expect(page.locator("#run-h").innerText()).resolves.toBe("All 2 steps done.");
+    // The finder's verdict leads, in red, never a green "Done" above a BUG.
+    await expect(page.locator("#run-h").innerText()).resolves.toBe("BUG: one payment event was fulfilled twice.");
+    await expect(page.locator(".run-hero .hero-badge").innerText()).resolves.toBe("BUG");
     expect(await page.locator(".step").count()).toBe(2);
     await expect(page.locator(".step").nth(1).locator(".back").innerText()).resolves.toContain("the store fulfilled the order a second time");
     await expect(page.locator(".verdict-card").innerText()).resolves.toContain("BUG");
@@ -502,7 +509,7 @@ describe("the Now running panel", () => {
     expect(stuck).toBeGreaterThanOrEqual(8);
     expect(await noSideScroll(page)).toBe(true);
     await page.getByRole("button", { name: "Show the end" }).click();
-    await expect(page.locator(".now-panel").innerText()).resolves.toContain("All 5 steps done. 4 of 4 webhooks verified.");
+    await expect(page.locator(".now-panel").innerText()).resolves.toContain("All 5 steps done. 4 of 4 webhooks arrived, all verified.");
     expect(await page.locator(".now-panel.sticky").count()).toBe(0);
     expect(await page.locator(".step-card").count()).toBe(5);
     expect(watch.problems).toEqual([]);
@@ -518,8 +525,8 @@ describe("the Now running panel", () => {
     expect(other).toContain("INVOICING.INVOICE.UNPAID");
     expect(other).not.toContain("no plain name");
     // The two invoice events it does join sit on their own steps.
-    await expect(page.locator('[data-step="invoice-1"] .back').innerText()).resolves.toContain("PayPal confirmed: invoice created");
-    await expect(page.locator('[data-step="invoice-1-payment"] .back').innerText()).resolves.toContain("PayPal confirmed: invoice paid");
+    await expect(page.locator('[data-step="invoice-1"] .back').innerText()).resolves.toContain("Invoice created");
+    await expect(page.locator('[data-step="invoice-1-payment"] .back').innerText()).resolves.toContain("Invoice paid");
     await ctx.close();
   });
 
@@ -551,7 +558,7 @@ describe("the Now running panel", () => {
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live/20261107230012-e2e071", 200);
     await page.waitForSelector(".now-panel.now-step");
-    await expect(page.locator(".now-panel").innerText()).resolves.toMatch(/2 of 5 sent, 0 of 4 verified[\s\S]*Step 3 of 5[\s\S]*Creating the invoice, USD 120/);
+    await expect(page.locator(".now-panel").innerText()).resolves.toMatch(/2 of 5 accepted, 0 of 4 verified[\s\S]*Step 3 of 5[\s\S]*Creating the invoice, USD 120/);
     expect(await page.locator(".now-panel.sticky").count()).toBe(1);
     await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261107230012-e2e071'");
     await ctx.close();
@@ -654,6 +661,40 @@ describe.runIf(SHOTS !== undefined)("D2 screenshots at 1440 and 390", () => {
     await ctx.close();
   }, 60_000);
 
+  it("v0.7.3: bug and OK replays, hosted replay finished, live panel mid-run, dry run, /build", async () => {
+    const dir = SHOTS!;
+    mkdirSync(dir, { recursive: true });
+    const save = (page: Page, name: string, w: number, full = true) => page.screenshot({ path: join(dir, `${name}-${w}.png`), fullPage: full });
+    const [bug, ok] = [RUNS.find((r) => r.verdict === "bug")!, RUNS.find((r) => r.verdict === "ok")!];
+    for (const v of sizes) {
+      for (const [name, path] of [["replay-bug-verdict", `/runs/${bug.runId}`], ["replay-ok-verdict", `/runs/${ok.runId}`], ["replay-hosted-finished", `/runs/${HOSTED.runId}`], ["build", "/build"]] as const) {
+        const { ctx, page } = await watched({ reducedMotion: "reduce" });
+        await page.setViewportSize(v);
+        await page.goto(base + path, { waitUntil: "networkidle" });
+        await hydrated(page);
+        expect(await noSideScroll(page), `${path} at ${v.width}`).toBe(true);
+        if (name === "replay-bug-verdict") await expect(page.locator("#run-h").innerText()).resolves.toBe("BUG: one payment event was fulfilled twice.");
+        if (name === "replay-ok-verdict") await expect(page.locator("#run-h").innerText()).resolves.toMatch(/^OK: /);
+        await save(page, name, v.width);
+        await ctx.close();
+      }
+      const { ctx, page } = await unlocked(v);
+      await page.waitForFunction(() => document.querySelector(".dry .plan-steps") !== null);
+      expect(await noSideScroll(page), `/live dry run at ${v.width}`).toBe(true);
+      await save(page, "dry-run", v.width);
+      // The hosted run's own rows at 30 s: every call done, waiting on PayPal's webhooks.
+      const id = `20261107120000-d73${v.width === 1440 ? "001" : "002"}`;
+      await seedFixture(db.pg, id, hostedAt(HOSTED, 30), 30);
+      await page.goto(`${base}/live/${id}`, { waitUntil: "load" });
+      await page.waitForSelector(".now-panel");
+      await page.waitForTimeout(500);
+      expect(await noSideScroll(page), `live mid-run at ${v.width}`).toBe(true);
+      await save(page, "live-panel-mid-run", v.width, false);
+      await db.pg.exec(`update public.console_runs set status = 'complete', finished_at = now() where id = '${id}'`);
+      await ctx.close();
+    }
+  }, 120_000);
+
   it("public pages: home, plans, replays, replay run, finder, gate", async () => {
     const pages = [["home", "/"], ["plans", "/build"], ["replays", "/runs"], ["replay-run", "/runs/20261023231552-60ea96"], ["finder", "/finder"], ["gate", "/gate"]] as const;
     for (const v of sizes) {
@@ -680,7 +721,7 @@ describe.runIf(SHOTS !== undefined)("D2 screenshots at 1440 and 390", () => {
     let n = 0;
     for (const v of sizes) {
       const { ctx, page } = await unlocked(v);
-      await page.waitForFunction(() => document.querySelector(".dry")?.textContent?.includes("Digest"));
+      await page.waitForFunction(() => document.querySelector(".dry .plan-steps") !== null);
       expect(await noSideScroll(page), `/live at ${v.width}`).toBe(true);
       await shot(page, "live-builder", v.width);
       for (const [name, make, nowS] of runs) {

@@ -34,7 +34,7 @@ export default async function LivePage() {
           <div className="wrap">
             <p className="eyebrow">Run live · you are past the gate</p>
             <h1 id="live-h">Run a plan in PayPal&apos;s sandbox.</h1>
-            <p className="lead">Read exactly what it becomes, then run that and only that. Each call and PayPal&apos;s reply fill in side by side as they happen.</p>
+            <p className="lead">Read exactly what it becomes, then run that and only that. Each call and the webhook PayPal sends for it fill in side by side as they happen.</p>
           </div>
         </section>
         <div className="wrap lift">
@@ -42,7 +42,7 @@ export default async function LivePage() {
           <div className="live-grid">
             <div id="builder">
               {enabled ? (
-                <LiveBuilder plans={plans} finder={HOSTED_FINDER} />
+                <LiveBuilder plans={plans} finder={HOSTED_FINDER} timeBudgetS={TIME_BUDGET_S} />
               ) : (
                 <section className="card terminal" role="status">
                   <h2>Live runs are paused on this deployment</h2>

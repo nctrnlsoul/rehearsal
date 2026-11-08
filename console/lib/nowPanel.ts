@@ -1,4 +1,6 @@
-import { type RunStory, type StepCard, dur } from "./runStory";
+import { type RunStory, type StepCard, dur, expectsReply } from "./runStory";
+
+export { expectsReply };
 
 /**
  * The "Now running" panel: the one thing happening in a run right now, from
@@ -10,7 +12,7 @@ import { type RunStory, type StepCard, dur } from "./runStory";
 export type StageState = "done" | "now" | "todo" | "none" | "bad" | "unknown";
 export type Stage = { readonly label: string; readonly short: string; readonly state: StageState };
 
-/** One segment per step: sent is PayPal accepting the call, confirmed its events all landing verified. */
+/** One segment per step: sent is PayPal accepting the call, confirmed its events all arriving verified. */
 export type Segment = { readonly n: number; readonly sent: boolean; readonly confirmed: boolean; readonly expects: boolean; readonly failed: boolean };
 
 export type Chip = { readonly key: string; readonly label: string; readonly state: "in" | "out" | "bad" };
@@ -51,12 +53,9 @@ const CHIP_WORD: Readonly<Record<string, string>> = {
   "CHECKOUT.ORDER.APPROVED": "order",
   "CHECKOUT.ORDER.COMPLETED": "order",
   "INVOICING.INVOICE.CREATED": "invoice",
-  "INVOICING.INVOICE.PAID": "paid",
+  "INVOICING.INVOICE.PAID": "invoice paid",
   "CUSTOMER.DISPUTE.CREATED": "dispute",
 };
-
-/** A step the console ties a PayPal event to, whether or not it has arrived yet. */
-export const expectsReply = (c: StepCard) => c.replies.length > 0 || c.reply === "not-yet" || c.reply === "waiting";
 
 const verifiedReply = (c: StepCard) => c.replies.length > 0 && c.replies.every((r) => r.arrived && r.copies > 0 && r.verified === r.copies);
 
@@ -79,7 +78,7 @@ export function stagesOf(c: StepCard): Stage[] {
       { label: "Sending to PayPal", short: "Sending", state: "unknown" },
       { label: "Outcome unknown", short: "Unknown", state: "unknown" },
       { label: "Waiting for PayPal's webhook", short: "Webhook", state: "todo" },
-      { label: "Verified by the store", short: "Verified", state: "todo" },
+      { label: "Signature verified", short: "Verified", state: "todo" },
     ];
   }
   const expects = expectsReply(c);
@@ -89,10 +88,12 @@ export function stagesOf(c: StepCard): Stage[] {
     { label: c.sent === "refused" ? "PayPal refused" : "PayPal accepted", short: c.sent === "refused" ? "Refused" : "Accepted", state: accepted ? "done" : failed ? "bad" : "todo" },
     !expects
       ? { label: "No webhook expected", short: "No webhook", state: "none" }
-      : { label: "Waiting for PayPal's webhook", short: "Webhook", state: arrived ? "done" : accepted && (c.reply === "waiting" || c.reply === "not-yet") ? "now" : "todo" },
+      : arrived
+        ? { label: "Webhook arrived", short: "Arrived", state: "done" }
+        : { label: "Waiting for PayPal's webhook", short: "Webhook", state: accepted && (c.reply === "waiting" || c.reply === "not-yet") ? "now" : "todo" },
     !expects
       ? { label: "Nothing to verify", short: "No check", state: "none" }
-      : { label: "Verified by the store", short: "Verified", state: verifiedReply(c) ? "done" : arrived ? "bad" : "todo" },
+      : { label: "Signature verified", short: "Verified", state: verifiedReply(c) ? "done" : arrived ? "bad" : "todo" },
   ];
 }
 
@@ -111,11 +112,9 @@ export function nowPanel(story: RunStory): NowPanel {
   const sent = segments.filter((s) => s.sent).length;
   const chips = chipsOf(cards);
   const replies = cards.flatMap((c) => c.replies);
-  const arrived = replies.filter((r) => r.arrived).length;
-  const verified = replies.filter((r) => r.arrived && r.copies > 0 && r.verified === r.copies).length;
-  // Counted in events, as the chips and the final sentence are; queued steps count the event they will wait for.
-  const expecting = cards.reduce((n, c) => n + (c.replies.length > 0 ? c.replies.length : expectsReply(c) ? 1 : 0), 0);
-  const label = `${sent} of ${total} sent${expecting === 0 ? "" : `, ${verified} of ${expecting} verified`}`;
+  // The story's own count, so the bar, the hero and the proof strip never disagree.
+  const { expected, arrived, verified } = story.counts;
+  const label = `${sent} of ${total} accepted${expected === 0 ? "" : `, ${verified} of ${expected} verified`}`;
   const base = { sticky: !story.settled, segments, label };
 
   if (story.tone === "queued") return { ...base, key: "queued", body: { kind: "queued", title: "Queued", text: "Waiting for the server to start it." } };
@@ -123,16 +122,20 @@ export function nowPanel(story: RunStory): NowPanel {
   if (total === 0 && !story.settled) return { ...base, key: "queued", body: { kind: "queued", title: "Starting", text: "The server has picked it up. The first step starts in a moment." } };
 
   if (story.tone === "stopped" || story.settled) {
-    if (story.tone === "stopped") return { ...base, key: "final", body: { kind: "final", tone: "stopped", title: story.headline, text: story.lead, note: null, chips: story.settled ? [] : chips } };
+    // The reason is the hero's lead, just above; said once there, never again here.
+    if (story.tone === "stopped") return { ...base, key: "final", body: { kind: "final", tone: "stopped", title: story.headline, text: null, note: null, chips: story.settled ? [] : chips } };
     const others = story.other.length;
-    const note = others === 0 ? null : `PayPal also sent ${others} ${others === 1 ? "event" : "events"} that no step causes, listed below under Other events.`;
+    const note =
+      [story.outOfOrder, others === 0 ? null : `PayPal also sent ${others} ${others === 1 ? "event" : "events"} not tied to a step by this console, listed below under Other events.`]
+        .filter((x) => x !== null)
+        .join(" ") || null;
     const hooks = (n: number) => `${n} ${n === 1 ? "webhook" : "webhooks"}`;
     const text =
-      replies.length === 0
+      expected === 0
         ? "No webhook is tied to these steps."
-        : arrived === replies.length && verified === arrived
-          ? `${verified} of ${hooks(replies.length)} verified.`
-          : `${arrived} of ${hooks(replies.length)} seen before the wait ended, ${verified} verified.`;
+        : arrived === expected && verified === arrived
+          ? `${verified} of ${hooks(expected)} arrived, all verified.`
+          : `${arrived} of ${hooks(expected)} arrived before the run ended, ${verified} verified.`;
     // The sentence already says every webhook was verified; chips stay only to show which one was not.
     return { ...base, key: "final", body: { kind: "final", tone: "done", title: story.headline, text, note, chips: chips.every((c) => c.state === "in") ? [] : chips } };
   }
@@ -156,8 +159,8 @@ export function nowPanel(story: RunStory): NowPanel {
     ...base,
     key: "webhooks",
     body:
-      arrived < replies.length
-        ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${replies.length} arrived`, text: "Each one turns to a check when the store records it and PayPal's signature check passes.", chips }
-        : { kind: "webhooks", title: `All ${replies.length} webhooks arrived, ${verified} verified`, text: listening, chips },
+      arrived < expected
+        ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${expected} arrived`, text: story.outOfOrder ?? "Each one turns to a check when it arrives and its signature is verified.", chips }
+        : { kind: "webhooks", title: `All ${expected} webhooks arrived, ${verified} verified`, text: [story.outOfOrder, listening].filter((x) => x !== null).join(" ") || null, chips },
   };
 }

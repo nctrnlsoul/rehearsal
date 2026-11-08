@@ -24,7 +24,17 @@
 .describe textarea { width: 100%; background: var(--bg-card); color: var(--text); border: 1px solid var(--control-line); border-radius: var(--radius-control); padding: 12px 14px; font: 400 16px var(--font-sans); resize: vertical; }
 .row-end { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .dry .name { font-weight: 600; font-size: 17px; }
-.plan-lines, .json pre { margin: 0; padding: 14px 16px; background: var(--bg-muted); border: 1px solid var(--rule); border-radius: var(--radius-control); font-size: 13px; line-height: 1.6; white-space: pre; overflow-x: auto; max-width: 100%; }
+/* Wrapped, never cut off at the right edge, at 1440 or 390. */
+.plan-lines, .json pre { margin: 0; padding: 14px 16px; background: var(--bg-muted); border: 1px solid var(--rule); border-radius: var(--radius-control); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+/* The same numbered list /build draws its plan with. */
+.plan-steps { list-style: none; margin: 0; padding: 0; display: grid; }
+.plan-steps li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 4px 14px; align-items: start; padding: 10px 0; border-top: 1px solid var(--rule-soft); }
+.plan-steps li:first-child { border-top: 0; }
+.ps-n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-muted); border: 1px solid var(--rule); font-size: 13px; font-weight: 600; }
+.ps-w { display: grid; gap: 2px; min-width: 0; }
+.ps-t { font-weight: 500; overflow-wrap: anywhere; }
+.ps-d { font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; }
+.dry .json .facts { margin: 10px 0; }
 .dry .facts { font-size: 14px; }
 .dry .digest { font-size: 12px; font-weight: 400; }
 .errors { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 15px; color: var(--text-2); }

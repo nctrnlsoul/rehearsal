@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import type { PlanView } from "../lib/planView";
 import { Mark } from "./chrome";
 
 /**
@@ -19,6 +20,7 @@ type DryRun = {
   sha256: string | null;
   budgetS: number | null;
   lines: string[];
+  plan: PlanView | null;
   errors: string[];
   bank: { needed: number; available: number; short: boolean };
 };
@@ -58,7 +60,8 @@ function problemOf(status: number, json: Record<string, unknown>): Problem {
   return { text: [error ?? `The console answered ${status}.`, ...reasons.slice(0, 3)].join(" ") };
 }
 
-export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; finder: readonly FinderChoice[] }) {
+/** timeBudgetS: the hosted limit the routes enforce, passed down so this client file never imports the engine. */
+export function LiveBuilder({ plans, finder, timeBudgetS }: { plans: readonly PlanChoice[]; finder: readonly FinderChoice[]; timeBudgetS: number }) {
   const router = useRouter();
   const [mode, setMode] = useState<"recorded" | "describe" | "finder">("recorded");
   const [finderClass, setFinderClass] = useState(finder[0]?.id ?? "");
@@ -150,7 +153,7 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
                 <span className="id mono">{c.id}</span>
               </label>
             ))}
-            <p className="note">One class per run. The model fills that class&apos;s fixed template (it may change values, never steps), the run reuses the store&apos;s webhook, and the verdict comes from the store&apos;s own records. 1 model call and 1 live run.</p>
+            <p className="note">One class per run. The model fills that class&apos;s fixed template (it may change values, never steps), the run reuses the store&apos;s webhook, and the verdict comes from the store&apos;s verified records or PayPal&apos;s own read-back, depending on the class. 1 model call and 1 live run.</p>
           </fieldset>
         ) : mode === "recorded" ? (
           <fieldset className="plans">
@@ -190,18 +193,39 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
             <p className="name">{picked.name}</p>
             {picked.dry.errors.length > 0 ? (
               <ul className="errors">{picked.dry.errors.map((e) => <li key={e}><Mark kind="bug">refused</Mark> {e}</li>)}</ul>
-            ) : (
-              <pre className="plan-lines mono">{picked.dry.lines.join("\n")}</pre>
-            )}
+            ) : picked.dry.plan !== null ? (
+              <>
+                <ol className="plan-steps" aria-label="What this plan does in the PayPal sandbox, in order">
+                  {picked.dry.plan.steps.map((st) => (
+                    <li key={st.n}>
+                      <span className="ps-n" aria-hidden="true">{st.n}</span>
+                      <span className="ps-w">
+                        <span className="ps-t">{st.title}{st.amount !== null && <>, {st.amount}</>}</span>
+                        {st.note !== null && <span className="ps-d">{st.note}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+                <dl className="facts plan-money" aria-label="Money this run would move">
+                  {picked.dry.plan.totals.map((t) => <Fragment key={t.label}><dt>{t.label}</dt><dd>{t.amount}</dd></Fragment>)}
+                </dl>
+                <p className="note event-target">Event target: {picked.dry.plan.eventTarget}</p>
+              </>
+            ) : null}
             <dl className="facts">
-              <dt>Worst-case time</dt><dd>{picked.dry.budgetS === null ? "not computed" : <>{picked.dry.budgetS} s of 600 s</>}</dd>
+              <dt>Worst-case time</dt><dd>{picked.dry.budgetS === null ? "not computed" : <>{picked.dry.budgetS} s of {timeBudgetS} s</>}</dd>
               <dt>Purchase bank</dt>
               <dd>{picked.dry.bank.needed === 0 ? "not used" : picked.dry.bank.short ? `BLOCKED: needs ${picked.dry.bank.needed}, ${picked.dry.bank.available} ready` : `draws ${picked.dry.bank.needed} of ${picked.dry.bank.available}`}</dd>
-              <dt>Digest</dt>{picked.dry.sha256 === null ? <dd>none: the plan did not pass</dd> : <dd className="mono digest">{picked.dry.sha256}</dd>}
             </dl>
-            {picked.scenario !== undefined && (
-              <details className="json"><summary>The plan&apos;s JSON</summary><pre className="mono">{JSON.stringify(picked.scenario, null, 2)}</pre></details>
-            )}
+            <details className="json">
+              <summary>Details</summary>
+              <dl className="facts">
+                <dt>Plan fingerprint<small>the run must present this exact one</small></dt>
+                {picked.dry.sha256 === null ? <dd>none: the plan did not pass</dd> : <dd className="mono digest">{picked.dry.sha256}</dd>}
+              </dl>
+              {picked.dry.lines.length > 0 && <pre className="mono plan-lines">{picked.dry.lines.join("\n")}</pre>}
+              {picked.scenario !== undefined && <pre className="mono">{JSON.stringify(picked.scenario, null, 2)}</pre>}
+            </details>
           </>
         )}
       </section>
@@ -215,7 +239,7 @@ export function LiveBuilder({ plans, finder }: { plans: readonly PlanChoice[]; f
           {mode === "finder" ? (
             "Runs the one class chosen above."
           ) : runnable ? (
-            <>Sends the plan id and digest <span className="mono">{picked!.dry.sha256!.slice(0, 12)}</span>. The server reloads the plan and refuses if anything differs.</>
+            <>Sends the plan id and its fingerprint. The server reloads the plan and refuses if anything differs.</>
           ) : (
             "Enabled once the plan above passes every check."
           )}

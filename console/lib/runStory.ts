@@ -15,7 +15,7 @@ export type Reply = {
   readonly key: string;
   readonly eventId: string | null;
   readonly eventType: string;
-  /** "PayPal confirmed: payment completed". */
+  /** "Payment completed". */
   readonly plain: string;
   readonly arrived: boolean;
   readonly latencyS: number | null;
@@ -60,7 +60,8 @@ export type StepCard = {
   };
 };
 
-export type ProofNode = { readonly key: string; readonly label: string; readonly arrived: boolean; readonly latencyS: number | null; readonly exact: boolean; readonly early: boolean; readonly verified: boolean };
+/** step: the step whose call the event is tied to, so the strip can say "Step 2, payment". */
+export type ProofNode = { readonly key: string; readonly step: number | null; readonly label: string; readonly arrived: boolean; readonly latencyS: number | null; readonly exact: boolean; readonly early: boolean; readonly verified: boolean };
 
 /**
  * An event no step is known to cause. related: a step whose own ids include
@@ -78,6 +79,9 @@ export type OtherEvent = {
 
 export type Tone = "running" | "waiting" | "done" | "stopped" | "queued";
 
+/** A finder run's answer, which leads the page once the run settles: never a green "Done" above a BUG. */
+export type VerdictHero = { readonly kind: "bug" | "ok" | "inconclusive"; readonly headline: string; readonly lead: string };
+
 export type RunStory = {
   readonly tone: Tone;
   readonly settled: boolean;
@@ -86,6 +90,13 @@ export type RunStory = {
   readonly progress: { readonly at: number; readonly of: number } | null;
   readonly proof: readonly ProofNode[];
   readonly proofLine: string;
+  /** One sentence when a later step's webhook arrived before an earlier step's; null otherwise. */
+  readonly outOfOrder: string | null;
+  /** The one count of expected events, arrived and verified, that every part of the page uses. */
+  readonly counts: { readonly expected: number; readonly arrived: number; readonly verified: number };
+  /** Posts the store rejected in this run's window, never added to PayPal's numbers; null when there were none. */
+  readonly rejected: string | null;
+  readonly verdict: VerdictHero | null;
   readonly figures: {
     readonly steps: string;
     readonly amount: string;
@@ -162,25 +173,25 @@ const EXPECTED_TYPE: Readonly<Record<string, string>> = {
  * a type this console does not know.
  */
 export const EVENT_PLAIN: Readonly<Record<string, string>> = {
-  "PAYMENT.CAPTURE.COMPLETED": "PayPal confirmed: payment completed",
+  "PAYMENT.CAPTURE.COMPLETED": "Payment completed",
   "PAYMENT.CAPTURE.PENDING": "PayPal says the payment is pending",
   "PAYMENT.CAPTURE.DENIED": "PayPal says the payment was denied",
-  "PAYMENT.CAPTURE.REFUNDED": "PayPal confirmed: refund completed",
+  "PAYMENT.CAPTURE.REFUNDED": "Refund completed",
   "PAYMENT.CAPTURE.REVERSED": "PayPal says the payment was reversed",
-  "CHECKOUT.ORDER.APPROVED": "PayPal confirmed: order approved",
-  "CHECKOUT.ORDER.COMPLETED": "PayPal confirmed: order completed",
-  "INVOICING.INVOICE.CREATED": "PayPal confirmed: invoice created",
-  "INVOICING.INVOICE.SENT": "PayPal confirmed: invoice sent",
+  "CHECKOUT.ORDER.APPROVED": "Order approved",
+  "CHECKOUT.ORDER.COMPLETED": "Order completed",
+  "INVOICING.INVOICE.CREATED": "Invoice created",
+  "INVOICING.INVOICE.SENT": "Invoice sent",
   "INVOICING.INVOICE.UPDATED": "PayPal says the invoice changed",
   "INVOICING.INVOICE.UNPAID": "PayPal says the invoice is awaiting payment",
-  "INVOICING.INVOICE.PAID": "PayPal confirmed: invoice paid",
-  "CUSTOMER.DISPUTE.CREATED": "PayPal confirmed: dispute opened",
+  "INVOICING.INVOICE.PAID": "Invoice paid",
+  "CUSTOMER.DISPUTE.CREATED": "Dispute opened",
   "CUSTOMER.DISPUTE.UPDATED": "PayPal says the dispute changed",
   "CUSTOMER.DISPUTE.RESOLVED": "PayPal says the dispute was resolved",
-  "PAYMENT.PAYOUTSBATCH.SUCCESS": "PayPal confirmed: payout batch done",
+  "PAYMENT.PAYOUTSBATCH.SUCCESS": "Payout batch done",
   "PAYMENT.PAYOUTSBATCH.PROCESSING": "PayPal says the payout batch is processing",
   "PAYMENT.PAYOUTSBATCH.DENIED": "PayPal says the payout batch was denied",
-  "PAYMENT.PAYOUTS-ITEM.SUCCEEDED": "PayPal confirmed: payout item paid",
+  "PAYMENT.PAYOUTS-ITEM.SUCCEEDED": "Payout item paid",
   "PAYMENT.PAYOUTS-ITEM.UNCLAIMED": "PayPal says a payout item is unclaimed",
 };
 
@@ -193,7 +204,7 @@ const EVENT_SHORT: Readonly<Record<string, string>> = {
   "CHECKOUT.ORDER.APPROVED": "Order",
   "CHECKOUT.ORDER.COMPLETED": "Order",
   "INVOICING.INVOICE.CREATED": "Invoice",
-  "INVOICING.INVOICE.PAID": "Paid",
+  "INVOICING.INVOICE.PAID": "Invoice paid",
   "CUSTOMER.DISPUTE.CREATED": "Dispute",
 };
 
@@ -208,7 +219,7 @@ const ID_NOUN: Readonly<Record<string, string>> = {
 
 const STORE_PLAIN: Readonly<Record<string, string>> = {
   fulfilled: "the store fulfilled the order",
-  duplicate_ignored: "the store saw a repeat and ignored it",
+  duplicate_ignored: "the store recognized it as a repeat and ignored it",
   refund_recorded: "the store recorded the refund",
   dispute_noted: "the store noted the dispute",
   recorded: "the store recorded it",
@@ -246,7 +257,7 @@ export function humanReason(raw: string | null): string | null {
   if (ambiguous !== null) return `PayPal's reply (http ${ambiguous[1]}) does not say whether the request went through. It may have; nothing here will retry it.`;
   const threw = /^handler threw: (\w+): /.exec(d);
   if (threw !== null) return `The step stopped on an error (${threw[1]}). It may have written to PayPal; nothing here will retry it.`;
-  if (/^started and never confirmed/.test(d)) return "Started and never confirmed. It may have written to PayPal; nothing here will retry it.";
+  if (/^started and never confirmed/.test(d)) return "Started, but its outcome was never recorded. It may have written to PayPal; nothing here will retry it.";
   if (/stopped on an internal error/.test(d)) return "The run stopped on an internal error. A step it had started may have written to PayPal; nothing here will retry it.";
   if (/the server running this stopped/.test(d)) return "The server running this stopped. A step it had started may have written to PayPal; nothing here will retry it.";
   d = d.charAt(0).toUpperCase() + d.slice(1);
@@ -467,13 +478,19 @@ export function runStory(read: LiveRead): RunStory {
   const allReplies = finalCards.flatMap((c) => c.replies);
   const timed = allReplies.filter((r) => r.latencyS !== null);
   const slowestReply = timed.length === 0 ? null : timed.reduce((a, b) => (b.latencyS! > a.latencyS! ? b : a));
-  // The store keeps no event id on a copy it refused, so those come from its own count for this run's window.
-  const refusedInWindow = read.events.reduce((m, e) => (e.kind === "note" && typeof e.data["refused_in_window"] === "number" ? Math.max(m, e.data["refused_in_window"] as number) : m), 0);
-  const copies = view.ledger.reduce((a, l) => a + l.deliveries, 0) + refusedInWindow;
-  const passed = view.ledger.reduce((a, l) => a + Math.max(0, l.deliveries - l.refused), 0);
-  const expected = allReplies.length;
-  const confirmed = allReplies.filter((r) => r.arrived).length;
-  const waiting = allReplies.filter((r) => !r.arrived).length;
+  // The store keeps no event id on a copy it refused, so those come from its
+  // own count for this run's window. Anyone can post to the store's public
+  // webhook, so they are said apart and never added to PayPal's numbers.
+  const rejectedN = read.events.reduce((m, e) => (e.kind === "note" && typeof e.data["refused_in_window"] === "number" ? Math.max(m, e.data["refused_in_window"] as number) : m), 0);
+  const rejected = rejectedN === 0 ? null : `${rejectedN} ${rejectedN === 1 ? "post" : "posts"} to the store ${rejectedN === 1 ? "was" : "were"} refused: malformed, or a signature that failed or could not be checked. None is counted as PayPal's.`;
+  // One count of expected events for the hero, the panel, the strip and the
+  // summary: a step still queued counts the one event it will wait for.
+  const expected = finalCards.reduce((n, c) => n + (c.replies.length > 0 ? c.replies.length : expectsReply(c) ? 1 : 0), 0);
+  const arrived = allReplies.filter((r) => r.arrived).length;
+  const verified = allReplies.filter(isVerified).length;
+  const waiting = expected - arrived;
+  const events = (n: number) => `${n} ${n === 1 ? "event" : "events"}`;
+  const paypalOnly = view.ledger.filter((l) => l.deliveries - l.refused > 0).length;
 
   // The hero, which must match the run's state at every moment.
   const haltedAt = finalCards.find((c) => c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed");
@@ -485,10 +502,10 @@ export function runStory(read: LiveRead): RunStory {
     humanReason(str(haltEvent?.data["reason"]));
   const evidence =
     expected === 0
-      ? copies === 0
+      ? paypalOnly === 0
         ? null
-        : `PayPal sent ${copies} ${copies === 1 ? "event" : "events"}, none tied to a step.`
-      : `PayPal confirmed ${confirmed} of ${expected} ${expected === 1 ? "event" : "events"}${confirmed === 0 ? "" : passed === copies ? ", every signature verified" : `, ${passed} of ${copies} signatures verified`}.`;
+        : `PayPal sent ${events(paypalOnly)}, none tied to a step by this console.`
+      : `${arrived} of ${expected} expected ${expected === 1 ? "event" : "events"} arrived${arrived === 0 ? "" : verified === arrived ? ", all verified" : `, ${verified} verified`}.`;
   let tone: Tone;
   let headline: string;
   let lead: string | null;
@@ -501,7 +518,7 @@ export function runStory(read: LiveRead): RunStory {
     tone = "stopped";
     headline = haltedAt === undefined ? (done === 0 ? "Stopped before step 1." : "Stopped.") : `Stopped at step ${haltedAt.n}.`;
     if (dead) headline = view.phase === "abandoned" ? "The server running this stopped." : "The run stopped on an internal error.";
-    const after = !view.settled && waiting > 0 ? ` Still listening for ${waiting} ${waiting === 1 ? "event" : "events"} from the steps PayPal accepted.` : "";
+    const after = !view.settled && waiting > 0 ? ` Still listening for ${events(waiting)} from the steps PayPal accepted.` : "";
     lead = [reason, done > 0 && expected > 0 ? evidence : null].filter((x) => x !== null).join(" ") + after || null;
   } else if (dead) {
     tone = "stopped";
@@ -515,11 +532,10 @@ export function runStory(read: LiveRead): RunStory {
   } else if (view.phase === "complete") {
     tone = "done";
     headline = `All ${stepsWord(total)} done.`;
-    const missing = allReplies.filter((r) => !r.arrived).length;
     lead =
-      missing === 0
+      waiting === 0
         ? evidence
-        : `${evidence ?? ""} ${missing} expected ${missing === 1 ? "event was" : "events were"} not seen before the wait ended. That is not proof the store missed ${missing === 1 ? "it" : "them"}: PayPal's sandbox has delivered later than that before.`.trim();
+        : `${evidence ?? ""} ${waiting} expected ${waiting === 1 ? "event was" : "events were"} not seen before the wait ended. That is not proof the store missed ${waiting === 1 ? "it" : "them"}: PayPal's sandbox has delivered later than that before.`.trim();
   } else {
     const sending = finalCards.find((c) => c.sent === "sending");
     const next = finalCards.find((c) => c.sent === "queued");
@@ -528,31 +544,50 @@ export function runStory(read: LiveRead): RunStory {
       const c = (sending ?? next)!;
       headline = `Running step ${c.n} of ${total}: ${c.title}.`;
       lead = sending !== undefined ? "Sending it to PayPal's sandbox now." : done === 0 ? "Starting the first step." : "PayPal accepted the last step; the next one starts now.";
-      if (confirmed > 0 || waiting > 0) lead = `${lead} ${confirmed} of ${expected} ${expected === 1 ? "event" : "events"} back from PayPal so far.`;
+      if (arrived > 0 || done > 0) lead = `${lead} ${arrived} of ${expected} expected ${expected === 1 ? "event" : "events"} arrived so far.`;
     } else {
       tone = "waiting";
       headline = `All ${stepsWord(total)} sent.`;
-      lead = waiting > 0 ? `Waiting on PayPal for ${waiting} ${waiting === 1 ? "event" : "events"}. ${confirmed} of ${expected} confirmed so far.` : evidence ?? "Finishing up.";
+      lead = waiting > 0 ? `Waiting on PayPal for ${events(waiting)}. ${arrived} of ${expected} arrived so far.` : evidence ?? "Finishing up.";
     }
   }
 
   const progress = tone === "running" && total > 0 ? { at: Math.min(total, finalCards.filter((c) => c.sent !== "queued").length), of: total } : null;
 
+  const stepOf = new Map(finalCards.flatMap((c) => c.replies.map((r) => [r.key, c.n] as const)));
+  const shortOf = (r: Reply) => (r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"));
   const proof: ProofNode[] = [
-    ...arrivedPairs.map((p): ProofNode => {
-      const r = allReplies.find((x) => x.key === p.deliveryKey)!;
-      return { key: p.deliveryKey, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: true, latencyS: r.latencyS, exact: r.exact, early: r.early, verified: r.verified > 0 };
+    ...arrivedPairs.flatMap((p): ProofNode[] => {
+      const r = allReplies.find((x) => x.key === p.deliveryKey);
+      if (r === undefined) return [];
+      return [{ key: p.deliveryKey, step: stepOf.get(r.key) ?? null, label: shortOf(r), arrived: true, latencyS: r.latencyS, exact: r.exact, early: r.early, verified: isVerified(r) }];
     }),
-    ...allReplies.filter((r) => !r.arrived).map((r): ProofNode => ({ key: r.key, label: r.redelivery ? "Resend" : (EVENT_SHORT[r.eventType] ?? "Event"), arrived: false, latencyS: null, exact: false, early: false, verified: false })),
+    ...allReplies.filter((r) => !r.arrived).map((r): ProofNode => ({ key: r.key, step: stepOf.get(r.key) ?? null, label: shortOf(r), arrived: false, latencyS: null, exact: false, early: false, verified: false })),
+    // A step still queued shows the event it will wait for, so the strip counts what the hero counts.
+    ...finalCards
+      .filter((c) => c.replies.length === 0 && expectsReply(c))
+      .map((c): ProofNode => ({ key: `p:${c.id}`, step: c.n, label: KIND_SHORT[c.kind] ?? "Event", arrived: false, latencyS: null, exact: false, early: false, verified: false })),
   ];
   const proofLine =
     expected === 0
       ? finalCards.every((c) => c.sent === "not-sent" || c.sent === "not-run" || c.sent === "queued") && (view.settled || halted)
-        ? "Nothing was sent, so there was nothing for PayPal to confirm."
+        ? "Nothing was sent, so there was nothing for PayPal to deliver."
         : view.settled
           ? "No event was expected from the steps that ran."
           : "Events appear here as PayPal sends them."
-      : `${confirmed} of ${expected} confirmed.${confirmed === 0 ? "" : passed === copies ? ` All ${passed} ${passed === 1 ? "signature" : "signatures"} passed.` : ` ${passed} of ${copies} signatures passed.`}`;
+      : `${arrived} of ${expected} arrived.${arrived === 0 ? "" : verified === arrived ? " All verified." : ` ${verified} verified.`}`;
+
+  // PayPal promises no order. When a later step's event beat an earlier
+  // step's, that is the clearest true thing the run can show, so it is said.
+  let outOfOrder: string | null = null;
+  const ranked = finalCards.flatMap((c) => c.replies.filter((r) => r.rank !== null && !r.redelivery).map((r) => ({ n: c.n, rank: r.rank! })));
+  for (const b of [...ranked].sort((x, y) => x.rank - y.rank)) {
+    const a = ranked.find((x) => x.n < b.n && x.rank > b.rank);
+    if (a !== undefined) {
+      outOfOrder = `Step ${b.n}'s webhook arrived before step ${a.n}'s. PayPal does not deliver webhooks in order; your app has to handle that.`;
+      break;
+    }
+  }
 
   const other: OtherEvent[] = view.ledger
     .filter((l) => l.joinedTo.length === 0)
@@ -583,6 +618,10 @@ export function runStory(read: LiveRead): RunStory {
     progress,
     proof,
     proofLine,
+    outOfOrder,
+    counts: { expected, arrived, verified },
+    rejected,
+    verdict: verdictHero(view.finding),
     figures: {
       steps: `${done} of ${total}`,
       amount: planned === 0n ? "none" : money(plan.currency, fromCents(accepted)),
@@ -591,14 +630,55 @@ export function runStory(read: LiveRead): RunStory {
           ? null
           : `of ${money(plan.currency, fromCents(planned))} planned${finalCards.some((c) => c.sent === "unknown" || c.sent === "never-confirmed") ? "; one step's outcome is unknown" : ""}`,
       slowest: slowestReply === null ? (waiting > 0 ? "waiting" : "none") : `${slowestReply.exact ? "" : "at most "}${dur(slowestReply.latencyS!)}`,
-      signatures: copies === 0 ? (view.settled ? "none" : "none yet") : `${passed} of ${copies} passed`,
-      signaturesOk: copies === 0 ? null : passed === copies,
+      signatures: expected === 0 ? (view.settled ? "none" : "none yet") : `${verified} of ${expected}`,
+      // A check only when every expected event arrived verified; a cross when one arrived unverified.
+      signaturesOk: expected === 0 ? null : verified === expected ? true : arrived > verified ? false : null,
     },
     cards: finalCards,
     other,
     notes,
     view,
   };
+}
+
+/** Every copy the store recorded passed PayPal's signature check. */
+const isVerified = (r: Reply) => r.arrived && r.copies > 0 && r.verified === r.copies;
+
+/** A step the console ties a PayPal event to, whether or not it has arrived yet. */
+export const expectsReply = (c: StepCard) => c.replies.length > 0 || c.reply === "not-yet" || c.reply === "waiting";
+
+/** The event a queued step will wait for, by its kind, for the proof strip. */
+const KIND_SHORT: Readonly<Record<string, string>> = {
+  card_order: "Payment",
+  refund: "Refund",
+  open_dispute: "Dispute",
+  invoice_create: "Invoice",
+  invoice_record_payment: "Invoice paid",
+  resend_webhook: "Resend",
+};
+
+/** The page's headline for one class and verdict, where a plain sentence says it better than the class title. */
+const CLASS_HEADLINES: Readonly<Record<string, { readonly bug: string; readonly ok: string }>> = {
+  "duplicate-webhook": {
+    bug: "one payment event was fulfilled twice.",
+    ok: "the payment was fulfilled once, and PayPal's redelivery was recognized as a repeat and ignored.",
+  },
+};
+
+const sentence = (t: string) => {
+  const s = t.trim();
+  return s === "" ? s : `${s.charAt(0).toUpperCase()}${s.slice(1)}${/[.!?]$/.test(s) ? "" : "."}`;
+};
+
+/** The finder's answer, worded for the hero. INCONCLUSIVE always carries its reason. */
+export function verdictHero(f: LiveView["finding"]): VerdictHero | null {
+  if (f === null) return null;
+  if (f.verdict === "inconclusive") return { kind: "inconclusive", headline: "INCONCLUSIVE: not enough evidence to call it.", lead: sentence(f.actual === "" ? "the run did not record why" : f.actual) };
+  const known = CLASS_HEADLINES[f.classId];
+  const title = f.title === "" ? "this check" : f.title.charAt(0).toLowerCase() + f.title.slice(1);
+  // Unnamed classes get a neutral line: some read PayPal's own record, not the store, so none may credit the store.
+  const said = f.verdict === "bug" ? (known?.bug ?? `the check failed: ${title}.`) : (known?.ok ?? `the expected outcome was observed: ${title}.`);
+  return { kind: f.verdict, headline: `${f.verdict === "bug" ? "BUG" : "OK"}: ${said}`, lead: sentence(f.actual) };
 }
 
 const SENT_WORDS: Record<SentState, string> = {
@@ -609,5 +689,5 @@ const SENT_WORDS: Record<SentState, string> = {
   refused: "PayPal refused",
   "not-sent": "Not sent",
   unknown: "Outcome unknown",
-  "never-confirmed": "Never confirmed",
+  "never-confirmed": "Outcome never recorded",
 };

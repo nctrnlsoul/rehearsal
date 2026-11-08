@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS } from "../lib/gate";
@@ -59,7 +59,7 @@ describe("webhook claim", () => {
   // account's events to every webhook registered on it, the store's included.
   it("never says a plan without a webhook stops deliveries, in the engine's dry run or on /build", () => {
     const line = "none declared by this plan; PayPal still delivers this account's events to every webhook registered on it";
-    for (const [name, text] of [["src/executor/dryRun.ts", read("src", "executor", "dryRun.ts")], ["build/page.tsx", read("console", "app", "build", "page.tsx")]] as const) {
+    for (const [name, text] of [["src/executor/dryRun.ts", read("src", "executor", "dryRun.ts")], ["build/page.tsx", read("console", "app", "build", "page.tsx")], ["lib/planView.ts", read("console", "lib", "planView.ts")]] as const) {
       expect(text, name).toContain(line);
       expect(text, name).not.toMatch(/no events will be delivered|so no webhook will be registered"/);
     }
@@ -143,5 +143,52 @@ describe("trust panel figures", () => {
       expect(trust, literal).not.toContain(literal);
     }
     expect(trust).toContain("the reports are in the repo under evidence/");
+  });
+});
+
+// v0.7.3 (audit 2026-11-07 evening): one vocabulary on every run surface.
+// Accepted is PayPal taking the API call, Arrived is the webhook reaching the
+// store, Verified is its signature passing PayPal's check.
+describe("run vocabulary and v0.7.3 wording", () => {
+  // Every page and component a judge can open, plus the two libraries that write the run's sentences.
+  const walk = (dir: string): string[] =>
+    readdirSync(join(ROOT, "console", dir), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : /\.tsx$/.test(e.name) ? [join(dir, e.name)] : []));
+  const surfaces = [...walk("app"), ...walk("components"), "lib/runStory.ts", "lib/nowPanel.ts"].map((p) => [p, read("console", ...p.split(/[\\/]/))] as const);
+
+  it("never says confirmed, passed, replied or that no step causes an event", () => {
+    for (const [name, text] of surfaces) {
+      expect(text, name).not.toMatch(/PayPal confirmed|PayPal replied|Replied in|reply comes|no reply yet|signatures? passed|copies passed|no step causes|Slowest reply|PayPal(&apos;|')s reply (fill|land)|Never confirmed/);
+    }
+    expect(surfaces.length).toBeGreaterThan(15);
+  });
+
+  it("says a latency as Arrived Ns after the call", () => {
+    expect(read("console", "components", "RunView.tsx")).toContain("`Arrived ${r.exact ? \"\" : \"at most \"}${dur(r.latencyS!)} after the call`");
+  });
+
+  it("words the finder story as reproducing the classic bug, never as catching a real one", () => {
+    const line = "reproduces the classic duplicate-delivery bug with PayPal&apos;s real redelivery, then proves the one-line fix";
+    expect(read("console", "app", "finder", "page.tsx")).toContain(line);
+    for (const page of ["page.tsx", "finder/page.tsx"]) expect(read("console", "app", ...page.split("/")), page).not.toMatch(/caught a real bug|the bug it found/);
+    expect(read("README.md")).not.toMatch(/caught a real bug|the bug it found/);
+  });
+
+  it("shows only hosted caps on /build, which leads to a hosted run", () => {
+    const build = read("console", "app", "build", "page.tsx");
+    expect(build).not.toContain("PLAN_CAPS");
+    for (const c of ["HOSTED_CAPS.maxTotalMinor", "HOSTED_CAPS.maxStepAmountMinor", "HOSTED_CAPS.maxSteps", "HOSTED_CAPS.maxDisputes"]) expect(build).toContain(c);
+  });
+
+  it("keeps the dry run's waves and digest out of the plan a person reads", () => {
+    const view = read("console", "lib", "planView.ts");
+    // In a string the page shows, not in the comment that explains why they are left out.
+    expect(view).not.toMatch(/["`][^"`\n]*\bwaves?\b|\$\{s\.kind\}/);
+    const builder = read("console", "components", "LiveBuilder.tsx");
+    expect(builder).toContain("Plan fingerprint");
+    expect(builder).not.toMatch(/<dt>Digest<\/dt>/);
+  });
+
+  it("drops the timing claim no recorded run backs", () => {
+    expect(trust).not.toContain("more than 2 min");
   });
 });

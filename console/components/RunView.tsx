@@ -16,15 +16,7 @@ import { NowPanelBox } from "./NowPanel";
  * place to land; once it settles, every step opens to its full card.
  */
 
-export type Finding = {
-  readonly classId: string;
-  readonly verdict: "bug" | "ok" | "inconclusive";
-  readonly title: string;
-  readonly expected: string;
-  readonly actual: string;
-  readonly likelyFix: string;
-  readonly skipped: string | null;
-};
+type Finding = NonNullable<RunStory["view"]["finding"]>;
 
 type Props = {
   readonly story: RunStory;
@@ -32,8 +24,6 @@ type Props = {
   readonly runId: string;
   readonly mode: "live" | "replay";
   readonly controls?: React.ReactNode;
-  readonly finding?: Finding | null;
-  readonly verdictLine?: { readonly kind: "ok" | "bug"; readonly text: string } | null;
   readonly aside?: React.ReactNode;
 };
 
@@ -45,8 +35,18 @@ const TONE_BADGE: Record<RunStory["tone"], { kind: MarkKind; word: (s: RunStory)
   stopped: { kind: "bug", word: () => "Stopped" },
 };
 
-export function RunView({ story, name, runId, mode, controls, finding, verdictLine, aside }: Props) {
-  const tb = TONE_BADGE[story.tone];
+/** A finder verdict leads with its own word and color; INCONCLUSIVE is amber, never green. */
+const VERDICT_BADGE: Record<NonNullable<RunStory["verdict"]>["kind"], { kind: MarkKind; word: string }> = {
+  bug: { kind: "bug", word: "BUG" },
+  ok: { kind: "ok", word: "OK" },
+  inconclusive: { kind: "wait", word: "INCONCLUSIVE" },
+};
+
+export function RunView({ story, name, runId, mode, controls, aside }: Props) {
+  const verdict = story.verdict;
+  const tb = verdict === null ? { kind: TONE_BADGE[story.tone].kind, text: TONE_BADGE[story.tone].word(story) } : { kind: VERDICT_BADGE[verdict.kind].kind, text: VERDICT_BADGE[verdict.kind].word };
+  const finding = story.view.finding;
+  const lead = verdict === null ? story.lead : verdict.lead;
   return (
     <div className={`run tone-${story.tone} mode-${mode}${story.settled ? "" : " is-running"}`}>
       <section className="hero run-hero" aria-labelledby="run-h">
@@ -55,10 +55,17 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
             <p className="eyebrow">
               <b>{name}</b>
               <span>Run <span className="mono">{runId}</span></span>
-              <span className={`hero-badge ${tb.kind}`}><Icon name={tb.kind === "ok" ? "check" : tb.kind === "bug" ? "cross" : tb.kind === "wait" ? "clock" : "dash"} />{tb.word(story)}</span>
+              <span className={`hero-badge ${tb.kind}`}><Icon name={tb.kind === "ok" ? "check" : tb.kind === "bug" ? "cross" : tb.kind === "wait" ? "clock" : "dash"} />{tb.text}</span>
             </p>
-            <h1 id="run-h">{story.headline}</h1>
-            {story.lead !== null && <p className="lead">{story.lead}</p>}
+            {verdict === null ? (
+              <h1 id="run-h">{story.headline}</h1>
+            ) : (
+              <h1 id="run-h" className="verdict-head">
+                <span className={`verdict-word ${verdict.kind}`}>{verdict.headline.slice(0, verdict.headline.indexOf(":") + 1)}</span>
+                {verdict.headline.slice(verdict.headline.indexOf(":") + 1)}
+              </h1>
+            )}
+            {lead !== null && <p className="lead">{lead}</p>}
             {controls}
           </div>
           <ProofPanel story={story} />
@@ -71,9 +78,9 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
         <dl className="card figures" aria-label="Summary">
           <div><dt>Steps</dt><dd>{story.figures.steps}</dd></div>
           <div><dt>Amount in calls</dt><dd><span>{story.figures.amount}{story.figures.amountNote !== null && <small>{story.figures.amountNote}</small>}</span></dd></div>
-          <div><dt>Slowest reply</dt><dd>{story.figures.slowest}</dd></div>
+          <div><dt>Slowest arrival</dt><dd>{story.figures.slowest}</dd></div>
           <div>
-            <dt>Signatures</dt>
+            <dt>Verified</dt>
             <dd>
               {story.figures.signaturesOk === true && <Icon name="check" className="icon ok-fill" />}
               {story.figures.signaturesOk === false && <Icon name="cross" className="icon bug-fill" />}
@@ -81,6 +88,8 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
             </dd>
           </div>
         </dl>
+
+        {story.rejected !== null && <p className="note rejected">{story.rejected}</p>}
 
         {story.notes.length > 0 && (
           <div className="notes" role="status">
@@ -90,20 +99,20 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
 
         <div className="section-head">
           <h2 id="steps-h">Steps</h2>
-          <p>What Rehearsal sent, and what PayPal replied</p>
+          <p>What Rehearsal sent, and what arrived back</p>
         </div>
         {story.cards.length === 0 ? (
           <p className="note">{story.settled ? "No step ran." : "No step has started yet."}</p>
         ) : (
           <ol className={`steps${story.settled ? "" : " running"}`} aria-labelledby="steps-h">
-            {story.cards.map((c) => (story.settled ? <Step key={c.id} card={c} mode={mode} settled /> : <LineStep key={c.id} card={c} mode={mode} />))}
+            {story.cards.map((c) => (story.settled ? <Step key={c.id} card={c} mode={mode} settled heroLead={lead} /> : <LineStep key={c.id} card={c} mode={mode} heroLead={lead} />))}
           </ol>
         )}
 
         {story.other.length > 0 && (
           <section className="other" aria-labelledby="other-h">
             <h2 id="other-h">Other events PayPal sent</h2>
-            <p className="note">Recorded by the store while this run was going. No step here is known to cause them, so none is tied to a step; where one carries the id of something a step made, that is named. Never matched by guess.</p>
+            <p className="note">Recorded by the store while this run was going, and not tied to a step by this console. Where one carries the id of something a step made, that is named. Never matched by guess.</p>
             <ul className="card">
               {story.other.map((o) => (
                 <li key={o.eventId}>
@@ -119,13 +128,7 @@ export function RunView({ story, name, runId, mode, controls, finding, verdictLi
           </section>
         )}
 
-        {verdictLine !== undefined && verdictLine !== null && (
-          <section className="card verdict-card" aria-labelledby="verdict-h">
-            <h2 id="verdict-h">Finder verdict</h2>
-            <p><Badge kind={verdictLine.kind}>{verdictLine.kind === "bug" ? "BUG" : "OK"}</Badge> {verdictLine.text}</p>
-          </section>
-        )}
-        {finding !== undefined && finding !== null && <FindingCard finding={finding} />}
+        {finding !== null && <FindingCard finding={finding} />}
         {aside}
       </div>
     </div>
@@ -156,13 +159,14 @@ function ProofPanel({ story }: { story: RunStory }) {
           {story.proof.map((p) => (
             <li key={p.key} className={p.arrived ? "in" : "out"}>
               <span className="node" aria-hidden="true">{p.arrived ? <Icon name="check" /> : <Icon name="clock" />}</span>
-              <span className="node-label">{p.label}</span>
-              <span className="node-meta">{p.arrived ? (p.early ? "during the step" : p.latencyS === null ? "arrived" : `${p.exact ? "" : "at most "}${dur(p.latencyS)}`) : story.settled ? "not seen" : "waiting"}</span>
+              <span className="node-label">{p.step === null ? p.label : `Step ${p.step}, ${p.label.toLowerCase()}`}</span>
+              <span className="node-meta">{p.arrived ? (p.early ? "during its step" : p.latencyS === null ? "arrived" : `${p.exact ? "" : "at most "}${dur(p.latencyS)} after its call`) : story.settled ? "not seen" : "waiting"}</span>
             </li>
           ))}
         </ol>
       )}
       <p className="proof-line">{story.proofLine}</p>
+      {story.outOfOrder !== null && <p className="proof-line proof-order">{story.outOfOrder}</p>}
     </aside>
   );
 }
@@ -172,7 +176,7 @@ function railOf(c: StepCard): { cls: string; icon: "check" | "cross" | "clock" |
   if (c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed") return { cls: "bug", icon: "cross", word: c.sentWord };
   if (c.current) return { cls: "now", icon: "dot", word: "In progress" };
   if (c.sent === "accepted" && (c.reply === "delivered" || c.reply === "none-expected")) return { cls: c.reply === "delivered" ? "ok" : "ok-quiet", icon: "check", word: "Done" };
-  if (c.sent === "accepted" && c.reply === "not-seen") return { cls: "quiet", icon: "dash", word: "Reply not seen" };
+  if (c.sent === "accepted" && c.reply === "not-seen") return { cls: "quiet", icon: "dash", word: "Webhook not seen" };
   if (c.sent === "accepted") return { cls: "now", icon: "clock", word: "Waiting" };
   return { cls: "quiet", icon: "dash", word: "Not started" };
 }
@@ -187,17 +191,20 @@ function linePill(c: StepCard): { cls: string; icon: "check" | "cross" | "clock"
     const timed = c.replies.filter((r) => r.latencyS !== null);
     if (timed.length === 0) return { cls: "ok", icon: "check", text: "Arrived during the step" };
     const slowest = timed.reduce((a, b) => (b.latencyS! > a.latencyS! ? b : a));
-    return { cls: "ok", icon: "check", text: `Replied in ${dur(slowest.latencyS!)}${slowest.exact ? "" : " at most"}` };
+    return { cls: "ok", icon: "check", text: arrivedAfter(slowest) };
   }
   if (c.reply === "waiting" || c.reply === "not-yet") return { cls: "wait", icon: "clock", text: `${dur(c.waitingS ?? 0)} so far` };
   if (c.reply === "not-seen") return { cls: "quiet", icon: "dash", text: "Not seen" };
   return { cls: "quiet", icon: "dash", text: "No event expected" };
 }
 
+/** "Arrived 12s after the call": the one way a latency is said, on the row, the card and the pill. */
+const arrivedAfter = (r: Reply) => `Arrived ${r.exact ? "" : "at most "}${dur(r.latencyS!)} after the call`;
+
 /** While a run is live: one line per step. A click opens the full card; it stays open until closed. */
-function LineStep({ card: c, mode }: { card: StepCard; mode: "live" | "replay" }) {
+function LineStep({ card: c, mode, heroLead }: { card: StepCard; mode: "live" | "replay"; heroLead: string | null }) {
   const [open, setOpen] = useState(false);
-  if (open) return <Step card={c} mode={mode} settled={false} onClose={() => setOpen(false)} />;
+  if (open) return <Step card={c} mode={mode} settled={false} heroLead={heroLead} onClose={() => setOpen(false)} />;
   const rail = railOf(c);
   const pill = linePill(c);
   return (
@@ -217,7 +224,7 @@ function LineStep({ card: c, mode }: { card: StepCard; mode: "live" | "replay" }
   );
 }
 
-function Step({ card: c, mode, settled, onClose }: { card: StepCard; mode: "live" | "replay"; settled: boolean; onClose?: () => void }) {
+function Step({ card: c, mode, settled, heroLead, onClose }: { card: StepCard; mode: "live" | "replay"; settled: boolean; heroLead: string | null; onClose?: () => void }) {
   const rail = railOf(c);
   const compact = c.sent === "not-run" || (c.reply === "none-expected" && (c.sent === "accepted" || c.sent === "queued"));
   const failed = c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed";
@@ -251,7 +258,8 @@ function Step({ card: c, mode, settled, onClose }: { card: StepCard; mode: "live
             </div>
           </div>
         )}
-        {failed && c.problem !== null && <p className="problem"><Icon name="cross" className="icon bug-fill" />{c.problem}</p>}
+        {/* The hero already gives this reason when it is the one that stopped the run, so it is said once. */}
+        {failed && c.problem !== null && !(heroLead ?? "").includes(c.problem) && <p className="problem"><Icon name="cross" className="icon bug-fill" />{c.problem}</p>}
         <details className="details">
           <summary>
             <span className="foot-note">{c.reply === "waiting" && !failed ? (mode === "live" ? "It shows here the moment the store records it. The run listens for 90 s after its last step." : "Shown on the run's recorded clock.") : ""}</span>
@@ -294,7 +302,7 @@ function Middle({ card: c }: { card: StepCard }) {
     const ranks = c.replies.flatMap((r) => (r.rank === null ? [] : [r.rank]));
     return (
       <div className="mid done">
-        <span className="pill"><Icon name="clock" />Replied in {dur(slowest.latencyS!)}{slowest.exact ? "" : " at most"}</span>
+        <span className="pill"><Icon name="clock" />{arrivedAfter(slowest)}</span>
         <span className="conn" aria-hidden="true" />
         <span className="mid-note">{ranks.length === 1 ? arrivalWord(ranks[0]!) : `${ranks.map((r) => arrivalWord(r).replace(" to arrive", "")).join(" and ")} to arrive`}</span>
       </div>
@@ -305,7 +313,7 @@ function Middle({ card: c }: { card: StepCard }) {
       <div className="mid waiting">
         <span className="pill wait"><Icon name="clock" />{dur(c.waitingS ?? 0)} so far</span>
         <span className="conn dashed" aria-hidden="true" />
-        <span className="mid-note">no reply yet</span>
+        <span className="mid-note">not arrived yet</span>
       </div>
     );
   }
@@ -323,7 +331,7 @@ function Middle({ card: c }: { card: StepCard }) {
       <div className="mid waiting">
         <span className="pill quiet"><Icon name="arrow" />Calling PayPal</span>
         <span className="conn dashed quiet" aria-hidden="true" />
-        <span className="mid-note">reply comes after PayPal accepts</span>
+        <span className="mid-note">the webhook comes after PayPal accepts</span>
       </div>
     );
   }
@@ -339,7 +347,7 @@ function Back({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
   if (failed) {
     return (
       <>
-        <p className="back-label">PayPal reply</p>
+        <p className="back-label">Webhook</p>
         <p className="back-title">{c.sent === "not-sent" ? "Nothing to wait for" : c.sent === "refused" ? "No event tied to this step" : "Unknown"}</p>
         {c.sent === "refused" && <p className="reply-meta">If PayPal sends one anyway, it is listed under Other events PayPal sent.</p>}
       </>
@@ -348,7 +356,7 @@ function Back({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
   if (c.sent === "queued" || c.sent === "sending") {
     return (
       <>
-        <p className="back-label">PayPal reply</p>
+        <p className="back-label">Webhook</p>
         <p className="back-title quiet">{c.sent === "queued" ? (settled ? "Never sent" : "Not sent yet") : "Waiting for PayPal to accept"}</p>
       </>
     );
@@ -357,7 +365,7 @@ function Back({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
   const pending = c.replies.filter((r) => !r.arrived);
   return (
     <>
-      <p className="back-label">{arrived.length > 0 ? "PayPal replied" : "PayPal reply"}</p>
+      <p className="back-label">{arrived.length > 0 ? "Arrived" : "Webhook"}</p>
       <ul className="replies">
         {arrived.map((r) => <ReplyLine key={r.key} r={r} many={c.replies.length > 1} />)}
         {(pending.length > 0 || (c.reply === "not-yet" && arrived.length === 0)) && (
@@ -416,7 +424,7 @@ function Details({ card: c }: { card: StepCard }) {
           <dt>Event type</dt><dd className="mono">{r.eventType}{r.redelivery ? " (second delivery)" : ""}</dd>
           {r.eventId !== null && <IdRow name="Event id" value={r.eventId} />}
           <dt>Received</dt><dd className="mono">{r.arrived ? utc(r.receivedAt) : "not yet"}</dd>
-          <dt>Signature check</dt><dd>{r.arrived ? (r.verified === r.copies ? `passed: PayPal's verify call said SUCCESS (${r.copies} of ${r.copies} ${r.copies === 1 ? "copy" : "copies"})` : `${r.verified} of ${r.copies} copies passed`) : "not yet"}</dd>
+          <dt>Signature check</dt><dd>{r.arrived ? (r.verified === r.copies ? `verified: PayPal's verify call said SUCCESS (${r.copies} of ${r.copies} ${r.copies === 1 ? "copy" : "copies"})` : `${r.verified} of ${r.copies} copies verified`) : "not yet"}</dd>
           <dt>Store action</dt><dd className="mono">{r.store ?? "not yet"}</dd>
           <dt>Latency</dt><dd>{r.early ? "the store recorded it before the step finished, while the step was still checking with PayPal" : r.latencyS === null ? "not yet" : r.exact ? `${dur(r.latencyS)}, from the step finishing to the store recording the event` : `at most ${dur(r.latencyS)}: seen when the console read the store`}</dd>
         </dl>
@@ -457,19 +465,21 @@ function IdRow({ name, value }: { name: string; value: string }) {
 
 /** The finder's verdict as the lab report gives it: a badge and a word, then the evidence. */
 function FindingCard({ finding }: { finding: Finding }) {
-  const kind = finding.verdict === "bug" ? "bug" : finding.verdict === "ok" ? "ok" : "stop";
+  // The same amber as the hero's INCONCLUSIVE.
+  const kind = finding.verdict === "bug" ? "bug" : finding.verdict === "ok" ? "ok" : "wait";
   const word = finding.verdict === "bug" ? "BUG" : finding.verdict === "ok" ? "OK" : "INCONCLUSIVE";
   return (
     <section className="card verdict-card finding" aria-labelledby="finding-h">
       <h2 id="finding-h">Finder verdict <span className="mono">{finding.classId}</span></h2>
-      <p className="verdict-line"><Badge kind={kind}>{word}</Badge> {finding.title}</p>
+      {/* The class title names what is checked, so it reads as the check, never as what happened. */}
+      <p className="verdict-line"><Badge kind={kind}>{word}</Badge> Check: {finding.title}</p>
       <dl className="dl">
         <dt>Expected</dt><dd>{finding.expected}</dd>
         <dt>Observed</dt><dd>{finding.actual}</dd>
         <dt>Likely fix</dt><dd>{finding.likelyFix}</dd>
         {finding.skipped !== null && <><dt>Not run</dt><dd>{finding.skipped}</dd></>}
       </dl>
-      <p className="note">The verdict comes from the store&apos;s own records of this run&apos;s events. With no such record it says INCONCLUSIVE, never OK.</p>
+      <p className="note">The verdict comes from the store&apos;s verified records of this run&apos;s events, or from PayPal&apos;s own read-back, depending on the check. With no such record it says INCONCLUSIVE, never OK.</p>
     </section>
   );
 }

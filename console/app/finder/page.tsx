@@ -19,8 +19,11 @@ const CHECKS: readonly Check[] = [
 ];
 
 function Flag({ f }: { f: "high" | "low" | null }) {
-  return f === null ? <Mark kind="ok">in range</Mark> : <Mark kind="bug">{f === "high" ? "high, a bug" : "low"}</Mark>;
+  return f === null ? <Mark kind="ok">in range</Mark> : <Mark kind="bug">{f === "high" ? "too high" : "too low"}</Mark>;
 }
+
+/** What the store did with a delivery, in plain words; the raw action stays in the run's Details. */
+const STORE_ACTION: Readonly<Record<string, string>> = { fulfilled: "fulfilled", duplicate_ignored: "recognized as a repeat and ignored" };
 
 function Evidence({ run, side, label }: { run: ReplayRun; side: Side; label: string }) {
   const order0 = run.calls.find((c) => c.kind === "card_order");
@@ -31,20 +34,20 @@ function Evidence({ run, side, label }: { run: ReplayRun; side: Side; label: str
         <dl>
           {order0 !== undefined && (
             <>
-              <dt>order</dt><dd>{order0.ids["order"]}</dd>
-              <dt>capture</dt><dd>{order0.ids["capture"]} · {order0.what}</dd>
+              <dt>Order</dt><dd>{order0.ids["order"]}</dd>
+              <dt>Capture</dt><dd>{order0.ids["capture"]} · {order0.what}</dd>
             </>
           )}
-          <dt>event</dt><dd>{run.deliveries[0]?.eventId}</dd>
-          <dt>report</dt><dd>{side.report}</dd>
+          <dt>Event</dt><dd>{run.deliveries[0]?.eventId}</dd>
+          <dt>Report</dt><dd>{side.report}</dd>
         </dl>
         <ol className="rows" aria-label="Store rows for this event">
           {run.deliveries.map((d) => (
             <li key={d.at}>
               <span className="t">{utcTime(d.at)}</span>
               <span>
-                <span className={`act${d.store === "fulfilled" && d.repeat ? " twice" : ""}`}>{d.store === "fulfilled" && d.repeat ? "fulfilled again" : d.store}</span>
-                <span className="proof">{d.verified ? " · verified" : " · not verified"}{d.certHost !== null ? ` · cert host ${d.certHost}` : ""}</span>
+                <span className={`act${d.store === "fulfilled" && d.repeat ? " twice" : ""}`}>{d.store === "fulfilled" && d.repeat ? "fulfilled again" : (STORE_ACTION[d.store] ?? d.store)}</span>
+                <span className="proof">{d.verified ? " · verified" : " · not verified"}{d.certHost !== null ? ` · signing certificate from ${d.certHost}` : ""}</span>
               </span>
             </li>
           ))}
@@ -68,7 +71,7 @@ export default function FinderPage() {
       <section className="hero" aria-labelledby="finder-h">
         <div className="wrap">
           <p className="eyebrow">Finder report · {FINDER.classId}</p>
-          <h1 id="finder-h">The finder caught a real bug in the sample store, then proved the one-line fix.</h1>
+          <h1 id="finder-h">The finder reproduces the classic duplicate-delivery bug with PayPal&apos;s real redelivery, then proves the one-line fix.</h1>
           <p className="lead">Same scenario, same check, run before and after the change. Each verdict rests on the store&apos;s own rows, not on the absence of an error.</p>
         </div>
       </section>
@@ -90,7 +93,7 @@ export default function FinderPage() {
       </section>
 
       <section className="card report arrive" style={order(2)} id="report" aria-labelledby="cls-h">
-        <h2>Lab report</h2>
+        <h2>Report</h2>
         <p className="cls" id="cls-h">{FINDER.title} <span className="mono">{FINDER.classId} · {FINDER.eventType}</span></p>
         <div className="table-wrap"><table className="lab">
           <thead>
@@ -140,7 +143,7 @@ export default function FinderPage() {
       </section>
 
       <div className="actions">
-        <Link className="btn btn-primary" href="/live">Run duplicate-webhook again</Link>
+        <Link className="btn btn-primary" href="/live">Run this check again</Link>
         <span className="note">A live finder run needs the judge passcode, at /live. These two runs took about 70 seconds and 2 minutes, mostly waiting on PayPal&apos;s redelivery.</span>
       </div>
       </div>

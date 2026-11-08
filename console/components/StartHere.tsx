@@ -7,7 +7,7 @@ export function StartStrip({ current }: { current?: 1 | 2 | 3 }) {
   const steps = [
     { n: 1, title: "Pick a plan", body: "A recorded plan, or describe a business and let the planner write one." },
     { n: 2, title: "Read exactly what it will do", body: "A dry run lists every call and amount before anything is sent." },
-    { n: 3, title: "Run it live in the sandbox", body: "Watch each call and PayPal's reply land side by side." },
+    { n: 3, title: "Run it live in the sandbox", body: "Watch each call and the webhook PayPal sends for it arrive side by side." },
   ] as const;
   return (
     <section className="start" aria-labelledby="start-h">

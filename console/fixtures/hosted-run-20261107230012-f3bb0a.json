@@ -1,5 +1,5 @@
 {
-  "source": "Exported unchanged from the rehearsal-console database (console_runs + console_run_events) by the cloud chat on 2026-11-07. A real hosted live run of the recorded Tiny Bakery plan on rehearsal-indol.vercel.app (v0.7.0). Session and IP hashes are not exported.",
+  "source": "Exported unchanged from the rehearsal-console database (console_runs + console_run_events) by the author on 2026-11-07. A real hosted live run of the recorded Tiny Bakery plan on rehearsal-indol.vercel.app (v0.7.0). Session and IP hashes are not exported.",
   "run": {
     "id": "20261107230012-f3bb0a",
     "kind": "scenario",
