@@ -10,6 +10,10 @@
 .hero-badge.wait { color: var(--hero-wait); }
 .hero-badge.bug { color: #ffb4ad; }
 .hero-badge.stop { color: var(--on-hero-2); }
+/* A finder verdict's word carries the hero badge's own colors: red BUG, green OK, amber INCONCLUSIVE. */
+.verdict-word.bug { color: #ffb4ad; }
+.verdict-word.ok { color: var(--hero-ok); }
+.verdict-word.inconclusive { color: var(--hero-wait); }
 .run-hero h1 { max-width: 18ch; }
 .run-hero .lead { max-width: 46ch; }
 
@@ -98,6 +102,8 @@
 .nodes li.out .node-label, .nodes li.out .node-meta { color: var(--hero-wait); }
 .node-meta { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--on-hero-2); }
 .proof-line { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.1); font-size: 14px; color: var(--on-hero); }
+.proof-line.proof-order { margin-top: 8px; padding-top: 0; border-top: 0; color: var(--hero-wait); }
+.rejected { margin-top: 12px; }
 
 .ok-fill { color: var(--ok); }
 .bug-fill { color: var(--bug); }
@@ -258,6 +264,8 @@
   .problem { margin: 0 16px 12px; }
 
   .now-panel { --np-h: 252px; padding: 16px 16px 18px; gap: 12px; }
+  /* Once the run has settled nothing below can move, so the finished panel fits its sentence instead of standing mostly empty. */
+  .now-panel.now-final:not(.sticky) { height: auto; }
   .now-webhooks .np-eyebrow { display: none; }
   .now-panel.sticky { top: 8px; }
   .np-label { font-size: 13px; }

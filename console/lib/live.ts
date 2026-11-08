@@ -17,6 +17,7 @@ export { DESCRIPTION_MAX_CHARS };
 
 export { HOSTED_FINDER_CLASSES };
 import { PLANS } from "./replays";
+import { type PlanView, planView } from "./planView";
 
 /**
  * The live routes (Stage B), each a function of its dependencies so every
@@ -189,6 +190,8 @@ type DryRun = {
   readonly sha256: string | null;
   readonly budgetS: number | null;
   readonly lines: readonly string[];
+  /** The plan as numbered steps and totals, for the page; lines stay for Details. */
+  readonly plan: PlanView | null;
   readonly errors: readonly string[];
   readonly bank: { readonly needed: number; readonly available: number; readonly short: boolean };
 };
@@ -202,6 +205,7 @@ async function dryRunOf(plan: LoadedPlan, config: HostedConfig, db: ConsoleDb): 
       sha256: null,
       budgetS: null,
       lines: [],
+      plan: null,
       errors: g.errors.map((e) => cleanModelText(e, 300)).slice(0, 20),
       bank: { needed: 0, available: 0, short: false },
       scenario: null,
@@ -214,6 +218,7 @@ async function dryRunOf(plan: LoadedPlan, config: HostedConfig, db: ConsoleDb): 
     sha256: scenarioDigest(g.scenario),
     budgetS: g.budgetS,
     lines: dryRunLines(g.scenario),
+    plan: planView(g.scenario),
     errors: [],
     bank: { needed, available, short: needed > available },
     scenario: g.scenario,

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { LiveRead } from "../lib/liveView";
 import { RUNS } from "../lib/replays";
-import { type RunStory, dur, humanReason, money, runStory } from "../lib/runStory";
+import { HOSTED_REPLAYS, hostedEndS, hostedRead } from "../lib/hostedReplays";
+import { HOSTED_FINDER_CLASSES } from "../lib/hosted";
+import { type RunStory, dur, humanReason, money, runStory, verdictHero } from "../lib/runStory";
 import { type Fixture, TOKEN_REFUSED_DETAIL, absolute, recordedAt, tinyBakery, tokenRefused } from "./fixtures/liveRuns";
 
 const T0 = Date.parse("2026-11-07T20:39:53Z");
@@ -57,9 +59,9 @@ describe("the live state sequence, on a Tiny Bakery run", () => {
 
     const later = story(tinyBakery(20), 20);
     expect(later.cards[0]!.reply).toBe("delivered");
-    expect(later.cards[0]!.replies[0]!).toMatchObject({ plain: "PayPal confirmed: payment completed", rank: 1, exact: true });
+    expect(later.cards[0]!.replies[0]!).toMatchObject({ plain: "Payment completed", rank: 1, exact: true });
     expect(Math.round(later.cards[0]!.replies[0]!.latencyS!)).toBe(12);
-    expect(later.cards[2]!.replies[0]!).toMatchObject({ plain: "PayPal confirmed: invoice created", rank: 2 });
+    expect(later.cards[2]!.replies[0]!).toMatchObject({ plain: "Invoice created", rank: 2 });
     expect(later.cards[1]!.reply).toBe("waiting");
     expect(Math.round(later.cards[1]!.waitingS!)).toBe(16);
   });
@@ -68,16 +70,20 @@ describe("the live state sequence, on a Tiny Bakery run", () => {
     const s = story(tinyBakery(22), 22);
     expect(s.tone).toBe("waiting");
     expect(s.headline).toBe("All 5 steps sent.");
-    expect(s.lead).toBe("Waiting on PayPal for 2 events. 2 of 4 confirmed so far.");
+    expect(s.lead).toBe("Waiting on PayPal for 2 events. 2 of 4 arrived so far.");
     expect(everything(s)).not.toMatch(/Every step has run/);
   });
 
   it("ends with the answer first, the proof in arrival order, and the unjoined event listed apart", () => {
     const s = story(tinyBakery(40), 40);
     expect(s.headline).toBe("All 5 steps done.");
-    expect(s.lead).toBe("PayPal confirmed 4 of 4 events, every signature verified.");
-    expect(s.proof.map((p) => `${p.label} ${dur(p.latencyS!)}`)).toEqual(["Payment 12s", "Invoice 12s", "Payment 20s", "Paid 16s"]);
-    expect(s.figures).toEqual({ steps: "5 of 5", amount: "USD 345", amountNote: null, slowest: "20s", signatures: "5 of 5 passed", signaturesOk: true });
+    expect(s.lead).toBe("4 of 4 expected events arrived, all verified.");
+    expect(s.proof.map((p) => `Step ${p.step}, ${p.label} ${dur(p.latencyS!)}`)).toEqual(["Step 1, Payment 12s", "Step 3, Invoice 12s", "Step 2, Payment 20s", "Step 5, Invoice paid 16s"]);
+    // Step 3's invoice event beat step 2's payment, so the page says so in one sentence.
+    expect(s.outOfOrder).toBe("Step 3's webhook arrived before step 2's. PayPal does not deliver webhooks in order; your app has to handle that.");
+    expect(s.figures).toEqual({ steps: "5 of 5", amount: "USD 345", amountNote: null, slowest: "20s", signatures: "4 of 4", signaturesOk: true });
+    expect(s.counts).toEqual({ expected: 4, arrived: 4, verified: 4 });
+    expect(s.rejected).toBeNull();
     expect(s.cards[3]!.reply).toBe("none-expected");
     expect(s.other).toHaveLength(1);
     expect(s.other[0]!).toMatchObject({ eventType: "INVOICING.INVOICE.UPDATED", plain: "PayPal says the invoice changed" });
@@ -169,12 +175,23 @@ describe("claims the data cannot back are never made", () => {
     expect(s.figures.amountNote).toBe("of USD 345 planned; one step's outcome is unknown");
   });
 
-  it("counts a copy the store refused, so it never says every signature verified past one", () => {
+  // Audit 2026-11-07 evening: anyone can post junk to the store's public
+  // webhook, so a refused post must never move PayPal's numbers.
+  it("keeps posts the store rejected apart, never adding them to PayPal's numbers", () => {
     const f = tinyBakery(40);
-    f.events.push({ s: 30, kind: "note", data: { refused_in_window: 1 } });
+    f.events.push({ s: 30, kind: "note", data: { refused_in_window: 3 } });
     const s = story(f, 41);
-    expect(s.figures).toMatchObject({ signatures: "5 of 6 passed", signaturesOk: false });
-    expect(s.lead).not.toMatch(/every signature/);
+    expect(s.figures).toMatchObject({ signatures: "4 of 4", signaturesOk: true });
+    expect(s.counts).toEqual({ expected: 4, arrived: 4, verified: 4 });
+    expect(s.lead).toBe("4 of 4 expected events arrived, all verified.");
+    expect(s.proofLine).toBe("4 of 4 arrived. All verified.");
+    expect(s.rejected).toBe("3 posts to the store were refused: malformed, or a signature that failed or could not be checked. None is counted as PayPal's.");
+  });
+
+  it("says nothing about order when every webhook arrived in step order", () => {
+    const s = runStory(hostedRead(HOSTED_REPLAYS[0]!, hostedEndS(HOSTED_REPLAYS[0]!)));
+    expect(s.outOfOrder).toBeNull();
+    expect(s.proof.map((p) => p.step)).toEqual([1, 2, 3, 5]);
   });
 
   it("says an event that landed while the step was still checking arrived during it, never 'in 0s'", () => {
@@ -199,5 +216,20 @@ describe("claims the data cannot back are never made", () => {
     const s = story(tokenRefused(), 3);
     expect(s.cards[0]!.title).toBe("Capture a card payment");
     expect(s.cards[2]!.title).toBe("Create an invoice");
+  });
+});
+
+// Found by the v0.7.3 verifier: two hosted classes read PayPal's own record,
+// so a headline that credits the store would be false for them.
+describe("the finder verdict hero, for every hosted class", () => {
+  it("leads with the verdict word and never credits the store for a class it does not decide", () => {
+    for (const id of HOSTED_FINDER_CLASSES) {
+      for (const verdict of ["bug", "ok", "inconclusive"] as const) {
+        const hero = verdictHero({ classId: id, verdict, title: "A test class title", expected: "", actual: "what was observed", likelyFix: "", skipped: null })!;
+        expect(hero.headline, `${id} ${verdict}`).toMatch(verdict === "bug" ? /^BUG: / : verdict === "ok" ? /^OK: / : /^INCONCLUSIVE: /);
+        if (id !== "duplicate-webhook") expect(hero.headline, `${id} ${verdict}`).not.toMatch(/store/);
+      }
+    }
+    expect(HOSTED_FINDER_CLASSES).toEqual(expect.arrayContaining(["duplicate-webhook", "overdue-invoice", "unclaimed-payout"]));
   });
 });

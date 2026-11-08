@@ -81,7 +81,6 @@ export function ReplayRun({ replay }: { replay: Replayed }) {
       runId={run.runId}
       mode="replay"
       controls={controls}
-      verdictLine={done ? { kind: run.verdict, text: run.verdictLine.replace(/^(BUG|OK): (.)/, (_m, _v, c: string) => c.toUpperCase()) } : null}
     />
   );
 }

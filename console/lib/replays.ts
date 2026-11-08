@@ -40,6 +40,8 @@ export type ReplayRun = {
   readonly startedAt: string;
   readonly verdict: "bug" | "ok";
   readonly verdictLine: string;
+  /** The finder's report for this run, copied from the evidence file it names (tests/replays.test.ts holds it to that file). */
+  readonly finding: { readonly classId: string; readonly verdict: "bug" | "ok"; readonly title: string; readonly expected: string; readonly actual: string; readonly likelyFix: string; readonly source: string };
   readonly sources: readonly string[];
   readonly calls: readonly ReplayCall[];
   readonly deliveries: readonly ReplayDelivery[];
@@ -141,11 +143,14 @@ export function replayRead(run: ReplayRun, tS: number): LiveRead {
       },
     });
   }
+  const finishedAt = new Date(t0 + end * 1000).toISOString();
+  // The finder writes its verdict as its last note, as a hosted finder run does.
+  const f = run.finding;
+  events.push({ at: finishedAt, kind: "note", step_id: null, data: { finding: { class_id: f.classId, verdict: f.verdict, title: f.title, expected: f.expected, actual: f.actual, likely_fix: f.likelyFix, skipped: null } } });
   const shown = events
     .filter((e) => at(e.at) <= tS + 1e-9)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     .map((e, i) => ({ ...e, seq: i + 1 }));
-  const finishedAt = new Date(t0 + end * 1000).toISOString();
   return {
     run: {
       id: run.runId,

@@ -5,6 +5,13 @@ scenario file and it builds that business for real in the PayPal sandbox: card
 orders, refunds, payouts, invoices, disputes, and real webhook events that
 verify. Then its edge-case finder checks how a merchant app handled them.
 
+A scenario run from the CLI or the MCP server fires at your own app: allow
+your app's https origin in `REHEARSAL_EVENT_ORIGINS`, point the scenario's
+`webhook.target` at `https://<your-app>/api/paypal/webhook` (the one handler
+path it accepts), and the run registers that webhook on your sandbox seller
+app, so PayPal itself delivers real, verifiable sandbox events to your handler.
+The hosted console fires only at the sample store, for safety.
+
 ## Judges start here
 
 - **Hosted console:** https://rehearsal-indol.vercel.app. Recorded replays of
@@ -13,8 +20,9 @@ verify. Then its edge-case finder checks how a merchant app handled them.
   2 hours in that browser.
 - **Video:** linked from the Devpost submission.
 - **Evidence:** [evidence/](evidence/) holds the finder's reports and the run
-  state from real sandbox runs, including the bug it found and the run after
-  the fix.
+  state from real sandbox runs, including the finder run that reproduces the
+  classic duplicate-delivery bug with PayPal's real redelivery, then proves the
+  one-line fix.
 - **Offline, no keys needed** (Node 22 or later):
 
   ```
@@ -26,14 +34,14 @@ verify. Then its edge-case finder checks how a merchant app handled them.
   The dry run validates the scenario, checks it against the spend caps and
   prints the plan. It makes no network call.
 
-**Status: v0.7.1.** Scenario schema, executor, step handlers, purchase bank,
+**Status: v0.7.3.** Scenario schema, executor, step handlers, purchase bank,
 CLI, AI planner, edge-case finder, a stdio MCP server for Claude Code, and a
 web console with live sandbox runs behind the judge passcode. Day-1 capability
 findings are in [gate/RESULTS.md](gate/RESULTS.md).
 
 ## Why
 
-PayPal's own tools check your code or act on one record at a time. Its
+PayPal's
 [Webhook Simulator](https://developer.paypal.com/api/rest/webhooks/simulator/)
 sends mock events that, per PayPal's documentation, cannot be verified through
 the verify-webhook-signature endpoint, cannot be resent, and match no real
@@ -111,8 +119,9 @@ time closest to the order. An order PayPal no longer holds (404 on the order)
 is marked `expired` rather than checked forever, so approve a link promptly
 after creating it.
 
-Finding the buyer-side transaction id needs a reporting scope on the buyer app,
-and PayPal documents Transaction Search as lagging up to three hours even then.
+Finding the buyer-side transaction id needs PayPal's
+[Transaction Search API](https://developer.paypal.com/docs/api/transaction-search/v1/)
+and a reporting scope on the buyer app, and a new transaction may not be listed there yet.
 When it is unavailable, read the id from the sandbox buyer account's activity
 page and supply it:
 
@@ -218,8 +227,9 @@ accepted, each webhook delivery the sample store received, joined where the
 pairing is exact, with the measured delay. The hosted finder runs one failure
 class per request against the sample store.
 
-**Hosted limits, fixed in code** (an environment variable can lower each one,
-never raise it):
+**Hosted limits, fixed in code** (an environment variable can lower each money,
+step and count limit, never raise it; the run time budget and one run at a time
+are fixed):
 
 | Limit | Value |
 |---|---|
@@ -252,11 +262,13 @@ never raise it):
 ```
 cd console
 npm install
-npm run dev            # http://localhost:3000
-npm test               # unit tests, including the SQL against a real Postgres (PGlite)
-npm run test:browser   # browser tests (Playwright)
-npm run build
+npm test                          # unit tests, including the SQL against a real Postgres (PGlite)
+npm run build                     # the browser tests serve this production build
+npx playwright install chromium   # the browser the tests drive, once per machine
+npm run test:browser              # browser tests (Playwright)
 ```
+
+`npm run dev` serves the console at http://localhost:3000 while you work on it.
 
 Every variable, required or optional, is listed in
 [console/.env.example](console/.env.example). Set them for Production only.
@@ -294,8 +306,8 @@ steps, and any event target not on the allowlist.
   exists; a payout batch counts all its items against the per-step cap.
 - **Fail closed.** A 2xx with no status field is `unknown`, never success. 5xx,
   408 and 409 are `unknown` because the write may have executed, and a write
-  PayPal may not dedupe (invoice send, record payment, cancel, webhook resend)
-  is never replayed after one. Anything other than success halts the run, and
+  PayPal may not dedupe (invoice create, send, record payment and cancel, and
+  webhook resend) is never replayed after one. Anything other than success halts the run, and
   a halted step is never retried without an explicit human `--retry`.
 - **No verdict without evidence.** The finder says BUG or OK only when the step
   under test ran and its outcome is on record: the store's own verified rows for
@@ -306,10 +318,11 @@ steps, and any event target not on the allowlist.
 - **Measure the instrument first.** Gate 5 posts a self-test event and refuses
   to proceed unless it can read it back, because an unreadable ledger looks
   exactly like lost events.
-- **Secrets stay out.** Credentials are read in one file, tested for non-empty
-  only, and never printed, logged, measured or put in an error. PayPal error
-  text is reduced to PayPal's named error fields; a raw reply body is never
-  quoted.
+- **Secrets stay out.** Credentials are read in one file in the engine, tested
+  for non-empty only, and never printed, logged, measured or put in an error.
+  The CLI stops on a missing one with a single line naming the variable and
+  exit code 2. PayPal error text is reduced to PayPal's named error fields; a
+  raw reply body is never quoted.
 - **Money is integer minor units.** No float touches an amount, and an unknown
   currency is refused rather than assumed to have two decimal places.
 

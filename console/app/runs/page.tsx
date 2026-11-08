@@ -40,7 +40,7 @@ export default function RunsPage() {
           </ul>
           <div className="section-head">
             <h2 id="pair-h">Before and after a one-line fix</h2>
-            <p>The same run, on the store with and without the fix</p>
+            <p>The same scenario, on the store with and without the fix</p>
           </div>
           <ul className="run-cards" aria-labelledby="pair-h">
             {RUNS.map((r) => (
@@ -51,7 +51,7 @@ export default function RunsPage() {
                     <span className="note">{r.startedAt.slice(0, 10)}</span>
                   </span>
                   <span className="rc-name">{r.scenarioName}</span>
-                  <span className="rc-line">{r.verdictLine.replace(/^(BUG|OK): /, "")}</span>
+                  <span className="rc-line">{r.verdictLine.replace(/^(BUG|OK): (.)/, (_m, _v, c: string) => c.toUpperCase())}</span>
                   <span className="rc-meta">
                     {r.calls.length} steps · {r.deliveries.length} deliveries from PayPal · {dur(replayEndS(r))} · <span className="mono">{r.runId}</span>
                   </span>

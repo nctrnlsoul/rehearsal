@@ -2,9 +2,10 @@ import { type Caps, FAILURE_CLASSES, capsFromEnv, eventOriginsFromEnv, gateScena
 
 /**
  * Everything that makes a hosted run smaller than a local one. The
- * numbers live here, in code. An environment variable may lower any of them
- * and never raise one, and a malformed variable stops live runs rather than
- * being skipped. Pure, so every rule is tested without a server.
+ * numbers live here, in code. An environment variable may lower any money,
+ * step or count limit and never raise one; the time budget and one run at a
+ * time are fixed. A malformed variable stops live runs rather than being
+ * skipped. Pure, so every rule is tested without a server.
  */
 
 type Env = Record<string, string | undefined>;

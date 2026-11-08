@@ -89,6 +89,22 @@ describe("finder fixture agrees with the run fixtures it summarizes", () => {
     });
   }
 
+  // The page's verdict is the evidence report's own words, with only R-033's US spellings applied.
+  it("each run: its finding is its evidence report's, word for word", () => {
+    const us = (t: string) => t.replace(/fulfilment/g, "fulfillment").replace(/fulfils/g, "fulfills").replace(/recognised/g, "recognized");
+    for (const side of ["before", "after"] as const) {
+      const run = runById(FINDER[side].runId)!;
+      const report = us(readFileSync(join(ROOT, "..", run.finding.source), "utf8"));
+      expect(run.finding.source).toBe(FINDER[side].report);
+      expect(run.finding.verdict).toBe(FINDER[side].verdict);
+      expect(run.finding.title).toBe(FINDER.title);
+      for (const [label, value] of [["Expected", run.finding.expected], ["Actual", run.finding.actual], ["Likely fix", run.finding.likelyFix]] as const) {
+        expect(report, label).toContain(`- ${label}: ${value}
+`);
+      }
+    }
+  });
+
   it("uses US spelling in its title (R-033)", () => {
     expect(FINDER.title).toBe("A redelivered capture event fulfills the order twice");
   });
@@ -144,23 +160,29 @@ describe("a replay, drawn by the live run's own view", () => {
 
     const waiting = runStory(replayRead(before, 10));
     expect(waiting.cards[0]!).toMatchObject({ sent: "accepted", reply: "waiting", amount: "USD 25" });
-    expect(waiting.proof.map((n) => n.arrived)).toEqual([false]);
+    // The queued resend shows the event it will wait for, so the strip counts what the hero counts.
+    expect(waiting.proof.map((n) => `${n.step} ${n.arrived}`)).toEqual(["1 false", "2 false"]);
 
     const delivered = runStory(replayRead(before, 30));
     expect(delivered.cards[0]!.reply).toBe("delivered");
-    expect(delivered.cards[0]!.replies[0]!).toMatchObject({ plain: "PayPal confirmed: payment completed", rank: 1, verified: 1, copies: 1 });
+    expect(delivered.cards[0]!.replies[0]!).toMatchObject({ plain: "Payment completed", rank: 1, verified: 1, copies: 1 });
   });
 
   it("ends on the recorded verdict's evidence: the before run fulfills twice, the after run ignores the repeat", () => {
     const b = runStory(replayRead(before, replayEndS(before)));
     expect(b.tone).toBe("done");
     expect(b.headline).toBe("All 2 steps done.");
-    expect(b.lead).toBe("PayPal confirmed 2 of 2 events, every signature verified.");
+    expect(b.lead).toBe("2 of 2 expected events arrived, all verified.");
+    // The finder's verdict leads the page, never a green "Done" above a BUG.
+    expect(b.verdict).toEqual({ kind: "bug", headline: "BUG: one payment event was fulfilled twice.", lead: "Event WH-23242717T8452430B-4FP87531JX1278159 was delivered 2 times and fulfilled 2 times." });
     expect(b.cards[1]!.replies[0]!.plain).toBe("PayPal delivered it again; the store fulfilled the order a second time");
     const a = runStory(replayRead(after, replayEndS(after)));
-    expect(a.cards[1]!.replies[0]!.plain).toBe("PayPal delivered it again; the store saw a repeat and ignored it");
-    expect(a.figures).toMatchObject({ steps: "2 of 2", amount: "USD 25", slowest: "20s", signatures: "2 of 2 passed", signaturesOk: true });
+    expect(a.cards[1]!.replies[0]!.plain).toBe("PayPal delivered it again; the store recognized it as a repeat and ignored it");
+    expect(a.figures).toMatchObject({ steps: "2 of 2", amount: "USD 25", slowest: "20s", signatures: "2 of 2", signaturesOk: true });
+    expect(a.verdict?.kind).toBe("ok");
+    expect(a.verdict?.headline).toBe("OK: the payment was fulfilled once, and PayPal's redelivery was recognized as a repeat and ignored.");
     expect(a.proof.map((n) => `${n.label} ${n.latencyS === null ? "" : dur(n.latencyS)}`)).toEqual(["Payment 20s", "Resend 4s"]);
+    expect(a.proof.map((n) => n.step)).toEqual([1, 2]);
   });
 
   it("uses only the fixture's own ids and times", () => {
@@ -195,6 +217,15 @@ describe("Stage A boundaries", () => {
       if (text.includes("<LiveBanner>")) {
         expect(text, f).not.toMatch(/\b(RUNS|FINDER|runById)\b/);
         expect(readFileSync(join(ROOT, "components", "LiveBuilder.tsx"), "utf8")).toContain("A recorded plan");
+      } else if (f === join(ROOT, "app", "page.tsx")) {
+        // The home page is neither live nor a replay. Its one use of recorded
+        // data, the before and after bug cards, says so in its own heading and
+        // links only to the replays, which carry the banner.
+        expect(text).toContain("Two recorded sandbox runs:");
+        expect(text).not.toMatch(/\b(RUNS|runById|PLANS)\b/);
+        const links = text.match(/href=\{`[^`]*\$\{FINDER[^`]*`\}/g) ?? [];
+        expect(links).toHaveLength(2);
+        for (const href of links) expect(href).toMatch(/^href=\{`\/runs\//);
       } else {
         expect(text, f).toMatch(/<ReplayBanner>/);
       }

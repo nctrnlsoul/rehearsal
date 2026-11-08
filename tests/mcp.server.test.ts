@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { FAILURE_CLASSES } from "../src/ai/failureClasses";
 import type { GenerateFn } from "../src/ai/planner";
 import { credentialsFor } from "../src/adapters/env";
 import { PaypalClient } from "../src/adapters/paypal";
@@ -202,6 +203,17 @@ describe("tool list", () => {
         expect(prop.description ?? "").not.toMatch(/\b(you|your|should|always|ignore|remember)\b/i);
       }
     }
+  });
+
+  // overdue-invoice and unclaimed-payout are judged from what PayPal read back,
+  // not from the store, so "the verdict comes from the store" was false for them.
+  it("says where each finder class takes its verdict from", async () => {
+    const h = await connect();
+    const { tools } = await h.client.listTools();
+    const text = tools.find((t) => t.name === "find_edge_cases")?.description ?? "";
+    expect(text).toContain("the store's verified rows for this run (duplicate-webhook, refund-after-partial)");
+    expect(text).toContain("PayPal's own read-back of the record (unclaimed-payout, overdue-invoice)");
+    for (const c of FAILURE_CLASSES.filter((k) => k.supported)) expect(text, c.id).toContain(c.id);
   });
 });
 

@@ -7,7 +7,7 @@ import {
   anthropicGenerator,
   planScenario,
 } from "../src/ai/planner";
-import { credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
+import { MissingCredentialError, credentialsFor, optionalEnv, requiredEnv } from "../src/adapters/env";
 import { type Caps, capsFromEnv } from "../src/core/caps";
 import { PaypalClient } from "../src/adapters/paypal";
 import {
@@ -239,6 +239,10 @@ async function findCommand(rest: string[]): Promise<void> {
     allowedEventOrigins(),
   ).origin;
   const storeToken = requiredEnv("REHEARSAL_STORE_TOKEN");
+  // Every finder run builds both clients; checked here so a missing key stops
+  // the finder before its first model call rather than inside a run.
+  credentialsFor("seller");
+  credentialsFor("buyer");
   const caps = cliCaps();
   const budget = new AiBudgetTracker(aiBudgetFromEnv(process.env));
   const generate = anthropicGenerator({ apiKey, model });
@@ -313,6 +317,10 @@ async function executeScenarioFromCli(
   flags: Record<string, string> = {},
   webhookMode: WebhookMode = "register",
 ): Promise<RunState> {
+  // Before a run id is printed, so a missing key leaves no half-started run
+  // that looks resumable.
+  const seller = client("seller");
+  const buyer = client("buyer");
   const resumeId = flags["resume"];
   const runId = resumeId ?? newRunId(new Date());
 
@@ -347,8 +355,8 @@ async function executeScenarioFromCli(
     { scenario, runId, resume, webhookMode },
     {
       paths: PATHS,
-      seller: client("seller"),
-      buyer: client("buyer"),
+      seller,
+      buyer,
       now: () => new Date(),
       sleep,
       log,
@@ -654,35 +662,47 @@ function usage(): void {
 
 const [, , command, ...rest] = process.argv;
 
-switch (command) {
-  case "dry-run":
-    dryRun(rest);
-    break;
-  case "plan":
-    await planCommand(rest);
-    break;
-  case "find":
-    await findCommand(rest);
-    break;
-  case "run":
-    await run(rest);
-    break;
-  case "bank:add":
-    await bankAdd(rest);
-    break;
-  case "bank:confirm":
-    await bankConfirm();
-    break;
-  case "bank:set-txn":
-    bankSetTxn(rest);
-    break;
-  case "bank:list":
-    bankList();
-    break;
-  case "bank:export-hosted":
-    bankExportHosted(rest);
-    break;
-  default:
-    usage();
-    process.exitCode = command === undefined ? 0 : 1;
+try {
+  await dispatch();
+} catch (e) {
+  // A missing key is a setup step, not a crash: name it (never its value) on
+  // one line, with an exit code a script can tell apart from a halted run's 1.
+  if (!(e instanceof MissingCredentialError)) throw e;
+  console.error(`${e.variableName} is not set, so nothing was sent to PayPal. Set it in your environment and run the command again.`);
+  process.exitCode = 2;
+}
+
+async function dispatch(): Promise<void> {
+  switch (command) {
+    case "dry-run":
+      dryRun(rest);
+      break;
+    case "plan":
+      await planCommand(rest);
+      break;
+    case "find":
+      await findCommand(rest);
+      break;
+    case "run":
+      await run(rest);
+      break;
+    case "bank:add":
+      await bankAdd(rest);
+      break;
+    case "bank:confirm":
+      await bankConfirm();
+      break;
+    case "bank:set-txn":
+      bankSetTxn(rest);
+      break;
+    case "bank:list":
+      bankList();
+      break;
+    case "bank:export-hosted":
+      bankExportHosted(rest);
+      break;
+    default:
+      usage();
+      process.exitCode = command === undefined ? 0 : 1;
+  }
 }

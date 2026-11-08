@@ -120,6 +120,13 @@ type WorkResult = { readonly state: RunState | null; readonly events?: readonly 
 type Execute = (scenario: Scenario, digest: string) => Promise<RunState>;
 
 /**
+ * A store read whose result is also what the page shows. The finder judges
+ * on these reads, so the page and the verdict can never be drawn from two
+ * different moments of the store.
+ */
+type VerdictRead = () => Promise<StoreSnapshot>;
+
+/**
  * Everything a hosted run does around its body: marks it running, saves every
  * state change fenced, claims purchases through the database, polls the store
  * and heartbeats beside the body, waits for late deliveries, then finishes.
@@ -128,7 +135,7 @@ async function runTracked(
   runId: string,
   deps: WorkerDeps,
   opts: { readonly deliveryWaitS: number },
-  body: (execute: Execute) => Promise<WorkResult>,
+  body: (execute: Execute, verdictRead: VerdictRead) => Promise<WorkResult>,
 ): Promise<void> {
   const iso = () => deps.now().toISOString();
   const rpcOk = async (name: "console_save_state" | "console_add_events" | "console_heartbeat", params: Record<string, unknown>) =>
@@ -183,39 +190,93 @@ async function runTracked(
   let bodyDone = false;
   let waitUntilMs = Number.POSITIVE_INFINITY;
   let storeReadFailures = 0;
+  // Once a verdict read starts, the poller only heartbeats: every store read
+  // the page shows after that is one the verdict was judged on.
+  let pollerReads = true;
+  // One whole poller pass, read and save, so a verdict read never starts
+  // while an older report from the poller could still land after it.
+  let inflight: Promise<unknown> = Promise.resolve();
+  let judged: StoreSnapshot | null = null;
+
+  /**
+   * New delivery events in a snapshot, against a copy of what was seen.
+   * commit() keeps them only once they are saved: a report whose save failed
+   * stays unseen, so the next read writes it again rather than losing it.
+   */
+  const deltaOf = (snapshot: StoreSnapshot) => {
+    const trial: SeenDeliveries = new Map(seen);
+    const events = deliveryEvents(snapshot, trial, iso());
+    return { events, commit: () => trial.forEach((v, k) => seen.set(k, v)) };
+  };
+
+  /** One poller pass. False once the database stops listing the run as running. */
+  const pass = async (): Promise<boolean> => {
+    let events: RunEvent[] = [];
+    let commit = () => {};
+    if (deps.readStore !== null && pollerReads) {
+      try {
+        const delta = deltaOf(await deps.readStore(startedIso));
+        events = delta.events;
+        commit = delta.commit;
+      } catch (e) {
+        storeReadFailures += 1;
+        // Said once, so the timeline shows the store went quiet rather than nothing arriving.
+        if (storeReadFailures === 1) events = [{ kind: "note", data: { store_read_failed: e instanceof Error ? e.name : "error" } }];
+      }
+    }
+    try {
+      const ok = events.length > 0 ? await rpcOk("console_add_events", { p_events: events }) : await rpcOk("console_heartbeat", {});
+      if (!ok) {
+        fenced = true;
+        return false;
+      }
+      commit();
+    } catch {
+      // A missed heartbeat is survivable; the reaper allows 90 s of them.
+    }
+    return true;
+  };
+
   const poll = async () => {
     for (;;) {
       if (fenced) return;
       const nowMs = deps.now().getTime();
       if (bodyDone && nowMs >= waitUntilMs) return;
       if (nowMs >= deps.deadlineMs - FINISH_MARGIN_MS) return;
-      let events: RunEvent[] = [];
-      if (deps.readStore !== null) {
-        try {
-          events = deliveryEvents(await deps.readStore(startedIso), seen, iso());
-        } catch (e) {
-          storeReadFailures += 1;
-          // Said once, so the timeline shows the store went quiet rather than nothing arriving.
-          if (storeReadFailures === 1) events = [{ kind: "note", data: { store_read_failed: e instanceof Error ? e.name : "error" } }];
-        }
-      }
-      try {
-        const ok = events.length > 0 ? await rpcOk("console_add_events", { p_events: events }) : await rpcOk("console_heartbeat", {});
-        if (!ok) {
-          fenced = true;
-          return;
-        }
-      } catch {
-        // A missed heartbeat is survivable; the reaper allows 90 s of them.
-      }
+      const p = pass();
+      inflight = p.catch(() => undefined);
+      if (!(await p)) return;
       await deps.sleep(DELIVERY_POLL_S * 1000);
     }
   };
   const poller = poll();
 
+  const verdictRead: VerdictRead = async () => {
+    if (deps.readStore === null) throw new Error("no store token");
+    pollerReads = false;
+    await inflight;
+    // The run's own window, as the poller reads it, so the verdict never
+    // counts a delivery left over from a run before this one.
+    const snapshot = await deps.readStore(startedIso);
+    // The same shape test the finder applies: a reply it would not judge on is never shown as evidence.
+    if (typeof snapshot === "object" && snapshot !== null && Array.isArray((snapshot as { orders?: unknown }).orders)) {
+      judged = snapshot;
+      const delta = deltaOf(snapshot);
+      if (delta.events.length > 0 && !fenced) {
+        try {
+          if (await rpcOk("console_add_events", { p_events: delta.events })) delta.commit();
+          else fenced = true;
+        } catch {
+          // Left uncommitted, so the closing save below writes it with the verdict.
+        }
+      }
+    }
+    return snapshot;
+  };
+
   let result: WorkResult;
   try {
-    result = await body(execute);
+    result = await body(execute, verdictRead);
   } catch (e) {
     bodyDone = true;
     waitUntilMs = 0;
@@ -244,11 +305,14 @@ async function runTracked(
   }
   await poller;
   if (fenced) return;
-  const closing: RunEvent[] = [...(result.events ?? [])];
+  // The verdict's own last read goes in the same save as the verdict, so the
+  // page under it can never read "not seen" where the verdict counted it.
+  const final = judged === null ? null : deltaOf(judged);
+  const closing: RunEvent[] = [...(final?.events ?? []), ...(result.events ?? [])];
   if (wait) {
     closing.push({ kind: "deliveries_wait_ended", data: { events_seen: [...seen.keys()].filter((k) => k.startsWith("event:")).length } });
   }
-  if (closing.length > 0) await rpcOk("console_add_events", { p_events: closing }).catch(() => false);
+  if (closing.length > 0 && (await rpcOk("console_add_events", { p_events: closing }).catch(() => false))) final?.commit();
 
   const state = result.state;
   if (state === null) {
@@ -296,11 +360,12 @@ const MAX_FINDING_CHARS = 300;
  * One finder class, hosted, one class per request. The engine's finder
  * plans the class's fixed template with one model call, runs it reuse-only,
  * and reads the verdict from the store's own records. The finder
- * waits for its own evidence, so there is no second delivery wait here.
+ * waits for its own evidence, so there is no second delivery wait here;
+ * its store reads are the page's, so the two always agree.
  */
 export async function runFinderWorker(args: { runId: string; classId: string }, deps: FinderWorkerDeps): Promise<void> {
   const origins = [normalizeOrigin(deps.storeOrigin)];
-  await runTracked(args.runId, deps, { deliveryWaitS: 0 }, async (execute) => {
+  await runTracked(args.runId, deps, { deliveryWaitS: 0 }, async (execute, verdictRead) => {
     let last: RunState | null = null;
     const results = await runFinder(
       { description: DEFAULT_FINDER_DESCRIPTION, only: args.classId, webhookTarget: webhookHandlerUrl(origins[0]!) },
@@ -313,11 +378,7 @@ export async function runFinderWorker(args: { runId: string; classId: string }, 
           last = await execute(scenario, scenarioDigest(scenario));
           return last;
         },
-        readStore:
-          deps.readStore ??
-          (async () => {
-            throw new Error("no store token");
-          }),
+        readStore: verdictRead,
         // No hosted class draws on the bank. Reporting none keeps any class that
         // would need one skipped, rather than reaching for a purchase it was not given.
         bankAvailable: () => 0,

@@ -1,9 +1,11 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { fakePaypal, scenarioWith } from "../../tests/helpers/fakePaypal";
+import { type FakeResponse, fakePaypal, scenarioWith } from "../../tests/helpers/fakePaypal";
 import { createDb } from "../lib/db";
 import { type HandlerRegistry, type StepHandler, type StoreSnapshot, defaultHandlers, scenarioDigest } from "../lib/engine";
 import { HOSTED_CAPS, STEP_MARGIN_S } from "../lib/hosted";
+import type { LiveEvent, LiveRead, LiveRunRow } from "../lib/liveView";
+import { runStory } from "../lib/runStory";
 import { runFinderWorker, runScenarioWorker, timeGuarded } from "../lib/worker";
 import { freshDb } from "./pg";
 import { TEST_DB_ENV, postgrestOver } from "./postgrest";
@@ -24,7 +26,7 @@ const T0 = Date.parse("2026-10-25T18:00:00Z");
 
 type Harness = Awaited<ReturnType<typeof harness>>;
 
-async function harness(opts: { deadlineS?: number; readStore?: ((since: string) => Promise<StoreSnapshot>) | null; handlers?: Partial<Record<string, StepHandler>> } = {}) {
+async function harness(opts: { deadlineS?: number; readStore?: ((since: string) => Promise<StoreSnapshot>) | null; handlers?: Partial<Record<string, StepHandler>>; sellerQueue?: FakeResponse[] } = {}) {
   const pg = await freshDb();
   const rest = postgrestOver(pg);
   const db = createDb({ url: new URL(TEST_DB_ENV.SUPABASE_URL), key: TEST_DB_ENV.SUPABASE_SERVICE_ROLE_KEY }, { fetchImpl: rest.fetch });
@@ -39,7 +41,7 @@ async function harness(opts: { deadlineS?: number; readStore?: ((since: string) 
     return { kind: "success", detail: `ran ${ctx.step.id}`, ids: { [`${ctx.step.id}_id`]: `ID-${ctx.step.id}` } };
   };
   const handlers = { ...Object.fromEntries(Object.keys(defaultHandlers).map((k) => [k, ok])), ...(opts.handlers ?? {}) } as unknown as HandlerRegistry;
-  const seller = fakePaypal([], "seller");
+  const seller = fakePaypal(opts.sellerQueue ?? [], "seller");
   const buyer = fakePaypal([], "buyer");
   const logs: string[] = [];
   const deps = {
@@ -428,6 +430,130 @@ describe("runFinderWorker", () => {
     const kinds = (await h.events()).map((e) => e.kind);
     expect(kinds).not.toContain("deliveries_wait_started");
     expect((await h.run()).status).toBe("complete");
+  });
+
+  // Audit 2026-11-07 evening, A.2: a finder run used to stop reading the
+  // store when its steps ended, so a redelivery the verdict counted could
+  // read "not seen" on the page under it. The page now shows the very reads
+  // the verdict was judged on, and the last one lands with the verdict.
+  it("draws the page and the verdict from the same store read, so the resend card never disagrees with the verdict", async () => {
+    const duplicate = JSON.stringify({
+      version: 1,
+      name: "Duplicate webhook",
+      profile: { name: "Test Shop" },
+      currency: "USD",
+      steps: [
+        { id: "order", kind: "card_order", needs: [], amount: "25.00" },
+        { id: "resend-capture", kind: "resend_webhook", needs: ["order"], from: "order", eventType: "PAYMENT.CAPTURE.COMPLETED" },
+      ],
+    });
+    let resentAt: number | null = null;
+    let clockOf = () => 0;
+    const copy = (n: number) => new Date(T0 + n * 1000).toISOString();
+    const h = await harness({
+      // Reuse-only: the run finds the store's webhook already registered and never registers one.
+      sellerQueue: [{ status: 200, body: { webhooks: [{ id: "WH-STORE", url: "https://rehearsal-store.vercel.app/api/paypal/webhook" }] } }],
+      handlers: {
+        card_order: async () => ({ kind: "success", detail: "captured", ids: { order_id: "ORDER-1", capture_id: "CAP-1" } }),
+        resend_webhook: async () => {
+          resentAt = clockOf();
+          return { kind: "success", detail: "resent", ids: { resent_event_id: "WH-A" } };
+        },
+      },
+      // The first copy is in the store from the start; the redelivery lands
+      // only after the steps end, where the poller used to have stopped.
+      readStore: async () => {
+        const late = resentAt !== null && clockOf() > resentAt + 1000;
+        return snapshot([
+          { eventId: "WH-A", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: late ? 1 : 0, other: 0, refused: 0, captureIds: ["CAP-1"], receivedAt: late ? [copy(3), copy(9)] : [copy(3)] },
+        ]);
+      },
+    });
+    clockOf = h.clockNow;
+    await runFinderWorker(
+      { runId: RUN, classId: "duplicate-webhook" },
+      { ...h.deps, generate: async () => ({ text: duplicate }), caps: HOSTED_CAPS, storeOrigin: "https://rehearsal-store.vercel.app" },
+    );
+
+    const run = (await h.pg.query<Record<string, unknown>>(`select * from public.console_runs where id = '${RUN}'`)).rows[0]!;
+    const rows = (await h.pg.query<{ seq: number; at: Date; kind: string; step_id: string | null; data: Record<string, unknown> }>(
+      `select seq, at, kind, step_id, data from public.console_run_events where run_id = '${RUN}' order by seq`,
+    )).rows;
+    const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : (v as string | null));
+    const read: LiveRead = {
+      run: { ...(run as unknown as LiveRunRow), created_at: iso(run["created_at"])!, started_at: iso(run["started_at"]), heartbeat_at: iso(run["heartbeat_at"]), finished_at: iso(run["finished_at"]) },
+      events: rows.map((r) => ({ ...r, at: iso(r.at)! }) as LiveEvent),
+      now: new Date().toISOString(),
+    };
+    const story = runStory(read);
+    expect(story.view.finding).toMatchObject({ classId: "duplicate-webhook", verdict: "ok" });
+    expect(story.verdict?.kind).toBe("ok");
+    // The resend card shows the redelivery the verdict counted, ignored as a repeat.
+    const resend = story.cards.find((c) => c.kind === "resend_webhook")!;
+    expect(resend.reply).toBe("delivered");
+    expect(resend.replies[0]).toMatchObject({ arrived: true, redelivery: true, store: "duplicate_ignored" });
+    // The redelivery's report is saved no later than the verdict that counted it.
+    const lastReport = rows.filter((r) => r.kind === "delivery").at(-1)!;
+    const verdictRow = rows.find((r) => r.kind === "note" && "finding" in r.data)!;
+    expect(lastReport.data["deliveries"]).toBe(2);
+    expect(lastReport.seq).toBeLessThan(verdictRow.seq);
+  });
+
+  // Found by the v0.7.3 verifier: a delivery whose save threw was marked seen
+  // anyway, so no later read wrote it, and the page read "not seen" under an
+  // OK verdict that had counted it. A report is now seen only once it is saved.
+  it("writes a delivery again after its save fails, so the page still shows what the verdict counted", async () => {
+    const duplicate = JSON.stringify({
+      version: 1,
+      name: "Duplicate webhook",
+      profile: { name: "Test Shop" },
+      currency: "USD",
+      steps: [
+        { id: "order", kind: "card_order", needs: [], amount: "25.00" },
+        { id: "resend-capture", kind: "resend_webhook", needs: ["order"], from: "order", eventType: "PAYMENT.CAPTURE.COMPLETED" },
+      ],
+    });
+    const copy = (n: number) => new Date(T0 + n * 1000).toISOString();
+    const h = await harness({
+      sellerQueue: [{ status: 200, body: { webhooks: [{ id: "WH-STORE", url: "https://rehearsal-store.vercel.app/api/paypal/webhook" }] } }],
+      handlers: {
+        card_order: async () => ({ kind: "success", detail: "captured", ids: { order_id: "ORDER-1", capture_id: "CAP-1" } }),
+        resend_webhook: async () => ({ kind: "success", detail: "resent", ids: { resent_event_id: "WH-A" } }),
+      },
+      readStore: async () =>
+        snapshot([{ eventId: "WH-A", eventType: "PAYMENT.CAPTURE.COMPLETED", fulfilled: 1, duplicatesIgnored: 1, other: 0, refused: 0, captureIds: ["CAP-1"], receivedAt: [copy(3), copy(9)] }]),
+    });
+    const real = h.deps.db;
+    let thrown = 0;
+    // The first save that carries a delivery fails as a 504 would; everything else reaches the database.
+    const db = {
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        const events = (args["p_events"] ?? []) as Array<{ kind: string }>;
+        if (name === "console_add_events" && thrown === 0 && events.some((e) => e.kind === "delivery")) {
+          thrown += 1;
+          throw new Error("simulated 504");
+        }
+        return real.rpc(name as never, args);
+      },
+    };
+    await runFinderWorker(
+      { runId: RUN, classId: "duplicate-webhook" },
+      { ...h.deps, db: db as never, generate: async () => ({ text: duplicate }), caps: HOSTED_CAPS, storeOrigin: "https://rehearsal-store.vercel.app" },
+    );
+    expect(thrown).toBe(1);
+    const run = (await h.pg.query<Record<string, unknown>>(`select * from public.console_runs where id = '${RUN}'`)).rows[0]!;
+    const rows = (await h.pg.query<{ seq: number; at: Date; kind: string; step_id: string | null; data: Record<string, unknown> }>(
+      `select seq, at, kind, step_id, data from public.console_run_events where run_id = '${RUN}' order by seq`,
+    )).rows;
+    const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : (v as string | null));
+    const story = runStory({
+      run: { ...(run as unknown as LiveRunRow), created_at: iso(run["created_at"])!, started_at: iso(run["started_at"]), heartbeat_at: iso(run["heartbeat_at"]), finished_at: iso(run["finished_at"]) },
+      events: rows.map((r) => ({ ...r, at: iso(r.at)! }) as LiveEvent),
+      now: new Date().toISOString(),
+    });
+    expect(story.verdict?.kind).toBe("ok");
+    expect(story.cards.find((c) => c.kind === "resend_webhook")!.reply).toBe("delivered");
+    expect(story.counts).toEqual({ expected: 2, arrived: 2, verified: 2 });
   });
 
   it("finishes halted with an inconclusive verdict when the model's plan does not fit the template", async () => {

@@ -26,3 +26,6 @@
   .plan-cards, .trust, .proof-row { grid-template-columns: 1fr; }
   .start-card { padding: 22px 18px 20px; }
 }
+/* The PayPal host breaks only at its dots, never mid-word, on a phone. */
+.facts dd.host { overflow-wrap: normal; }
+.bug-more { margin-top: 10px; }

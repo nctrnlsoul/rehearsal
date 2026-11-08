@@ -68,7 +68,7 @@ Two separate causes, found in order.
 ## Both apps were on one sandbox account, found 2026-10-23
 
 The first gate 6 approval attempt failed. Both apps had been created under the
-same sandbox business account (`sb-supl053463227`), so logging in to approve
+same sandbox business account (`sb-...`), so logging in to approve
 meant logging in as the merchant, and PayPal refused. Brian created a second
 sandbox business account, recreated `rehearsal-buyer` on it, and updated the
 buyer credentials.

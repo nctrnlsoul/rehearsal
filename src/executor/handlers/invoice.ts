@@ -84,6 +84,10 @@ export const invoiceCreateHandler: StepHandler = async (ctx) => {
     method: "POST",
     path: "/v2/invoicing/invoices",
     idempotencySeed: ctx.seedFor("create"),
+    // A replay after a lost reply may be refused with a 422 even though the
+    // first attempt landed, which would read "failed" over a live draft. One
+    // ambiguous answer stops here, and classify below calls it unknown.
+    replayIfAmbiguous: false,
     extraHeaders: { Prefer: "return=representation" },
     body: {
       detail,

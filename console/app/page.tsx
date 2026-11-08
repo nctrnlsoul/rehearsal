@@ -3,6 +3,7 @@ import { Badge, Icon, SiteFooter, Topbar } from "../components/chrome";
 import { RECORDED_PLANS, StartStrip } from "../components/StartHere";
 import facts from "../fixtures/facts.json";
 import { HOSTED_REPLAYS } from "../lib/hostedReplays";
+import { FINDER } from "../lib/replays";
 import { DEFAULT_AI_BUDGET, DEFAULT_CAPS, DESCRIPTION_MAX_CHARS, HOSTED_CAPS, PLANNER_TIMEOUT_MS } from "../lib/hosted";
 import "./home.css";
 
@@ -35,6 +36,31 @@ export default function HomePage() {
           </div>
 
           <div className="section-head">
+            <h2 id="bug-h">The bug it reproduces</h2>
+            <p>Two recorded sandbox runs: the classic duplicate-delivery bug with PayPal&apos;s real redelivery, then the one-line fix</p>
+          </div>
+          {/* Counts come from the finder fixture, which tests/replays.test.ts holds to the store rows. */}
+          <ul className="plan-cards" aria-labelledby="bug-h">
+            <li>
+              <Link className="card plan-card" href={`/runs/${FINDER.before.runId}`}>
+                <span className="pc-meta"><Badge kind="bug">BUG</Badge> Before the fix</span>
+                <span className="pc-name">One payment event, fulfilled twice</span>
+                <span className="pc-sum">PayPal delivered the same payment event {FINDER.before.deliveries} times, {FINDER.before.verified} of {FINDER.before.deliveries} verified as PayPal&apos;s, and the store fulfilled the order {FINDER.before.fulfilled} times.</span>
+                <span className="pc-go">Watch the replay <Icon name="arrow" /></span>
+              </Link>
+            </li>
+            <li>
+              <Link className="card plan-card" href={`/runs/${FINDER.after.runId}`}>
+                <span className="pc-meta"><Badge kind="ok">OK</Badge> After the fix</span>
+                <span className="pc-name">Fulfilled once, the repeat ignored</span>
+                <span className="pc-sum">Same scenario. The store fulfilled the order {FINDER.after.fulfilled === 1 ? "once" : `${FINDER.after.fulfilled} times`} and recognized {FINDER.after.ignored} redelivery as a repeat. The fix is one line, <span className="mono">{FINDER.fix.file}:{FINDER.fix.line}</span>.</span>
+                <span className="pc-go">Watch the replay <Icon name="arrow" /></span>
+              </Link>
+            </li>
+          </ul>
+          <p className="note bug-more"><Link href="/finder">Read the finder&apos;s report, side by side</Link>.</p>
+
+          <div className="section-head">
             <h2 id="plans-h">Recorded plans</h2>
             <p>Ready to run as they are</p>
           </div>
@@ -59,7 +85,7 @@ export default function HomePage() {
             <section className="card trust-block" aria-labelledby="reach-h">
               <h3 id="reach-h">Where it can reach</h3>
               <dl className="facts">
-                <dt>PayPal host<small>a literal in code, not a setting</small></dt><dd className="mono">api-m.sandbox.paypal.com</dd>
+                <dt>PayPal host<small>a literal in code, not a setting</small></dt><dd className="mono host">api-m.<wbr />sandbox.<wbr />paypal.com</dd>
                 <dt>Live PayPal reachable</dt><dd>No, by construction</dd>
                 <dt>Event targets<small>exact handler URL; the hosted demo allows only the sample store</small></dt><dd>Allowlisted only</dd>
               </dl>
@@ -105,7 +131,7 @@ export default function HomePage() {
               <h3 id="limits-h">What a pass here does not prove</h3>
               <ul>
                 <li><Badge kind="stop">Live PayPal</Badge> Everything runs against the sandbox. A pass is evidence about your code&apos;s handling, not a promise about production.</li>
-                <li><Badge kind="stop">Timing</Badge> PayPal&apos;s sandbox event list once lagged its own delivery by more than 2 min. When evidence does not arrive in time, the verdict is INCONCLUSIVE and you rerun.</li>
+                <li><Badge kind="stop">Timing</Badge> PayPal&apos;s sandbox can deliver late. When evidence does not arrive in time, the verdict is INCONCLUSIVE and you rerun.</li>
                 <li><Badge kind="stop">Every dispute stage</Badge> Disputes open and wait on the merchant. The sandbox refuses require-evidence and adjudicate at the stage a new dispute starts in, so those are out of scope.</li>
                 <li><Badge kind="stop">Every failure class</Badge> Proven on real runs: duplicate-webhook and refund-after-partial; the reports are in the repo under evidence/. Unclaimed-payout and overdue-invoice exist but are not claimed here. Dispute-on-a-refunded-order cannot be reached in this version and is reported as not tested.</li>
                 <li><Badge kind="stop">Load</Badge> This rehearses business events one at a time. It is not a load or volume test.</li>
