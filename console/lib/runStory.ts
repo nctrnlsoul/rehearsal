@@ -48,6 +48,14 @@ export type StepCard = {
   readonly current: boolean;
   /** A human sentence for a step that did not succeed. */
   readonly problem: string | null;
+  /** Seconds since a slow step started, while PayPal works on it; null otherwise. */
+  readonly sendingS: number | null;
+  /** One plain line on why a slow step takes this long, while it is being sent. */
+  readonly sendingNote: string | null;
+  /** The engine's pairing_mismatch line: PayPal ties the dispute to another capture than the bank. */
+  readonly pairing: string | null;
+  /** What is known about an expected event that was not seen, beyond the general line. */
+  readonly lateNote: string | null;
   readonly details: {
     readonly kind: string;
     readonly request: string | null;
@@ -101,6 +109,8 @@ export type RunStory = {
     readonly steps: string;
     readonly amount: string;
     readonly amountNote: string | null;
+    /** Disputed money, said apart from what the calls charged; null when nothing was disputed or amount already says it. */
+    readonly disputed: string | null;
     readonly slowest: string;
     readonly signatures: string;
     readonly signaturesOk: boolean | null;
@@ -151,6 +161,18 @@ export const STEP_REQUESTS: Readonly<Record<string, string>> = {
   open_dispute: "POST /v1/customer/disputes",
   resend_webhook: "POST /v1/notifications/webhooks-events/{event_id}/resend",
 };
+
+/**
+ * The steps that sit at "Sending" for a minute or two while PayPal works, and
+ * why, so they never look frozen. Only what PayPal itself does is said.
+ */
+export const SLOW_SEND: Readonly<Record<string, string>> = {
+  resend_webhook: "PayPal lists a new event before it allows a resend. This usually takes 1 to 2 minutes.",
+  open_dispute: "PayPal creates the case, then makes it readable.",
+};
+
+/** Measured on 2026-10-23: a CUSTOMER.DISPUTE.CREATED arrived 12h17m after its dispute was filed. */
+export const DISPUTE_LAG = "PayPal's sandbox has delivered dispute events up to 12 hours later.";
 
 /** Kinds liveView joins to a delivery (its PAIR_RULES, plus a resend's second copy). */
 const JOINED_KINDS = new Set(["card_order", "refund", "open_dispute", "invoice_create", "invoice_record_payment", "resend_webhook"]);
@@ -338,6 +360,13 @@ function titleOf(step: PlanStep, accepted: boolean): string {
   return STEP_TITLES[step.kind] ?? "Step sent";
 }
 
+const AMOUNT = /^\d+(\.\d{1,2})?$/;
+
+/** The engine writes this line when PayPal's read-back names a different capture than the bank's. */
+function pairingLine(detail: string | null): string | null {
+  return detail === null ? null : (/pairing_mismatch: banked capture [^;]+?, PayPal says [^;]+/.exec(detail)?.[0] ?? null);
+}
+
 const centsOf = (amount: string): bigint => {
   const [w, f = ""] = amount.split(".");
   return BigInt(w!) * 100n + BigInt(f.padEnd(2, "0").slice(0, 2));
@@ -432,6 +461,7 @@ export function runStory(read: LiveRead): RunStory {
     }
     const amount = step.amount === null ? null : money(plan.currency, step.amount);
     const detail = call?.detail ?? null;
+    const slow = sent === "sending" && SLOW_SEND[kind] !== undefined;
     const card: StepCard = {
       id: step.id,
       n: i + 1,
@@ -445,6 +475,10 @@ export function runStory(read: LiveRead): RunStory {
       waitingS,
       current: false,
       problem: sent === "refused" || sent === "not-sent" || sent === "unknown" || sent === "never-confirmed" ? withWarning(sent, humanReason(detail) ?? humanReason(read.run.halt_reason)) : null,
+      sendingS: slow ? Math.max(0, nowS - (call?.t ?? nowS)) : null,
+      sendingNote: slow ? SLOW_SEND[kind]! : null,
+      pairing: kind === "open_dispute" ? pairingLine(detail) : null,
+      lateNote: kind === "open_dispute" && reply === "not-seen" ? DISPUTE_LAG : null,
       details: {
         kind,
         request: STEP_REQUESTS[kind] ?? null,
@@ -475,6 +509,13 @@ export function runStory(read: LiveRead): RunStory {
     planned += centsOf(a);
     if (c.sent === "accepted") accepted += centsOf(a);
   }
+  // A dispute moves no money in the call, so it is counted apart from what was charged.
+  let disputedCents = 0n;
+  for (const c of finalCards) {
+    const a = c.kind === "open_dispute" && c.sent === "accepted" ? c.details.ids.find(([k]) => k === "dispute_amount")?.[1] : undefined;
+    if (a !== undefined && AMOUNT.test(a)) disputedCents += centsOf(a);
+  }
+  const disputed = disputedCents === 0n ? null : `${money(plan.currency, fromCents(disputedCents))} disputed`;
   const allReplies = finalCards.flatMap((c) => c.replies);
   const timed = allReplies.filter((r) => r.latencyS !== null);
   const slowestReply = timed.length === 0 ? null : timed.reduce((a, b) => (b.latencyS! > a.latencyS! ? b : a));
@@ -510,6 +551,7 @@ export function runStory(read: LiveRead): RunStory {
   let headline: string;
   let lead: string | null;
   const stepsWord = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
+  const allSteps = (verb: "done" | "sent") => (total === 1 ? `The step ${verb === "done" ? "is done" : "was sent"}.` : `All ${stepsWord(total)} ${verb}.`);
   if (view.phase === "queued") {
     tone = "queued";
     headline = "Queued.";
@@ -531,11 +573,14 @@ export function runStory(read: LiveRead): RunStory {
     lead = "The server has picked it up. The first step starts in a moment.";
   } else if (view.phase === "complete") {
     tone = "done";
-    headline = `All ${stepsWord(total)} done.`;
+    headline = allSteps("done");
+    // When every missing event is a dispute's, its own measured lag says it; otherwise it is added to the general line.
+    const unseen = finalCards.filter((c) => c.reply === "not-seen");
+    const lag = unseen.length > 0 && unseen.every((c) => c.lateNote !== null) ? DISPUTE_LAG : `PayPal's sandbox has delivered later than that before.${unseen.some((c) => c.lateNote !== null) ? ` ${DISPUTE_LAG}` : ""}`;
     lead =
       waiting === 0
         ? evidence
-        : `${evidence ?? ""} ${waiting} expected ${waiting === 1 ? "event was" : "events were"} not seen before the wait ended. That is not proof the store missed ${waiting === 1 ? "it" : "them"}: PayPal's sandbox has delivered later than that before.`.trim();
+        : `${evidence ?? ""} ${waiting} expected ${waiting === 1 ? "event was" : "events were"} not seen before the wait ended. That is not proof the store missed ${waiting === 1 ? "it" : "them"}: ${lag}`.trim();
   } else {
     const sending = finalCards.find((c) => c.sent === "sending");
     const next = finalCards.find((c) => c.sent === "queued");
@@ -547,7 +592,7 @@ export function runStory(read: LiveRead): RunStory {
       if (arrived > 0 || done > 0) lead = `${lead} ${arrived} of ${expected} expected ${expected === 1 ? "event" : "events"} arrived so far.`;
     } else {
       tone = "waiting";
-      headline = `All ${stepsWord(total)} sent.`;
+      headline = allSteps("sent");
       lead = waiting > 0 ? `Waiting on PayPal for ${events(waiting)}. ${arrived} of ${expected} arrived so far.` : evidence ?? "Finishing up.";
     }
   }
@@ -624,12 +669,14 @@ export function runStory(read: LiveRead): RunStory {
     verdict: verdictHero(view.finding),
     figures: {
       steps: `${done} of ${total}`,
-      amount: planned === 0n ? "none" : money(plan.currency, fromCents(accepted)),
+      amount: planned === 0n ? (disputed ?? "none") : money(plan.currency, fromCents(accepted)),
       amountNote:
         planned === 0n || accepted === planned
           ? null
           : `of ${money(plan.currency, fromCents(planned))} planned${finalCards.some((c) => c.sent === "unknown" || c.sent === "never-confirmed") ? "; one step's outcome is unknown" : ""}`,
-      slowest: slowestReply === null ? (waiting > 0 ? "waiting" : "none") : `${slowestReply.exact ? "" : "at most "}${dur(slowestReply.latencyS!)}`,
+      disputed: planned === 0n ? null : disputed,
+      // Once the run has ended nothing more is waited for, so it says what happened.
+      slowest: slowestReply === null ? (waiting > 0 ? (view.settled ? "none arrived" : "waiting") : "none") : `${slowestReply.exact ? "" : "at most "}${dur(slowestReply.latencyS!)}`,
       signatures: expected === 0 ? (view.settled ? "none" : "none yet") : `${verified} of ${expected}`,
       // A check only when every expected event arrived verified; a cross when one arrived unverified.
       signaturesOk: expected === 0 ? null : verified === expected ? true : arrived > verified ? false : null,

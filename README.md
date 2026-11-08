@@ -113,6 +113,8 @@ npm run bank:list
 npm run bank:export-hosted -- --count 1   # moves ready purchases to the console's bank, as SQL
 ```
 
+On Windows, PowerShell drops a bare `--`, so npm silently ignores the flags after it (`--amount 54.00` falls back to the default 88.00). Run these in cmd, or quote it in PowerShell: `npm run bank:add '--' --amount 54.00`.
+
 `bank:add` applies the per-step cap before any order exists. `bank:confirm` is
 safe to re-run. It matches the buyer transaction by amount, currency and the
 time closest to the order. An order PayPal no longer holds (404 on the order)

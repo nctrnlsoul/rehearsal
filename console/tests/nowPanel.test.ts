@@ -5,7 +5,8 @@ import { HOSTED_REPLAYS, hostedById, hostedEndS, hostedRead } from "../lib/hoste
 import type { LiveRead } from "../lib/liveView";
 import { nowPanel, stagesOf } from "../lib/nowPanel";
 import { runStory } from "../lib/runStory";
-import { type Fixture, absolute, tokenRefused } from "./fixtures/liveRuns";
+import { RUNS } from "../lib/replays";
+import { type Fixture, absolute, disputeRun, recordedAt, tokenRefused } from "./fixtures/liveRuns";
 
 const ID = "20261107230012-f3bb0a";
 const hosted = hostedById(ID)!;
@@ -59,6 +60,8 @@ describe("the Now running panel, on the hosted Tiny Bakery run", () => {
         { label: "Waiting for PayPal's webhook", short: "Webhook", state: "todo" },
         { label: "Signature verified", short: "Verified", state: "todo" },
       ],
+      // A card capture is quick, so it gets no clock and no explaining line.
+      note: null,
     });
     expect(p.label).toBe("0 of 5 accepted, 0 of 4 verified");
   });
@@ -238,5 +241,54 @@ describe("the Now running panel, after the verifier pass", () => {
       expect(stages.slice(0, 2).map((s) => [s.label, s.state])).toEqual([["Sending to PayPal", "unknown"], ["Outcome unknown", "unknown"]]);
       expect(stages.some((s) => s.state === "bad" || s.state === "done")).toBe(false);
     }
+  });
+});
+
+// v0.7.4 item 2 (R-053): a step that sits at Sending for a minute must not look frozen.
+describe("v0.7.4: the panel while PayPal works on a slow step", () => {
+  const T0 = Date.parse("2026-11-08T03:30:57Z");
+  const read = (f: Fixture, nowS: number): LiveRead => ({
+    run: {
+      id: "20261108033057-e2e0d1",
+      kind: "scenario",
+      plan_source: "recorded",
+      plan_id: "plan-e2e",
+      scenario_sha256: null,
+      status: f.status,
+      state: null,
+      halt_reason: null,
+      created_at: new Date(T0).toISOString(),
+      started_at: new Date(T0).toISOString(),
+      heartbeat_at: new Date(T0 + nowS * 1000).toISOString(),
+      finished_at: f.status === "complete" ? new Date(T0 + nowS * 1000).toISOString() : null,
+    },
+    events: absolute(f, T0).map((e, i) => ({ ...e, seq: i + 1 })),
+    now: new Date(T0 + nowS * 1000).toISOString(),
+  });
+  const panel = (f: Fixture, nowS: number) => nowPanel(runStory(read(f, nowS)));
+
+  it("a resend shows its seconds on the Sending stage and the one line on why", () => {
+    const p = panel(recordedAt(RUNS[1]!, 45), 45);
+    if (p.body.kind !== "step") throw new Error(p.body.kind);
+    expect(p.body.stages[0]!.label).toMatch(/^Sending to PayPal, 4\ds$/);
+    expect(p.body.stages[0]!.short).toMatch(/^Sending, 4\ds$/);
+    expect(p.body.stages[0]!.state).toBe("now");
+    expect(p.body.note).toBe("PayPal lists a new event before it allows a resend. This usually takes 1 to 2 minutes.");
+    // The box keeps its key while the clock moves, so it does not re-animate every second.
+    expect(panel(recordedAt(RUNS[1]!, 50), 50).key).toBe(p.key);
+  });
+
+  it("a dispute shows the same, in its own words, past a minute", () => {
+    const p = panel(disputeRun(91), 91);
+    if (p.body.kind !== "step") throw new Error(p.body.kind);
+    expect(p.body.stages[0]!.label).toBe("Sending to PayPal, 1m 30s");
+    expect(p.body.note).toBe("PayPal creates the case, then makes it readable.");
+  });
+
+  it("item 5: one step and one webhook read in the singular", () => {
+    const finished = panel(disputeRun(210), 210);
+    if (finished.body.kind !== "final") throw new Error(finished.body.kind);
+    expect(finished.body.title).toBe("The step is done.");
+    expect(finished.body.text).toBe("0 of 1 webhook arrived before the run ended, 0 verified.");
   });
 });

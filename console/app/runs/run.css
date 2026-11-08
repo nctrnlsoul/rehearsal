@@ -23,6 +23,10 @@
 .now-panel { --np-h: 204px; position: relative; z-index: 5; margin-top: -56px; height: var(--np-h); padding: 18px 24px 20px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; overflow: hidden; }
 .now-panel.sticky { position: sticky; top: 12px; z-index: 30; box-shadow: 0 1px 2px rgba(23, 24, 26, 0.06), 0 14px 32px -18px rgba(23, 24, 26, 0.35); }
 .now-panel + .figures { margin-top: 16px; }
+/* Once the run has settled nothing below can move, so the finished panel fits its sentence instead of standing mostly empty. */
+.now-panel.now-final:not(.sticky) { height: auto; }
+/* A slow step's one line on why it is slow: the box grows by that line while the step is sent, and only then. */
+.now-panel.has-note { --np-h: 234px; }
 /* While the run can change, the hero holds one height, so its headline growing or
    shrinking never moves the panel. Sized from the hosted replay's tallest moment. */
 .run.is-running .run-hero .answer { min-height: 300px; }
@@ -161,6 +165,13 @@
 
 .problem { margin: 0 24px 14px; padding: 12px 14px; border-radius: var(--radius-control); background: var(--bug-bg); color: var(--text); font-size: 15px; display: flex; gap: 10px; align-items: flex-start; }
 .problem .icon { width: 18px; height: 18px; flex: none; margin-top: 2px; }
+.pairing { margin: 0 24px 14px; padding: 12px 14px; border-radius: var(--radius-control); background: var(--wait-bg); border: 1px solid var(--wait-line); color: var(--text); font-size: 15px; display: flex; gap: 10px; align-items: flex-start; }
+.pairing .icon { width: 18px; height: 18px; flex: none; margin-top: 2px; }
+.pairing-raw { display: block; margin-top: 4px; font-size: 13px; color: var(--wait); overflow-wrap: anywhere; }
+.step.line .pairing { margin: 6px 0 0; }
+.wait-fill { color: var(--wait); }
+.sent-note { margin-top: 8px; font-size: 14px; color: var(--text-2); max-width: 34ch; }
+.np-note { margin-top: 10px; }
 
 /* While a run is live: one line per step, opened to the full card on a click. */
 .steps.running { gap: 8px; }
@@ -261,11 +272,12 @@
   .details-body { padding: 4px 16px 18px; }
   .dl { grid-template-columns: 1fr; gap: 2px; }
   .dl dd { margin-bottom: 8px; }
-  .problem { margin: 0 16px 12px; }
+  .problem, .pairing { margin: 0 16px 12px; }
 
   .now-panel { --np-h: 252px; padding: 16px 16px 18px; gap: 12px; }
-  /* Once the run has settled nothing below can move, so the finished panel fits its sentence instead of standing mostly empty. */
-  .now-panel.now-final:not(.sticky) { height: auto; }
+  .now-panel.has-note { --np-h: 306px; }
+  /* The finished panel fits its content, so its one sentence is never cut short. */
+  .now-panel.now-final:not(.sticky) .np-main { display: block; -webkit-line-clamp: unset; overflow: visible; }
   .now-webhooks .np-eyebrow { display: none; }
   .now-panel.sticky { top: 8px; }
   .np-label { font-size: 13px; }
