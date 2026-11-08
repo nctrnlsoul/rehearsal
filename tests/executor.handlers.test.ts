@@ -265,6 +265,22 @@ describe("invoice handlers", () => {
     expect(detail["invoice_date"]).toBe("2026-10-13");
   });
 
+  it("dates a current invoice one UTC day back, so it is never 'tomorrow' in the merchant's time zone", async () => {
+    // Live run 20261108004204-886c24: created at 00:42 UTC on Nov 8, which was
+    // still Nov 7 for the sandbox merchant; send came back SCHEDULED.
+    const current = scenarioWith([{ id: "i7", kind: "invoice_create", amount: "120.00", dueInDays: 7 }]);
+    const seller = fakePaypal([
+      { status: 200, body: { invoice_number: "0008" } },
+      { status: 201, body: { id: "INV-8", status: "DRAFT" } },
+    ]);
+    const { ctx } = makeContext({ scenario: current, stepId: "i7", seller: seller.client });
+    ctx.now = () => new Date("2026-11-08T00:42:05Z");
+    await invoiceCreateHandler(ctx);
+    const detail = (seller.calls[1]!.body as any)["detail"];
+    expect(detail["invoice_date"]).toBe("2026-11-07");
+    expect(detail["payment_term"]["due_date"]).toBe("2026-11-15");
+  });
+
   it("reports an invoicing permission problem with the remedy", async () => {
     const seller = fakePaypal([{ status: 403, body: { name: "NOT_AUTHORIZED" } }]);
     const { ctx } = makeContext({ scenario, stepId: "i1", seller: seller.client });
