@@ -1,0 +1,57 @@
+{
+  "source": "Exported unchanged from the rehearsal-console database (console_runs + console_run_events) by the cloud chat on 2026-11-07. A real hosted live run of the recorded Tiny Bakery plan on rehearsal-indol.vercel.app (v0.7.0). Session and IP hashes are not exported.",
+  "run": {
+    "id": "20261107230012-f3bb0a",
+    "kind": "scenario",
+    "plan_source": "recorded",
+    "plan_id": "plan-20261023193216",
+    "scenario_sha256": "a94beac7ab3d50e6f4cef2874bcf09e026b1e98637bd5300af03a4460b34c423",
+    "status": "complete",
+    "created_at": "2026-11-07T23:00:12.846416+00:00",
+    "started_at": "2026-11-07T23:00:12.958555+00:00",
+    "finished_at": "2026-11-07T23:01:53.467908+00:00",
+    "state": {
+      "meta": { "scenario_sha256": "a94beac7ab3d50e6f4cef2874bcf09e026b1e98637bd5300af03a4460b34c423" },
+      "order": ["card-order-1", "card-order-2", "invoice-1", "invoice-1-send", "invoice-1-payment"],
+      "runId": "20261107230012-f3bb0a",
+      "steps": {
+        "card-order-1": { "id": "card-order-1", "ids": { "order_id": "78911370U16954433", "capture_id": "11K37781X9310523A" }, "kind": "card_order", "detail": "captured USD 45.00 by card, no human step", "status": "succeeded", "attempts": 1, "startedAt": "2026-11-07T23:00:13.039Z", "finishedAt": "2026-11-07T23:00:16.641Z" },
+        "card-order-2": { "id": "card-order-2", "ids": { "order_id": "71F56093WB4596331", "capture_id": "9L043723CF857873T" }, "kind": "card_order", "detail": "captured USD 60.00 by card, no human step", "status": "succeeded", "attempts": 1, "startedAt": "2026-11-07T23:00:16.722Z", "finishedAt": "2026-11-07T23:00:20.046Z" },
+        "invoice-1": { "id": "invoice-1", "ids": { "invoice_id": "INV2-9V88-U4GQ-W3KB-Y4NY", "invoice_number": "0007" }, "kind": "invoice_create", "detail": "invoice 0007 created as DRAFT for USD 120.00", "status": "succeeded", "attempts": 1, "startedAt": "2026-11-07T23:00:20.116Z", "finishedAt": "2026-11-07T23:00:20.946Z" },
+        "invoice-1-send": { "id": "invoice-1-send", "ids": {}, "kind": "invoice_send", "detail": "invoice UNPAID, due 2026-11-14, not past its due date", "status": "succeeded", "attempts": 1, "startedAt": "2026-11-07T23:00:21.025Z", "finishedAt": "2026-11-07T23:00:22.175Z" },
+        "invoice-1-payment": { "id": "invoice-1-payment", "ids": { "invoice_payment_id": "EXTR-8PS012207H138931T" }, "kind": "invoice_record_payment", "detail": "recorded USD 120.00; invoice reads MARKED_AS_PAID", "status": "succeeded", "attempts": 1, "startedAt": "2026-11-07T23:00:22.231Z", "finishedAt": "2026-11-07T23:00:22.906Z" }
+      },
+      "halted": false,
+      "version": 1,
+      "currency": "USD",
+      "startedAt": "2026-11-07T23:00:12.972Z",
+      "updatedAt": "2026-11-07T23:00:22.906Z",
+      "haltReason": null,
+      "scenarioName": "Tiny Bakery Sandbox Scenario"
+    }
+  },
+  "events": [
+    { "seq": 40, "at": "2026-11-07T23:00:12.958555+00:00", "kind": "run_started", "step_id": null, "data": {} },
+    { "seq": 41, "at": "2026-11-07T23:00:13.03094+00:00", "kind": "note", "step_id": null, "data": { "plan": { "currency": "USD", "steps": [ { "id": "card-order-1", "kind": "card_order", "amount": "45.00" }, { "id": "card-order-2", "kind": "card_order", "amount": "60.00" }, { "id": "invoice-1", "kind": "invoice_create", "amount": "120.00" }, { "id": "invoice-1-send", "from": "invoice-1", "kind": "invoice_send" }, { "id": "invoice-1-payment", "from": "invoice-1", "kind": "invoice_record_payment", "amount": "120.00" } ] } } },
+    { "seq": 42, "at": "2026-11-07T23:00:13.094232+00:00", "kind": "step_started", "step_id": "card-order-1", "data": { "kind": "card_order", "attempt": 1 } },
+    { "seq": 43, "at": "2026-11-07T23:00:16.713512+00:00", "kind": "step_finished", "step_id": "card-order-1", "data": { "ids": { "order_id": "78911370U16954433", "capture_id": "11K37781X9310523A" }, "kind": "card_order", "detail": "captured USD 45.00 by card, no human step", "status": "succeeded", "finished_at": "2026-11-07T23:00:16.641Z" } },
+    { "seq": 44, "at": "2026-11-07T23:00:16.763654+00:00", "kind": "step_started", "step_id": "card-order-2", "data": { "kind": "card_order", "attempt": 1 } },
+    { "seq": 45, "at": "2026-11-07T23:00:20.108341+00:00", "kind": "step_finished", "step_id": "card-order-2", "data": { "ids": { "order_id": "71F56093WB4596331", "capture_id": "9L043723CF857873T" }, "kind": "card_order", "detail": "captured USD 60.00 by card, no human step", "status": "succeeded", "finished_at": "2026-11-07T23:00:20.046Z" } },
+    { "seq": 46, "at": "2026-11-07T23:00:20.173246+00:00", "kind": "step_started", "step_id": "invoice-1", "data": { "kind": "invoice_create", "attempt": 1 } },
+    { "seq": 47, "at": "2026-11-07T23:00:21.01642+00:00", "kind": "step_finished", "step_id": "invoice-1", "data": { "ids": { "invoice_id": "INV2-9V88-U4GQ-W3KB-Y4NY", "invoice_number": "0007" }, "kind": "invoice_create", "detail": "invoice 0007 created as DRAFT for USD 120.00", "status": "succeeded", "finished_at": "2026-11-07T23:00:20.946Z" } },
+    { "seq": 48, "at": "2026-11-07T23:00:21.084719+00:00", "kind": "step_started", "step_id": "invoice-1-send", "data": { "kind": "invoice_send", "attempt": 1 } },
+    { "seq": 49, "at": "2026-11-07T23:00:22.222351+00:00", "kind": "step_finished", "step_id": "invoice-1-send", "data": { "ids": {}, "from": "invoice-1", "kind": "invoice_send", "detail": "invoice UNPAID, due 2026-11-14, not past its due date", "status": "succeeded", "finished_at": "2026-11-07T23:00:22.175Z" } },
+    { "seq": 50, "at": "2026-11-07T23:00:22.276158+00:00", "kind": "step_started", "step_id": "invoice-1-payment", "data": { "kind": "invoice_record_payment", "attempt": 1 } },
+    { "seq": 51, "at": "2026-11-07T23:00:22.973919+00:00", "kind": "step_finished", "step_id": "invoice-1-payment", "data": { "ids": { "invoice_payment_id": "EXTR-8PS012207H138931T" }, "from": "invoice-1", "kind": "invoice_record_payment", "detail": "recorded USD 120.00; invoice reads MARKED_AS_PAID", "status": "succeeded", "finished_at": "2026-11-07T23:00:22.906Z" } },
+    { "seq": 52, "at": "2026-11-07T23:00:23.036623+00:00", "kind": "deliveries_wait_started", "step_id": null, "data": { "seconds": 90 } },
+    { "seq": 53, "at": "2026-11-07T23:00:29.546933+00:00", "kind": "delivery", "step_id": null, "data": { "event_id": "WH-9NJ5058544606690H-55R672889N360970C", "event_type": "PAYMENT.CAPTURE.COMPLETED", "deliveries": 1, "fulfilled": 1, "duplicates_ignored": 0, "other": 0, "refused": 0, "cert_hosts": ["api.sandbox.paypal.com"], "capture_ids": ["11K37781X9310523A"], "received_at": ["2026-11-07T23:00:27.247Z"], "seen_at": "2026-11-07T23:00:29.486Z" } },
+    { "seq": 54, "at": "2026-11-07T23:00:29.546933+00:00", "kind": "note", "step_id": null, "data": { "order": { "capture_id": "11K37781X9310523A", "fulfilled": 1, "duplicates_ignored": 0, "refunds": 0, "disputes": 0 }, "seen_at": "2026-11-07T23:00:29.486Z" } },
+    { "seq": 55, "at": "2026-11-07T23:00:40.158911+00:00", "kind": "delivery", "step_id": null, "data": { "event_id": "WH-042940052Y471323P-8FF80456BR165090L", "event_type": "PAYMENT.CAPTURE.COMPLETED", "deliveries": 1, "fulfilled": 1, "duplicates_ignored": 0, "other": 0, "refused": 0, "cert_hosts": ["api.sandbox.paypal.com"], "capture_ids": ["9L043723CF857873T"], "received_at": ["2026-11-07T23:00:37.057Z"], "seen_at": "2026-11-07T23:00:40.073Z" } },
+    { "seq": 56, "at": "2026-11-07T23:00:40.158911+00:00", "kind": "note", "step_id": null, "data": { "order": { "capture_id": "9L043723CF857873T", "fulfilled": 1, "duplicates_ignored": 0, "refunds": 0, "disputes": 0 }, "seen_at": "2026-11-07T23:00:40.073Z" } },
+    { "seq": 57, "at": "2026-11-07T23:00:50.634207+00:00", "kind": "delivery", "step_id": null, "data": { "event_id": "WH-4B84114960149050T-48J069758A5520430", "event_type": "INVOICING.INVOICE.CREATED", "deliveries": 1, "fulfilled": 0, "duplicates_ignored": 0, "other": 1, "refused": 0, "cert_hosts": ["api.sandbox.paypal.com"], "capture_ids": ["INV2-9V88-U4GQ-W3KB-Y4NY"], "received_at": ["2026-11-07T23:00:46.726Z"], "seen_at": "2026-11-07T23:00:50.567Z" } },
+    { "seq": 58, "at": "2026-11-07T23:00:50.634207+00:00", "kind": "delivery", "step_id": null, "data": { "event_id": "WH-6F90236247748322J-4WR13669YJ8716204", "event_type": "INVOICING.INVOICE.UNPAID", "deliveries": 1, "fulfilled": 0, "duplicates_ignored": 0, "other": 1, "refused": 0, "cert_hosts": ["api.sandbox.paypal.com"], "capture_ids": ["INV2-9V88-U4GQ-W3KB-Y4NY"], "received_at": ["2026-11-07T23:00:46.990Z"], "seen_at": "2026-11-07T23:00:50.567Z" } },
+    { "seq": 59, "at": "2026-11-07T23:00:50.634207+00:00", "kind": "delivery", "step_id": null, "data": { "event_id": "WH-9TN42487DA896561N-7UP54691LD200672K", "event_type": "INVOICING.INVOICE.PAID", "deliveries": 1, "fulfilled": 0, "duplicates_ignored": 0, "other": 1, "refused": 0, "cert_hosts": ["api.sandbox.paypal.com"], "capture_ids": ["INV2-9V88-U4GQ-W3KB-Y4NY"], "received_at": ["2026-11-07T23:00:47.832Z"], "seen_at": "2026-11-07T23:00:50.567Z" } },
+    { "seq": 60, "at": "2026-11-07T23:01:53.407745+00:00", "kind": "deliveries_wait_ended", "step_id": null, "data": { "events_seen": 5 } },
+    { "seq": 61, "at": "2026-11-07T23:01:53.467908+00:00", "kind": "run_finished", "step_id": null, "data": { "status": "complete" } }
+  ]
+}

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Badge, Icon, ReplayBanner, SiteFooter, Topbar } from "../../components/chrome";
+import { HOSTED_REPLAYS, hostedEndS } from "../../lib/hostedReplays";
 import { RUNS, replayEndS } from "../../lib/replays";
 import { dur } from "../../lib/runStory";
 import "./run.css";
@@ -14,12 +15,34 @@ export default function RunsPage() {
         <section className="hero" aria-labelledby="runs-h">
           <div className="wrap">
             <p className="eyebrow">Replays · no passcode needed</p>
-            <h1 id="runs-h">The same run, before and after a one-line fix.</h1>
+            <h1 id="runs-h">Real sandbox runs, played on their recorded clocks.</h1>
             <p className="lead">Each replay is drawn by the live run&apos;s own view. Ids, times and the store&apos;s rows are the real ones.</p>
           </div>
         </section>
         <div className="wrap lift">
-          <ul className="run-cards" id="runs">
+          <ul className="run-cards hosted-cards" id="runs" aria-label="Hosted live runs">
+            {HOSTED_REPLAYS.map((h) => (
+              <li key={h.runId}>
+                <Link className="card run-card hosted" href={`/runs/${h.runId}`}>
+                  <span className="rc-top">
+                    <Badge kind={h.record.run.status === "complete" ? "ok" : "stop"}>{h.record.run.status === "complete" ? "Complete" : `Ended ${h.record.run.status}`}</Badge>
+                    <span className="note">{h.record.run.created_at.slice(0, 10)}</span>
+                  </span>
+                  <span className="rc-name">{h.title}</span>
+                  <span className="rc-line">{h.summary}</span>
+                  <span className="rc-meta">
+                    {h.record.events.filter((e) => e.kind === "step_finished").length} steps · {new Set(h.record.events.flatMap((e) => (e.kind === "delivery" && typeof e.data["event_id"] === "string" ? [e.data["event_id"]] : []))).size} events from PayPal · {dur(hostedEndS(h))} · <span className="mono">{h.runId}</span>
+                  </span>
+                  <span className="rc-go">Watch the replay <Icon name="arrow" /></span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <div className="section-head">
+            <h2 id="pair-h">Before and after a one-line fix</h2>
+            <p>The same run, on the store with and without the fix</p>
+          </div>
+          <ul className="run-cards" aria-labelledby="pair-h">
             {RUNS.map((r) => (
               <li key={r.runId}>
                 <Link className="card run-card" href={`/runs/${r.runId}`}>

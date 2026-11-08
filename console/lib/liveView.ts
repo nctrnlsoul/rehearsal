@@ -91,6 +91,8 @@ export type LedgerRow = {
   readonly firstSeenT: number;
   /** The store's receive time of the first copy; null from a store that does not report it. */
   readonly firstReceivedT: number | null;
+  /** The resource ids the store recorded for the event: a capture, an invoice, a dispute. */
+  readonly resourceIds: readonly string[];
   /** The steps this delivery is joined to; empty when no call names it. */
   readonly joinedTo: readonly string[];
 };
@@ -271,6 +273,7 @@ export function liveView(read: LiveRead): LiveView {
         certHosts: Array.isArray(e.data["cert_hosts"]) ? e.data["cert_hosts"].filter((h): h is string => typeof h === "string") : [],
         firstSeenT: prev?.firstSeenT ?? tOf(e.at),
         firstReceivedT: firstReceived === undefined ? (prev?.firstReceivedT ?? null) : tOf(firstReceived),
+        resourceIds: strList(e.data["capture_ids"]),
       });
       if (deliveries >= 2 && !redeliveries.has(id)) redeliveries.set(id, e);
     }

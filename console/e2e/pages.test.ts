@@ -7,8 +7,9 @@ import { pathToFileURL } from "node:url";
 import type { PGlite } from "@electric-sql/pglite";
 import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { HOSTED_REPLAYS } from "../lib/hostedReplays";
 import { RUNS } from "../lib/replays";
-import { type Fixture, absolute, recordedAt, tinyBakery, tokenRefused } from "../tests/fixtures/liveRuns";
+import { type Fixture, absolute, hostedAt, recordedAt, tinyBakery, tokenRefused } from "../tests/fixtures/liveRuns";
 import { hashFor } from "../tests/helpers";
 import { TEST_DB_ENV } from "../tests/postgrest";
 import { FAKE_SUPABASE_HOST, startFakeSupabase } from "./fakeSupabase";
@@ -155,7 +156,8 @@ async function expectCleanPage(page: Page, watch: Watch, path: string, status: n
 }
 
 // /live is not here: without a session it redirects to /gate. It is loaded past the gate below.
-const PAGES = ["/", "/build", "/runs", ...RUNS.map((r) => `/runs/${r.runId}`), "/finder", "/gate"];
+const HOSTED = HOSTED_REPLAYS[0]!;
+const PAGES = ["/", "/build", "/runs", ...HOSTED_REPLAYS.map((h) => `/runs/${h.runId}`), ...RUNS.map((r) => `/runs/${r.runId}`), "/finder", "/gate"];
 
 describe("every page hydrates under the CSP", () => {
   it.each(PAGES)("%s", async (path) => {
@@ -241,6 +243,30 @@ describe("maker's mark", () => {
     expect(mark).toEqual({ loaded: true, natural: [76, 72], height: 36, alt: "Made by NorthSchema", src: "/northschema-blossom-ink.png" });
     expect(await page.locator("footer.site").innerText()).toMatch(/by NorthSchema$/);
     expect(await page.locator("footer.site img").count()).toBe(0);
+    await ctx.close();
+  });
+
+  // Brief v0.7.1 section 3: cap height 60 to 65% of the blossom, weight 600, optically centered.
+  it.each([1440, 390])("the wordmark balances the blossom at %i wide", async (width) => {
+    const { ctx, page } = await watched();
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    const m = await page.evaluate(() => {
+      const img = document.querySelector(".maker-mark")!.getBoundingClientRect();
+      const wm = document.querySelector(".wordmark")!;
+      const cs = getComputedStyle(wm);
+      const c = document.createElement("canvas").getContext("2d")!;
+      c.font = `${cs.fontWeight} 1000px ${cs.fontFamily}`;
+      const capEm = c.measureText("R").actualBoundingBoxAscent / 1000;
+      const r = wm.getBoundingClientRect();
+      return { capRatio: (capEm * parseFloat(cs.fontSize)) / img.height, weight: cs.fontWeight, midGap: Math.abs(r.top + r.height / 2 - (img.top + img.height / 2)), gap: r.left - img.right, scroll: document.documentElement.scrollWidth <= innerWidth };
+    });
+    expect(m.capRatio).toBeGreaterThanOrEqual(0.6);
+    expect(m.capRatio).toBeLessThanOrEqual(0.65);
+    expect(m.weight).toBe("600");
+    expect(m.midGap).toBeLessThanOrEqual(1);
+    expect(m.gap).toBe(12);
+    expect(m.scroll).toBe(true);
     await ctx.close();
   });
 
@@ -379,14 +405,23 @@ describe("the live run, past the gate", () => {
     await ctx.close();
   });
 
-  it("draws a waiting reply as a dashed connector, counting up, on the current step", async () => {
+  it("while running, shows one line per step; a click opens the full card with its dashed, counting connector", async () => {
     await seedFixture(db.pg, "20261025180000-e2e002", recordedAt(RUNS[1]!, 10), 10);
     const { ctx, page, watch } = await unlocked();
     await expectCleanPage(page, watch, "/live/20261025180000-e2e002", 200);
-    await page.waitForSelector(".conn.dashed");
+    await page.waitForSelector(".step.line");
     await expect(page.locator("#run-h").innerText()).resolves.toBe("Running step 2 of 2: Ask PayPal to resend an event.");
+    expect(await page.locator(".step.line").count()).toBe(2);
+    expect(await page.locator(".step-card").count()).toBe(0);
+    await expect(page.locator(".step.line").first().locator(".line-pill").innerText()).resolves.toMatch(/^\d+s so far$/);
+    await expect(page.locator(".now-panel").innerText()).resolves.toContain("Step 2 of 2");
+    await page.locator(".step.line").first().locator(".line-row").click();
+    await page.waitForSelector(".conn.dashed");
     await expect(page.locator(".step").first().locator(".back").innerText()).resolves.toContain("Waiting for PayPal's webhook");
     expect(await page.locator(".step.current").count()).toBe(1);
+    await page.locator(".line-close").click();
+    expect(await page.locator(".step-card").count()).toBe(0);
+    expect(watch.problems).toEqual([]);
     await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261025180000-e2e002'");
     await ctx.close();
   });
@@ -438,6 +473,91 @@ describe("a replay is drawn by the live run's own view", () => {
   });
 });
 
+// Brief v0.7.1: the Now running panel, driven by the hosted run's own recorded rows.
+describe("the Now running panel", () => {
+  const panelTop = (page: Page) => page.evaluate(() => Math.round(document.querySelector(".now-panel")!.getBoundingClientRect().top + scrollY));
+
+  it.each([{ width: 1440, height: 900 }, { width: 390, height: 844 }])("holds still and sticky while the hosted replay runs, then lets go at $width", async (viewport) => {
+    const { ctx, page, watch } = await watched();
+    await page.setViewportSize(viewport);
+    await expectCleanPage(page, watch, `/runs/${HOSTED.runId}`, 200);
+    await page.getByRole("radio", { name: "8x" }).click();
+    const tops = new Set<number>();
+    const keys: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      if ((await page.locator(".run.is-running").count()) === 0) break;
+      tops.add(await panelTop(page));
+      const word = await page.locator(".now-panel .np-body:not(.np-leave)").innerText();
+      if (keys.at(-1) !== word.split("\n")[0]) keys.push(word.split("\n")[0]!);
+      await page.waitForTimeout(100);
+    }
+    // Nothing above the panel moves it while the run can change.
+    expect([...tops]).toHaveLength(1);
+    expect(keys[0]).toMatch(/^(Step 1 of 5|Not started)$/);
+    // Sticky under the top of the window while running.
+    await page.evaluate(() => scrollTo(0, 1600));
+    await page.waitForTimeout(50);
+    const stuck = await page.evaluate(() => document.querySelector(".now-panel")!.getBoundingClientRect().top);
+    expect(stuck).toBeLessThanOrEqual(12);
+    expect(stuck).toBeGreaterThanOrEqual(8);
+    expect(await noSideScroll(page)).toBe(true);
+    await page.getByRole("button", { name: "Show the end" }).click();
+    await expect(page.locator(".now-panel").innerText()).resolves.toContain("All 5 steps done. 4 of 4 webhooks verified.");
+    expect(await page.locator(".now-panel.sticky").count()).toBe(0);
+    expect(await page.locator(".step-card").count()).toBe(5);
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+
+  it("names the UNPAID event, under Other events, by the invoice it shares with step 3", async () => {
+    const { ctx, page, watch } = await watched({ reducedMotion: "reduce" });
+    await expectCleanPage(page, watch, `/runs/${HOSTED.runId}`, 200);
+    const other = await page.locator(".other").innerText();
+    expect(other).toContain("PayPal says the invoice is awaiting payment");
+    expect(other).toContain("Same invoice as step 3 (INV2-9V88-U4GQ-W3KB-Y4NY)");
+    expect(other).toContain("INVOICING.INVOICE.UNPAID");
+    expect(other).not.toContain("no plain name");
+    // The two invoice events it does join sit on their own steps.
+    await expect(page.locator('[data-step="invoice-1"] .back').innerText()).resolves.toContain("PayPal confirmed: invoice created");
+    await expect(page.locator('[data-step="invoice-1-payment"] .back').innerText()).resolves.toContain("PayPal confirmed: invoice paid");
+    await ctx.close();
+  });
+
+  it("with reduced motion, swaps at once: nothing slides, fades or pulses", async () => {
+    const { ctx, page, watch } = await watched({ reducedMotion: "reduce" });
+    await expectCleanPage(page, watch, `/runs/${HOSTED.runId}`, 200);
+    // Reduced motion opens on the end; play it from the start at 32x.
+    await page.getByRole("radio", { name: "32x" }).click();
+    await page.getByRole("button", { name: "Replay from the start" }).click();
+    let leaving = 0;
+    const animations = new Set<string>();
+    for (let i = 0; i < 25; i++) {
+      leaving += await page.locator(".np-leave:visible").count();
+      for (const a of await page.locator(".now-panel *").evaluateAll((els) => {
+        // React may have replaced a node since it was found; a detached one has no computed style.
+        const live = els.filter((e) => e.isConnected);
+        return live.map((e) => getComputedStyle(e).animationName).concat(live.map((e) => getComputedStyle(e, "::after").animationName));
+      })) animations.add(a);
+      await page.waitForTimeout(80);
+    }
+    expect(leaving).toBe(0);
+    expect([...animations]).toEqual(["none"]);
+    expect(watch.problems).toEqual([]);
+    await ctx.close();
+  });
+
+  it("past the gate, a live run fed the hosted run's rows shows the same panel", async () => {
+    await seedFixture(db.pg, "20261107230012-e2e071", hostedAt(HOSTED, 7.6), 7.6);
+    const { ctx, page, watch } = await unlocked();
+    await expectCleanPage(page, watch, "/live/20261107230012-e2e071", 200);
+    await page.waitForSelector(".now-panel.now-step");
+    await expect(page.locator(".now-panel").innerText()).resolves.toMatch(/2 of 5 sent, 0 of 4 verified[\s\S]*Step 3 of 5[\s\S]*Creating the invoice, USD 120/);
+    expect(await page.locator(".now-panel.sticky").count()).toBe(1);
+    await db.pg.exec("update public.console_runs set status = 'complete', finished_at = now() where id = '20261107230012-e2e071'");
+    await ctx.close();
+  });
+});
+
 describe("the hosted finder, past the gate", () => {
   it("lists the four hosted classes and enables Run this class", async () => {
     const { ctx, page, watch } = await unlocked();
@@ -468,10 +588,71 @@ describe("the hosted finder, past the gate", () => {
   });
 });
 
-// The D2 build screenshots (brief v0.7.0, section 6), when E2E_SCREENSHOT_DIR is set.
+// The D2 build screenshots (brief v0.7.0, section 6, and v0.7.1, section 7), when E2E_SCREENSHOT_DIR is set.
 describe.runIf(SHOTS !== undefined)("D2 screenshots at 1440 and 390", () => {
   const sizes = [{ width: 1440, height: 900 }, { width: 390, height: 844 }];
   const shot = (page: Page, name: string, w: number) => page.screenshot({ path: join(SHOTS!, `${name}-${w}.png`), fullPage: true });
+
+  // Brief v0.7.1 section 7: the panel in each state, the list while running, the wordmark, the replay list.
+  it("v0.7.1: the Now running panel, from the hosted run's own rows", async () => {
+    const states: ReadonlyArray<readonly [string, () => Fixture, number]> = [
+      ["panel-card-step", () => hostedAt(HOSTED, 2), 2],
+      ["panel-invoice-step", () => hostedAt(HOSTED, 7.6), 7.6],
+      ["panel-webhooks", () => hostedAt(HOSTED, 30), 30],
+      ["panel-final-complete", () => hostedAt(HOSTED, 200), 101],
+      ["panel-final-halted", () => tokenRefused(), 3],
+    ];
+    let n = 0;
+    for (const v of sizes) {
+      const { ctx, page } = await unlocked(v);
+      for (const [name, make, nowS] of states) {
+        const id = `20261107120000-d71${String(++n).padStart(3, "0")}`;
+        const f = make();
+        await seedFixture(db.pg, id, f, nowS);
+        await page.goto(`${base}/live/${id}`, { waitUntil: "load" });
+        await page.waitForSelector(".now-panel");
+        await page.waitForTimeout(500);
+        expect(await noSideScroll(page), `${name} at ${v.width}`).toBe(true);
+        // The panel and what is around it, as a judge sees it on landing.
+        await page.screenshot({ path: join(SHOTS!, `${name}-${v.width}.png`) });
+        if (name === "panel-webhooks") await shot(page, "compact-list-running", v.width);
+        if (f.status === "running") await db.pg.exec(`update public.console_runs set status = 'complete', finished_at = now() where id = '${id}'`);
+      }
+      await ctx.close();
+    }
+  });
+
+  it("v0.7.1: the wordmark and the hosted replay list", async () => {
+    for (const v of sizes) {
+      const { ctx, page } = await watched({ reducedMotion: "reduce" });
+      await page.setViewportSize(v);
+      await page.goto(base + "/runs", { waitUntil: "networkidle" });
+      await hydrated(page);
+      await shot(page, "replays-hosted", v.width);
+      await page.screenshot({ path: join(SHOTS!, `wordmark-${v.width}.png`), clip: { x: 0, y: 0, width: v.width, height: v.width === 390 ? 100 : 64 } });
+      await ctx.close();
+    }
+  });
+
+  // Frames of one replay through the panel, on its recorded clock at 1x, for review of the motion.
+  it("v0.7.1: frames of the hosted replay through the panel", async () => {
+    const { ctx, page } = await watched();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${base}/runs/${HOSTED.runId}`, { waitUntil: "load" });
+    await hydrated(page);
+    const start = Date.now();
+    // Recorded seconds: step 1 sending; mid-swap from step 1 to 2 (call finished at 3.68 s);
+    // the invoice step; webhooks 0 of 4; 1 of 4; 2 of 4; all 4 in and listening; then the end.
+    const moments = [1.5, 3.9, 7.6, 12, 15.5, 28, 39];
+    for (const [i, t] of moments.entries()) {
+      await page.waitForTimeout(Math.max(0, t * 1000 - (Date.now() - start)));
+      await page.screenshot({ path: join(SHOTS!, "replay-frames", `frame-${i + 1}-${String(t).replace(".", "_")}s.png`) });
+    }
+    await page.getByRole("button", { name: "Show the end" }).click();
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(SHOTS!, "replay-frames", `frame-${moments.length + 1}-end.png`) });
+    await ctx.close();
+  }, 60_000);
 
   it("public pages: home, plans, replays, replay run, finder, gate", async () => {
     const pages = [["home", "/"], ["plans", "/build"], ["replays", "/runs"], ["replay-run", "/runs/20261023231552-60ea96"], ["finder", "/finder"], ["gate", "/gate"]] as const;

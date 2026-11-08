@@ -1,16 +1,18 @@
+import { type HostedReplay, hostedEndS } from "../../lib/hostedReplays";
 import { type ReplayRun, replayRead } from "../../lib/replays";
 
 /**
  * Live-run fixtures, as the events the worker writes, each at a time in
- * seconds from the run's start. Three sources, never mixed:
+ * seconds from the run's start. Four sources, never mixed:
  *
  * - recordedAt: a recorded run (fixtures/runs.json), its own ids and times,
  *   cut at a moment of its clock. This is how the live page is driven from a
  *   recorded fixture: no PayPal call, no invented id.
  * - tinyBakery: the shape of a Tiny Bakery run (plan-20261023193216), to
- *   exercise five steps, an invoice and a step with no event. No such hosted
- *   run with deliveries is on record, so every id here is marked E2E and
- *   none resolves at PayPal.
+ *   exercise five steps, an invoice and a step with no event. Every id here
+ *   is marked E2E and none resolves at PayPal.
+ * - hostedAt: hosted run 20261107230012-f3bb0a, its own rows and ids, with
+ *   each time made relative to its start.
  * - tokenRefused: run 20261107203953-bd8593 as the fixed engine records it:
  *   the token request answered 401 invalid_client before any write.
  */
@@ -24,6 +26,28 @@ export function recordedAt(run: ReplayRun, tS: number): Fixture {
   return {
     status: read.run.status,
     events: read.events.map((e) => ({ s: (Date.parse(e.at) - t0) / 1000, kind: e.kind, ...(e.step_id === null ? {} : { step: e.step_id }), data: e.data })),
+  };
+}
+
+/**
+ * A hosted run's own rows, cut at tS seconds, as a fixture: every event and
+ * id unchanged, every time inside them made relative to the run's start, so
+ * the live page can be fed the recorded run on today's clock.
+ */
+export function hostedAt(h: HostedReplay, tS: number): Fixture {
+  const t0 = Date.parse(h.record.run.started_at ?? h.record.run.created_at);
+  const rel = (v: unknown): unknown => {
+    if (typeof v === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(v)) return { rel: (Date.parse(v) - t0) / 1000 };
+    if (Array.isArray(v)) return v.map(rel);
+    if (typeof v === "object" && v !== null) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rel(x)]));
+    return v;
+  };
+  const done = tS >= hostedEndS(h);
+  return {
+    status: done ? h.record.run.status : "running",
+    events: h.record.events
+      .filter((e) => (Date.parse(e.at) - t0) / 1000 <= tS)
+      .map((e) => ({ s: (Date.parse(e.at) - t0) / 1000, kind: e.kind, ...(e.step_id === null ? {} : { step: e.step_id }), data: rel(e.data) as Record<string, unknown> })),
   };
 }
 

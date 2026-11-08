@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Badge, Icon, SiteFooter, Topbar } from "../components/chrome";
 import { RECORDED_PLANS, StartStrip } from "../components/StartHere";
 import facts from "../fixtures/facts.json";
+import { HOSTED_REPLAYS } from "../lib/hostedReplays";
 import { DEFAULT_AI_BUDGET, DEFAULT_CAPS, DESCRIPTION_MAX_CHARS, HOSTED_CAPS, PLANNER_TIMEOUT_MS } from "../lib/hosted";
 import "./home.css";
 
@@ -28,8 +29,8 @@ export default function HomePage() {
             <StartStrip />
             <div className="start-actions">
               <Link className="btn btn-primary" href="/live">Run a plan live <Icon name="arrow" /></Link>
-              <Link className="btn btn-quiet" href="/runs">Watch a recorded run first</Link>
-              <span className="note">Live runs need the judge passcode. Replays do not.</span>
+              <Link className="btn btn-quiet" href={`/runs/${HOSTED_REPLAYS[0]!.runId}`}>Watch a recorded run first</Link>
+              <span className="note">Live runs need the judge passcode. Replays do not, and the first is a real hosted live run. <Link href="/runs">See every replay</Link>.</span>
             </div>
           </div>
 
