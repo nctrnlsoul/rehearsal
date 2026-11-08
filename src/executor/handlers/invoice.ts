@@ -70,7 +70,13 @@ export const invoiceCreateHandler: StepHandler = async (ctx) => {
     const due = new Date(ctx.now().getTime() + step.dueInDays * 86_400_000);
     // PayPal rejects a due date before the invoice date, so a past-due invoice
     // has to be dated on its due date rather than today.
-    detail["invoice_date"] = isoDate(step.dueInDays < 0 ? due : ctx.now());
+    // A current invoice is dated one UTC day back. PayPal reads invoice_date in
+    // the merchant's own time zone, and a date that is already "tomorrow" there
+    // makes send return SCHEDULED instead of sending (live run
+    // 20261108004204-886c24, 00:42 UTC = 7:42 PM US Eastern). One day back is
+    // never in the future for any zone from UTC-12 to UTC+14.
+    const dayBack = new Date(ctx.now().getTime() - 86_400_000);
+    detail["invoice_date"] = isoDate(step.dueInDays < 0 ? due : dayBack);
     detail["payment_term"] = { term_type: "DUE_ON_DATE_SPECIFIED", due_date: isoDate(due) };
   }
 

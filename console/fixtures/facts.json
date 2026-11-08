@@ -3,10 +3,10 @@
   "measuredOn": "2026-11-07",
   "version": "v0.7.1",
   "tests": {
-    "engine": 619,
+    "engine": 620,
     "store": 142,
     "receiver": 76,
     "console": 349,
-    "total": 1186
+    "total": 1187
   }
 }
