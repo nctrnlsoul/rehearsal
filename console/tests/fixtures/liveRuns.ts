@@ -105,6 +105,48 @@ export function tinyBakery(tS: number): Fixture {
   return { status: done ? "complete" : "running", events };
 }
 
+/**
+ * The shape of hosted run 20261108033057-cfccbd: one dispute against a banked
+ * USD 88 purchase, about 110 s at "Sending" while PayPal makes the case
+ * readable, then a 90 s wait the dispute webhook did not arrive in. Every id is
+ * marked E2E and none resolves at PayPal; the run's own record is not read.
+ * paypalCapture: what PayPal's read-back names; undefined when it names none.
+ */
+export function disputeRun(tS: number, paypalCapture?: string): Fixture {
+  const banked = "E2E-CAPTURE-BANK-1";
+  const OPEN = "dispute PP-R-E2E-DISPUTE-1 open at WAITING_FOR_SELLER_RESPONSE, stage INQUIRY";
+  const pairing =
+    paypalCapture === undefined
+      ? "PayPal did not name the capture"
+      : paypalCapture === banked
+        ? `PayPal names capture ${banked}, the banked capture`
+        : `pairing_mismatch: banked capture ${banked}, PayPal says ${paypalCapture}`;
+  const ids: Record<string, string> = {
+    purchase_order_id: "E2E-ORDER-BANK-1",
+    purchase_capture_id: banked,
+    buyer_transaction_id: "E2E-TXN-BANK-1",
+    dispute_amount: "88.00",
+    dispute_id: "PP-R-E2E-DISPUTE-1",
+    ...(paypalCapture === undefined ? {} : { paypal_seller_transaction_id: paypalCapture }),
+  };
+  const plan = { currency: "USD", steps: [{ id: "dispute-1", kind: "open_dispute", reason: "MERCHANDISE_OR_SERVICE_NOT_RECEIVED" }] };
+  const events: FixtureEvent[] = [{ s: 0, kind: "run_started" }, { s: 0, kind: "note", data: { plan } }];
+  if (tS >= 1) events.push({ s: 1, kind: "step_started", step: "dispute-1", data: { kind: "open_dispute", attempt: 1 } });
+  if (tS >= 111) {
+    events.push({
+      s: 111,
+      kind: "step_finished",
+      step: "dispute-1",
+      // As the engine writes it: a mismatch leads the detail, any other note follows it.
+      data: { kind: "open_dispute", status: "succeeded", detail: pairing.startsWith("pairing_mismatch") ? `${pairing}; ${OPEN}` : `${OPEN}; ${pairing}`, ids, finished_at: null },
+    });
+  }
+  if (tS >= 111.5) events.push({ s: 111.5, kind: "deliveries_wait_started", data: { seconds: 90 } });
+  const done = tS >= 201.5;
+  if (done) events.push({ s: 201.5, kind: "deliveries_wait_ended", data: { events_seen: 0 } }, { s: 201.5, kind: "run_finished", data: { status: "complete" } });
+  return { status: done ? "complete" : "running", events };
+}
+
 export const TOKEN_REFUSED_DETAIL = "not sent: the seller app's sandbox token request failed with http 401 (invalid_client), before any write";
 
 export function tokenRefused(): Fixture {

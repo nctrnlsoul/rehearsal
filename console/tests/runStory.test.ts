@@ -3,8 +3,8 @@ import type { LiveRead } from "../lib/liveView";
 import { RUNS } from "../lib/replays";
 import { HOSTED_REPLAYS, hostedEndS, hostedRead } from "../lib/hostedReplays";
 import { HOSTED_FINDER_CLASSES } from "../lib/hosted";
-import { type RunStory, dur, humanReason, money, runStory, verdictHero } from "../lib/runStory";
-import { type Fixture, TOKEN_REFUSED_DETAIL, absolute, recordedAt, tinyBakery, tokenRefused } from "./fixtures/liveRuns";
+import { DISPUTE_LAG, type RunStory, SLOW_SEND, dur, humanReason, money, runStory, verdictHero } from "../lib/runStory";
+import { type Fixture, TOKEN_REFUSED_DETAIL, absolute, disputeRun, recordedAt, tinyBakery, tokenRefused } from "./fixtures/liveRuns";
 
 const T0 = Date.parse("2026-11-07T20:39:53Z");
 
@@ -81,7 +81,7 @@ describe("the live state sequence, on a Tiny Bakery run", () => {
     expect(s.proof.map((p) => `Step ${p.step}, ${p.label} ${dur(p.latencyS!)}`)).toEqual(["Step 1, Payment 12s", "Step 3, Invoice 12s", "Step 2, Payment 20s", "Step 5, Invoice paid 16s"]);
     // Step 3's invoice event beat step 2's payment, so the page says so in one sentence.
     expect(s.outOfOrder).toBe("Step 3's webhook arrived before step 2's. PayPal does not deliver webhooks in order; your app has to handle that.");
-    expect(s.figures).toEqual({ steps: "5 of 5", amount: "USD 345", amountNote: null, slowest: "20s", signatures: "4 of 4", signaturesOk: true });
+    expect(s.figures).toEqual({ steps: "5 of 5", amount: "USD 345", amountNote: null, disputed: null, slowest: "20s", signatures: "4 of 4", signaturesOk: true });
     expect(s.counts).toEqual({ expected: 4, arrived: 4, verified: 4 });
     expect(s.rejected).toBeNull();
     expect(s.cards[3]!.reply).toBe("none-expected");
@@ -231,5 +231,149 @@ describe("the finder verdict hero, for every hosted class", () => {
       }
     }
     expect(HOSTED_FINDER_CLASSES).toEqual(expect.arrayContaining(["duplicate-webhook", "overdue-invoice", "unclaimed-payout"]));
+  });
+});
+
+// v0.7.4, brief items 1 to 5 and 8 (R-053).
+describe("v0.7.4: a dispute's pairing, a slow step's clock, and a finished run's words", () => {
+  const RESEND = RUNS[1]!;
+  const figuresText = (s: RunStory) => Object.values(s.figures).join(" | ");
+
+  it("item 1: shows PayPal's pairing_mismatch line on the dispute card, and only when the engine wrote one", () => {
+    const off = story(disputeRun(210, "E2E-CAPTURE-OTHER-9"), 210);
+    expect(off.cards[0]!.pairing).toBe("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says E2E-CAPTURE-OTHER-9");
+    // The dispute is real: the step still reads as accepted, never as failed.
+    expect(off.cards[0]!.sent).toBe("accepted");
+    expect(off.cards[0]!.problem).toBeNull();
+    expect(off.cards[0]!.details.ids).toContainEqual(["paypal_seller_transaction_id", "E2E-CAPTURE-OTHER-9"]);
+
+    expect(story(disputeRun(210, "E2E-CAPTURE-BANK-1"), 210).cards[0]!.pairing).toBeNull();
+    expect(story(disputeRun(210), 210).cards[0]!.pairing).toBeNull();
+    expect(story(tinyBakery(40), 40).cards.every((c) => c.pairing === null)).toBe(true);
+  });
+
+  // Found by the cold verifier on d92efb5: a parse of the ids could miss a real mismatch.
+  it("item 1: raises the amber line on the token alone, however the ids print or wherever storage cut the detail", () => {
+    const withDetail = (detail: string) => {
+      const f = disputeRun(210, "E2E-CAPTURE-OTHER-9");
+      f.events.find((e) => e.kind === "step_finished")!.data!["detail"] = detail;
+      return story(f, 210).cards[0]!.pairing;
+    };
+    expect(withDetail("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says \\u{200b}; dispute X open")).toBe("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says \\u{200b}");
+    expect(withDetail("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says")).toBe("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says");
+    expect(withDetail(`pairing_mismatch: banked capture ${"C".repeat(282)}`)).toMatch(/^pairing_mismatch: banked capture C+$/);
+    expect(withDetail("dispute X open; PayPal did not name the capture")).toBeNull();
+  });
+
+  it("item 2: a resend in flight counts its seconds and says why it takes this long", () => {
+    const c = story(recordedAt(RESEND, 45), 45).cards.find((x) => x.kind === "resend_webhook")!;
+    expect(c.sent).toBe("sending");
+    expect(c.sendingNote).toBe("PayPal lists a new event before it allows a resend. This usually takes 1 to 2 minutes.");
+    const startedS = (Date.parse(RESEND.calls[1]!.startedAt) - Date.parse(RESEND.startedAt)) / 1000;
+    expect(c.sendingS!).toBeCloseTo(45 - startedS, 1);
+    // The clock moves with the story, never ahead of it.
+    const later = story(recordedAt(RESEND, 55), 55).cards.find((x) => x.kind === "resend_webhook")!;
+    expect(later.sendingS! - c.sendingS!).toBeCloseTo(10, 1);
+    // Once PayPal accepts it, both are gone.
+    const after = story(recordedAt(RESEND, 70), 70).cards.find((x) => x.kind === "resend_webhook")!;
+    expect(after.sent).toBe("accepted");
+    expect([after.sendingS, after.sendingNote]).toEqual([null, null]);
+  });
+
+  it("item 2: a dispute in flight gets the same pattern, and a quick step gets neither", () => {
+    const c = story(disputeRun(60), 60).cards[0]!;
+    expect(c.sent).toBe("sending");
+    expect(c.sendingNote).toBe(SLOW_SEND["open_dispute"]);
+    expect(c.sendingNote).toBe("PayPal creates the case, then makes it readable.");
+    expect(c.sendingS!).toBeCloseTo(59, 1);
+    const quick = story(tinyBakery(5.5), 5.5).cards[2]!;
+    expect(quick.sent).toBe("sending");
+    expect([quick.sendingS, quick.sendingNote]).toEqual([null, null]);
+  });
+
+  it("item 3: a finished run with nothing arrived says none arrived, never waiting", () => {
+    const done = story(disputeRun(210), 210);
+    expect(done.settled).toBe(true);
+    expect(done.figures.slowest).toBe("none arrived");
+    expect(figuresText(done)).not.toMatch(/waiting/i);
+    // While it still listens, waiting is the truth.
+    expect(story(disputeRun(150), 150).figures.slowest).toBe("waiting");
+    // A halted run is settled too, and nothing expected at all is still "none".
+    expect(story(tokenRefused(), 3).figures.slowest).toBe("none");
+  });
+
+  it("item 3: a halted run with webhooks still unseen says none arrived", () => {
+    const f = tinyBakery(5);
+    f.events.push(
+      { s: 5.5, kind: "step_finished", step: "invoice-1", data: { kind: "invoice_create", status: "failed", detail: "http 422: PayPal refused the request", ids: {}, finished_at: null } },
+      { s: 5.6, kind: "run_halted", data: { reason: "step invoice-1 failed: http 422: PayPal refused the request" } },
+      { s: 6, kind: "run_finished", data: { status: "halted" } },
+    );
+    const s = story({ ...f, status: "halted", reason: "step invoice-1 failed: http 422: PayPal refused the request" }, 6);
+    expect(s.settled).toBe(true);
+    expect(s.counts.arrived).toBe(0);
+    expect(s.counts.expected).toBeGreaterThan(0);
+    expect(s.figures.slowest).toBe("none arrived");
+  });
+
+  // Found by the cold verifier on d92efb5: an event that beat its step's finish has no latency, yet arrived.
+  it("item 3: an event that arrived during its step is never called none arrived", () => {
+    const f = tinyBakery(40);
+    f.events = f.events.filter((e) => e.kind !== "delivery" || (e.data!["event_id"] as string) === "WH-E2E-CAPTURE-1");
+    const d = f.events.find((e) => e.kind === "delivery")!;
+    d.data = { ...d.data, received_at: [{ rel: 2.0 }] };
+    const s = story(f, 40);
+    expect(s.settled).toBe(true);
+    expect(s.counts.arrived).toBe(1);
+    expect(s.cards[0]!.replies[0]!.early).toBe(true);
+    expect(s.figures.slowest).toBe("during its step");
+  });
+
+  it("item 4: a dispute run shows the disputed amount, kept apart from what was charged", () => {
+    const s = story(disputeRun(210), 210);
+    expect(s.figures.amount).toBe("USD 88 disputed");
+    expect(s.figures.amountNote).toBeNull();
+    expect(s.figures.disputed).toBeNull();
+    // Before PayPal accepts it nothing is claimed as disputed.
+    expect(story(disputeRun(60), 60).figures.amount).toBe("none");
+    // Charges and a dispute in one run: the charged total stays the charged total.
+    const mixed = disputeRun(210);
+    mixed.events.splice(1, 1, { s: 0, kind: "note", data: { plan: { currency: "USD", steps: [{ id: "order-1", kind: "card_order", amount: "54.00" }, { id: "dispute-1", kind: "open_dispute" }] } } });
+    mixed.events.push(
+      { s: 0.2, kind: "step_started", step: "order-1", data: { kind: "card_order", attempt: 1 } },
+      { s: 0.8, kind: "step_finished", step: "order-1", data: { kind: "card_order", status: "succeeded", detail: "ok", ids: { order_id: "E2E-O", capture_id: "E2E-C" }, finished_at: null } },
+    );
+    mixed.events.sort((a, b) => a.s - b.s);
+    const m = story(mixed, 210);
+    expect(m.figures.amount).toBe("USD 54");
+    expect(m.figures.disputed).toBe("USD 88 disputed");
+  });
+
+  it("item 4: an id that is not an amount is never read as one", () => {
+    const f = disputeRun(210);
+    const fin = f.events.find((e) => e.kind === "step_finished")!;
+    (fin.data!["ids"] as Record<string, string>)["dispute_amount"] = "88 or so";
+    expect(story(f, 210).figures.amount).toBe("none");
+  });
+
+  it("item 5: one step reads as one step", () => {
+    expect(story(disputeRun(210), 210).headline).toBe("The step is done.");
+    expect(story(disputeRun(150), 150).headline).toBe("The step was sent.");
+    expect(story(tinyBakery(40), 40).headline).toBe("All 5 steps done.");
+  });
+
+  it("item 8: a dispute webhook not seen says how late the sandbox has delivered one, and nothing more", () => {
+    const s = story(disputeRun(210), 210);
+    expect(s.cards[0]!.reply).toBe("not-seen");
+    expect(s.cards[0]!.lateNote).toBe(DISPUTE_LAG);
+    expect(DISPUTE_LAG).toBe("PayPal's sandbox has delivered dispute events up to 12 hours later.");
+    expect(s.lead).toContain(DISPUTE_LAG);
+    // Said once, in place of the general line, never beside it.
+    expect(s.lead!.split("12 hours").length).toBe(2);
+    expect(s.lead).not.toContain("later than that before");
+    // A run with no dispute never borrows the dispute measurement.
+    const bakery = story(tinyBakery(40), 40);
+    expect(bakery.cards.every((c) => c.lateNote === null)).toBe(true);
+    expect(bakery.lead ?? "").not.toContain("12 hours");
   });
 });

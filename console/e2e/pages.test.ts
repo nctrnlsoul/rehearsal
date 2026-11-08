@@ -8,8 +8,8 @@ import type { PGlite } from "@electric-sql/pglite";
 import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HOSTED_REPLAYS } from "../lib/hostedReplays";
-import { RUNS } from "../lib/replays";
-import { type Fixture, absolute, hostedAt, recordedAt, tinyBakery, tokenRefused } from "../tests/fixtures/liveRuns";
+import { RUNS, replayEndS } from "../lib/replays";
+import { type Fixture, absolute, disputeRun, hostedAt, recordedAt, tinyBakery, tokenRefused } from "../tests/fixtures/liveRuns";
 import { hashFor } from "../tests/helpers";
 import { TEST_DB_ENV } from "../tests/postgrest";
 import { FAKE_SUPABASE_HOST, startFakeSupabase } from "./fakeSupabase";
@@ -592,6 +592,101 @@ describe("the hosted finder, past the gate", () => {
     await expect(page.locator(".finding").innerText()).resolves.toMatch(/OK[\s\S]*An invoice already past its due date[\s\S]*Observed[\s\S]*OVERDUE/);
     if (SHOTS !== undefined) await page.screenshot({ path: join(SHOTS, "live-finder-1440.png"), fullPage: true });
     await ctx.close();
+  });
+});
+
+// Brief v0.7.4 (R-053): items 1, 2, 3 and 6 as a browser draws them, and its three screenshots when E2E_SCREENSHOT_DIR is set.
+describe("v0.7.4, past the gate", () => {
+  const sizes = [{ width: 1440, height: 900 }, { width: 390, height: 844 }];
+  let n = 0;
+  const nextId = () => `20261108033057-e74${String(++n).padStart(3, "0")}`;
+  const save = (page: Page, name: string, w: number, full = true) => (SHOTS === undefined ? Promise.resolve() : page.screenshot({ path: join(SHOTS, `${name}-${w}.png`), fullPage: full }));
+
+  it("item 2: a resend mid-wait counts its seconds and says why, in the panel and on its card", async () => {
+    for (const v of sizes) {
+      const id = nextId();
+      await seedFixture(db.pg, id, recordedAt(RUNS[1]!, 45), 45);
+      const { ctx, page, watch } = await unlocked(v);
+      await expectCleanPage(page, watch, `/live/${id}`, 200);
+      await page.waitForSelector(".np-note");
+      const note = "PayPal lists a new event before it allows a resend. This usually takes 1 to 2 minutes.";
+      await expect(page.locator(".np-note").innerText()).resolves.toBe(note);
+      const stage = page.locator(".np-stage-item.now").first();
+      const first = await stage.innerText();
+      expect(first).toMatch(/Sending(?: to PayPal)?, \d+s/);
+      // The clock moves on its own between polls, so the step never looks frozen.
+      await page.waitForTimeout(2200);
+      expect(await stage.innerText()).not.toBe(first);
+      // The note sits inside the panel's content box, never clipped and never in its padding.
+      const box = await page.locator(".now-panel").boundingBox();
+      const noteBox = await page.locator(".np-note").boundingBox();
+      const padBottom = await page.locator(".now-panel").evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+      expect(noteBox!.y + noteBox!.height).toBeLessThanOrEqual(box!.y + box!.height - padBottom + 1);
+      await expect(page.locator(".step.line").nth(1).locator(".line-pill").innerText()).resolves.toMatch(/^Calling PayPal, \d+s$/);
+      await page.locator(".step.line").nth(1).locator(".line-row").click();
+      await expect(page.locator(".step").nth(1).locator(".sent-note").innerText()).resolves.toBe(note);
+      await page.locator(".line-close").click();
+      expect(await noSideScroll(page)).toBe(true);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await save(page, "resend-mid-wait", v.width, false);
+      await db.pg.exec(`update public.console_runs set status = 'complete', finished_at = now() where id = '${id}'`);
+      await ctx.close();
+    }
+  });
+
+  it("items 1, 3, 4, 5 and 8: a finished dispute run flags PayPal's other capture in amber, and never says waiting", async () => {
+    for (const v of sizes) {
+      const id = nextId();
+      await seedFixture(db.pg, id, disputeRun(210, "E2E-CAPTURE-OTHER-9"), 210);
+      const { ctx, page, watch } = await unlocked(v);
+      await expectCleanPage(page, watch, `/live/${id}`, 200);
+      await page.waitForSelector(".step .pairing");
+      await expect(page.locator("#run-h").innerText()).resolves.toBe("The step is done.");
+      // Item 6's card: the finished sentence is shown whole, never clamped.
+      await expect(page.locator(".now-panel .np-main").evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).resolves.toBe(true);
+      await expect(page.locator(".now-panel .np-main").innerText()).resolves.toBe("The step is done. 0 of 1 webhook arrived before the run ended, 0 verified.");
+      const pairing = page.locator(".step .pairing");
+      await expect(pairing.innerText()).resolves.toContain("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says E2E-CAPTURE-OTHER-9");
+      // Amber: the waiting tokens, never the bug red.
+      const colors = await pairing.evaluate((el) => {
+        const s = getComputedStyle(el);
+        const raw = getComputedStyle(el.querySelector(".pairing-raw")!);
+        return { bg: s.backgroundColor, border: s.borderTopColor, raw: raw.color };
+      });
+      expect(colors).toEqual({ bg: "rgb(253, 243, 220)", border: "rgb(240, 176, 58)", raw: "rgb(138, 90, 0)" });
+      expect(await page.locator(".step .problem").count()).toBe(0);
+      const figures = await page.locator(".figures").innerText();
+      expect(figures).toMatch(/Slowest arrival\s+none arrived/);
+      expect(figures).not.toMatch(/waiting/i);
+      expect(figures).toMatch(/Amount in calls\s+USD 88 disputed/);
+      await expect(page.locator(".step .back").innerText()).resolves.toContain("Not proof it never came: PayPal's sandbox has delivered dispute events up to 12 hours later.");
+      expect(await noSideScroll(page)).toBe(true);
+      await save(page, "dispute-finished", v.width);
+      await ctx.close();
+    }
+  });
+
+  it("item 6: the finder result's finished panel fits its content, with no blank band under the sentence", async () => {
+    for (const v of sizes) {
+      const id = nextId();
+      // A recorded finder run with its steps and its verdict, as a hosted finder run is shown.
+      const ok = RUNS.find((r) => r.verdict === "ok")!;
+      await seedFixture(db.pg, id, recordedAt(ok, replayEndS(ok) + 1), replayEndS(ok) + 2);
+      await db.pg.query("update public.console_runs set kind = 'finder', plan_source = 'finder', plan_id = $2 where id = $1", [id, ok.finding.classId]);
+      const { ctx, page, watch } = await unlocked(v);
+      await expectCleanPage(page, watch, `/live/${id}`, 200);
+      await page.waitForSelector(".finding");
+      const gap = await page.evaluate(() => {
+        const panel = document.querySelector(".now-panel")!.getBoundingClientRect();
+        const content = document.querySelector(".now-panel .np-content")!.getBoundingClientRect();
+        return panel.bottom - content.bottom;
+      });
+      // Only the panel's own bottom padding (20px at 1440, 18px at 390) is left under the content.
+      expect(gap).toBeLessThanOrEqual(24);
+      expect(await noSideScroll(page)).toBe(true);
+      await save(page, "finder-result", v.width);
+      await ctx.close();
+    }
   });
 });
 

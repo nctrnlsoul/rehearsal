@@ -334,7 +334,7 @@ export const FAILURE_CLASSES: readonly FailureClass[] = [
         return finding(DUPLICATE_WEBHOOK, "ok", {
           event,
           expected: "one fulfillment for an event id, however many times it is delivered",
-          actual: `event ${e.eventId} was fulfilled once and its ${e.duplicatesIgnored} redelivery(s) recognized and ignored`,
+          actual: `event ${e.eventId} was fulfilled once and its ${e.duplicatesIgnored} ${e.duplicatesIgnored === 1 ? "redelivery was" : "redeliveries were"} recognized and ignored`,
           likelyFix: "none needed",
         });
       }

@@ -19,7 +19,7 @@ export type Chip = { readonly key: string; readonly label: string; readonly stat
 
 export type PanelBody =
   | { readonly kind: "queued"; readonly title: string; readonly text: string }
-  | { readonly kind: "step"; readonly at: number; readonly of: number; readonly activity: string; readonly stages: readonly Stage[] }
+  | { readonly kind: "step"; readonly at: number; readonly of: number; readonly activity: string; readonly stages: readonly Stage[]; readonly note: string | null }
   | { readonly kind: "webhooks"; readonly title: string; readonly text: string | null; readonly chips: readonly Chip[] }
   | { readonly kind: "final"; readonly tone: "done" | "stopped"; readonly title: string; readonly text: string | null; readonly note: string | null; readonly chips: readonly Chip[] };
 
@@ -83,8 +83,10 @@ export function stagesOf(c: StepCard): Stage[] {
   }
   const expects = expectsReply(c);
   const arrived = c.replies.length > 0 && c.replies.every((r) => r.arrived);
+  // A slow step counts its seconds, so a minute at "Sending" reads as PayPal working, not a hang.
+  const took = c.sendingS === null ? "" : `, ${dur(c.sendingS)}`;
   return [
-    { label: "Sending to PayPal", short: "Sending", state: c.sent === "sending" ? "now" : accepted || c.sent === "refused" ? "done" : failed ? "bad" : "todo" },
+    { label: `Sending to PayPal${took}`, short: `Sending${took}`, state: c.sent === "sending" ? "now" : accepted || c.sent === "refused" ? "done" : failed ? "bad" : "todo" },
     { label: c.sent === "refused" ? "PayPal refused" : "PayPal accepted", short: c.sent === "refused" ? "Refused" : "Accepted", state: accepted ? "done" : failed ? "bad" : "todo" },
     !expects
       ? { label: "No webhook expected", short: "No webhook", state: "none" }
@@ -146,14 +148,14 @@ export function nowPanel(story: RunStory): NowPanel {
     // Between two calls the step PayPal just accepted stays in the box until the next one starts.
     const lastAccepted = next === undefined ? undefined : [...cards].reverse().find((c) => c.n < next.n && c.sent === "accepted");
     const c = current ?? lastAccepted ?? next!;
-    return { ...base, key: `step:${c.id}`, body: { kind: "step", at: c.n, of: total, activity: activityOf(c), stages: stagesOf(c) } };
+    return { ...base, key: `step:${c.id}`, body: { kind: "step", at: c.n, of: total, activity: activityOf(c), stages: stagesOf(c), note: c.sendingNote } };
   }
 
   // Every call is done; what is left is PayPal's webhooks.
   const left = story.view.waitLeftS;
   const listening = left === null ? null : `The run keeps listening for ${dur(left)} in case PayPal sends more.`;
   if (replies.length === 0) {
-    return { ...base, key: "webhooks", body: { kind: "webhooks", title: `All ${total} ${total === 1 ? "step" : "steps"} sent`, text: `No webhook is tied to these steps.${listening === null ? "" : ` ${listening}`}`, chips } };
+    return { ...base, key: "webhooks", body: { kind: "webhooks", title: total === 1 ? "The step was sent" : `All ${total} steps sent`, text: `No webhook is tied to these steps.${listening === null ? "" : ` ${listening}`}`, chips } };
   }
   return {
     ...base,
@@ -161,6 +163,6 @@ export function nowPanel(story: RunStory): NowPanel {
     body:
       arrived < expected
         ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${expected} arrived`, text: story.outOfOrder ?? "Each one turns to a check when it arrives and its signature is verified.", chips }
-        : { kind: "webhooks", title: `All ${expected} webhooks arrived, ${verified} verified`, text: [story.outOfOrder, listening].filter((x) => x !== null).join(" ") || null, chips },
+        : { kind: "webhooks", title: expected === 1 ? `The webhook arrived, ${verified === 1 ? "verified" : "not verified"}` : `All ${expected} webhooks arrived, ${verified} verified`, text: [story.outOfOrder, listening].filter((x) => x !== null).join(" ") || null, chips },
   };
 }

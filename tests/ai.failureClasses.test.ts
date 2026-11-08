@@ -99,6 +99,9 @@ describe("duplicate-webhook", () => {
     const f = check("duplicate-webhook", delivered(1, 1), runWith(resent));
     expect(f.verdict).toBe("ok");
     expect(f.actual).toContain("recognized and ignored");
+    expect(f.actual).toBe(`event ${EV} was fulfilled once and its 1 redelivery was recognized and ignored`);
+    const two = check("duplicate-webhook", delivered(1, 2), runWith(resent));
+    expect(two.actual).toBe(`event ${EV} was fulfilled once and its 2 redeliveries were recognized and ignored`);
   });
 
   // The false pass this replaces: one row looks exactly like a store that coped.

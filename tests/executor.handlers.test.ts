@@ -653,6 +653,128 @@ describe("openDisputeHandler", () => {
     expect(out.detail).toMatch(/TRANSACTION_NOT_ELIGIBLE/);
   });
 
+  // Seen live on 2026-11-07: a hand-entered buyer txn id was paired with the
+  // wrong order, and nothing caught it. PayPal's read-back names the capture.
+  describe("checks PayPal's own pairing of the dispute to a capture", () => {
+    const readBack = (txns: unknown) => ({
+      status: 200,
+      body: { status: "WAITING_FOR_SELLER_RESPONSE", dispute_life_cycle_stage: "INQUIRY", ...(txns === undefined ? {} : { disputed_transactions: txns }) },
+    });
+    const file = async (look: FakeResponse, purchase = makePurchase()) => {
+      const buyer = fakePaypal([created201], "buyer");
+      const seller = fakePaypal([look], "seller");
+      const { ctx } = makeContext({ scenario, stepId: "d1", seller: seller.client, buyer: buyer.client, claim: { ok: true, purchase } });
+      return openDisputeHandler(ctx);
+    };
+
+    it("records PayPal's capture as positive proof when it matches the bank", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-BANK-1", buyer_transaction_id: "TXN-BANK-1" }]));
+      expect(out.kind).toBe("success");
+      expect((out.ids ?? {})["paypal_seller_transaction_id"]).toBe("CAP-BANK-1");
+      expect(out.detail).toMatch(/PayPal names capture CAP-BANK-1, the banked capture/);
+      expect(out.detail).not.toMatch(/pairing_mismatch/);
+    });
+
+    it("keeps the step succeeded but flags a mismatch with both ids", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-OTHER-9" }]));
+      expect(out.kind).toBe("success");
+      expect((out.ids ?? {})["paypal_seller_transaction_id"]).toBe("CAP-OTHER-9");
+      expect((out.ids ?? {})["purchase_capture_id"]).toBe("CAP-BANK-1");
+      expect(out.detail).toContain("pairing_mismatch: banked capture CAP-BANK-1, PayPal says CAP-OTHER-9");
+    });
+
+    it("never claims a match when PayPal names no capture", async () => {
+      for (const txns of [undefined, [], [{ buyer_transaction_id: "TXN-BANK-1" }], [{ seller_transaction_id: "" }], "junk"]) {
+        const out = await file(readBack(txns));
+        expect(out.kind, JSON.stringify(txns)).toBe("success");
+        expect(out.detail, JSON.stringify(txns)).toContain("PayPal did not name the capture");
+        expect(out.detail, JSON.stringify(txns)).not.toMatch(/the banked capture|pairing_mismatch/);
+        expect((out.ids ?? {})["paypal_seller_transaction_id"], JSON.stringify(txns)).toBeUndefined();
+      }
+    });
+
+    // Two transactions where one is ours still says PayPal ties the case to another capture.
+    it("flags a mismatch when any named capture differs from the bank", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-BANK-1" }, { seller_transaction_id: "CAP-OTHER-9" }]));
+      expect(out.detail).toContain("pairing_mismatch: banked capture CAP-BANK-1, PayPal says CAP-BANK-1, CAP-OTHER-9");
+      expect((out.ids ?? {})["paypal_seller_transaction_id"]).toBe("CAP-BANK-1, CAP-OTHER-9");
+    });
+
+    it("flags a mismatch, never a match, when the bank holds no capture id", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-OTHER-9" }]), makePurchase({ captureId: null }));
+      // "(none)", never "none": PayPal could name a capture "none".
+      expect(out.detail).toContain("pairing_mismatch: banked capture (none), PayPal says CAP-OTHER-9");
+    });
+
+    it("still reports a mismatch on a dispute that settles into a non-open status", async () => {
+      const out = await file({ status: 200, body: { status: "RESOLVED", disputed_transactions: [{ seller_transaction_id: "CAP-OTHER-9" }] } });
+      expect(out.kind).toBe("failed");
+      expect(out.detail).toContain("pairing_mismatch: banked capture CAP-BANK-1, PayPal says CAP-OTHER-9");
+    });
+
+    it("bounds what it records from PayPal's read-back", async () => {
+      const many = Array.from({ length: 7 }, (_, i) => ({ seller_transaction_id: `CAP-${i}\u0000${"X".repeat(200)}` }));
+      const out = await file(readBack(many));
+      const shown = (out.ids ?? {})["paypal_seller_transaction_id"]!;
+      expect(shown).toMatch(/, and 2 more$/);
+      expect(shown).not.toContain("\u0000");
+      // Five ids of at most 64 characters plus "...", their separators, and the count of the rest.
+      expect(shown.length).toBeLessThanOrEqual(5 * 67 + 4 * 2 + ", and 2 more".length);
+      expect(out.detail).toContain("pairing_mismatch");
+    });
+
+    // Found by the cold verifier on d92efb5: storage trims and strips control
+    // characters, so a raw id that differs only by those printed like the bank's.
+    it("compares PayPal's raw value, and prints a near-identical id so it reads as different", async () => {
+      for (const [raw, printed] of [["CAP-BANK-1 ", "CAP-BANK-1\\u{20}"], ["CAP-BANK-1\u200B", "CAP-BANK-1\\u{200b}"], ["\u0007", "\\u{7}"], ["CAP;OTHER", "CAP\\u{3b}OTHER"]] as const) {
+        const out = await file(readBack([{ seller_transaction_id: raw }]));
+        expect(out.kind, printed).toBe("success");
+        expect(out.detail, printed).toMatch(/^pairing_mismatch: banked capture CAP-BANK-1, PayPal says /);
+        expect((out.ids ?? {})["paypal_seller_transaction_id"], printed).toBe(printed);
+        // The separator never appears inside the mismatch line.
+        expect(out.detail!.split("; ")[0], printed).toBe(`pairing_mismatch: banked capture CAP-BANK-1, PayPal says ${printed}`);
+      }
+    });
+
+    it("claims a match only when every disputed transaction names the banked capture", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-BANK-1" }, { buyer_transaction_id: "TXN-2" }]));
+      expect(out.kind).toBe("success");
+      expect(out.detail).toContain("PayPal names capture CAP-BANK-1 for 1 of 2 disputed transactions, so the pairing is not confirmed");
+      expect(out.detail).not.toMatch(/the banked capture|pairing_mismatch/);
+    });
+
+    it("reads no pairing from a reply without a readable status", async () => {
+      const buyer = fakePaypal([created201], "buyer");
+      const seller = fakePaypal(Array.from({ length: 20 }, () => ({ status: 404, body: { name: "RESOURCE_NOT_FOUND", disputed_transactions: [{ seller_transaction_id: "CAP-BANK-1" }] } })), "seller");
+      const { ctx } = makeContext({ scenario, stepId: "d1", seller: seller.client, buyer: buyer.client, claim: { ok: true, purchase: makePurchase() } });
+      const out = await openDisputeHandler(ctx);
+      expect(out.kind).toBe("unknown");
+      expect(out.detail).toContain("PayPal did not name the capture");
+      expect(out.detail).not.toMatch(/the banked capture/);
+      expect((out.ids ?? {})["paypal_seller_transaction_id"]).toBeUndefined();
+    });
+
+    it("leads a still-settling dispute's detail with the mismatch, and keeps it a success", async () => {
+      const buyer = fakePaypal([created201], "buyer");
+      const seller = fakePaypal(Array.from({ length: 20 }, () => ({ status: 200, body: { status: "CREATION_IN_PROGRESS", disputed_transactions: [{ seller_transaction_id: "CAP-OTHER-9" }] } })), "seller");
+      const { ctx } = makeContext({ scenario, stepId: "d1", seller: seller.client, buyer: buyer.client, claim: { ok: true, purchase: makePurchase() } });
+      const out = await openDisputeHandler(ctx);
+      expect(out.kind).toBe("success");
+      expect(out.detail).toMatch(/^pairing_mismatch: banked capture CAP-BANK-1, PayPal says CAP-OTHER-9; dispute PP-R-DXC-1 created and still settling/);
+    });
+
+    // Storage caps a detail at 300 characters; a long hand-entered bank id must not push the flag out.
+    it("keeps the mismatch first and bounded when the banked capture id is long", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-OTHER-9" }]), makePurchase({ captureId: "C".repeat(400) }));
+      expect(out.detail).toMatch(/^pairing_mismatch: banked capture C{64}\.\.\., PayPal says CAP-OTHER-9; /);
+    });
+
+    it("records the disputed amount for the page", async () => {
+      const out = await file(readBack([{ seller_transaction_id: "CAP-BANK-1" }]));
+      expect((out.ids ?? {})["dispute_amount"]).toBe("88.00");
+    });
+  });
+
   it("calls a created but still settling dispute a success, since the write landed", async () => {
     const buyer = fakePaypal([created201], "buyer");
     const seller = fakePaypal(

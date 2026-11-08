@@ -13,7 +13,7 @@ import { Icon } from "./chrome";
 export function NowPanelBox({ panel }: { panel: NowPanel }) {
   const body = <Body body={panel.body} />;
   return (
-    <section className={`card now-panel${panel.sticky ? " sticky" : ""} now-${panel.body.kind}`} aria-label="Now running">
+    <section className={`card now-panel${panel.sticky ? " sticky" : ""} now-${panel.body.kind}${panel.body.kind === "step" && panel.body.note !== null ? " has-note" : ""}`} aria-label="Now running">
       <Bar panel={panel} />
       <Swap swapKey={panel.key}>{body}</Swap>
     </section>
@@ -90,8 +90,9 @@ function Body({ body }: { body: PanelBody }) {
           <p className="np-eyebrow">Step {body.at} of {body.of}</p>
           <p className="np-main">{body.activity}</p>
           <ol className="np-stages">
-            {body.stages.map((s) => <StageItem key={s.short} stage={s} />)}
+            {body.stages.map((s) => <StageItem key={s.label.replace(/, .*$/, "")} stage={s} />)}
           </ol>
+          {body.note !== null && <p className="np-text np-note">{body.note}</p>}
         </div>
       );
     case "webhooks":

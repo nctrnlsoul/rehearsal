@@ -77,7 +77,7 @@ export function RunView({ story, name, runId, mode, controls, aside }: Props) {
 
         <dl className="card figures" aria-label="Summary">
           <div><dt>Steps</dt><dd>{story.figures.steps}</dd></div>
-          <div><dt>Amount in calls</dt><dd><span>{story.figures.amount}{story.figures.amountNote !== null && <small>{story.figures.amountNote}</small>}</span></dd></div>
+          <div><dt>Amount in calls</dt><dd><span>{story.figures.amount}{story.figures.amountNote !== null && <small>{story.figures.amountNote}</small>}{story.figures.disputed !== null && <small>{story.figures.disputed}</small>}</span></dd></div>
           <div><dt>Slowest arrival</dt><dd>{story.figures.slowest}</dd></div>
           <div>
             <dt>Verified</dt>
@@ -186,7 +186,7 @@ function linePill(c: StepCard): { cls: string; icon: "check" | "cross" | "clock"
   if (c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed") return { cls: "bug", icon: "cross", text: c.sentWord };
   if (c.sent === "queued") return { cls: "quiet", icon: "dash", text: "Not sent yet" };
   if (c.sent === "not-run") return { cls: "quiet", icon: "dash", text: "Not run" };
-  if (c.sent === "sending") return { cls: "quiet", icon: "arrow", text: "Calling PayPal" };
+  if (c.sent === "sending") return { cls: "quiet", icon: "arrow", text: c.sendingS === null ? "Calling PayPal" : `Calling PayPal, ${dur(c.sendingS)}` };
   if (c.reply === "delivered") {
     const timed = c.replies.filter((r) => r.latencyS !== null);
     if (timed.length === 0) return { cls: "ok", icon: "check", text: "Arrived during the step" };
@@ -220,6 +220,7 @@ function LineStep({ card: c, mode, heroLead }: { card: StepCard; mode: "live" | 
         <Icon name="chevron" className="icon line-open" />
         <span className="sr">Show the full card</span>
       </button>
+      {c.pairing !== null && <PairingLine line={c.pairing} />}
     </li>
   );
 }
@@ -251,6 +252,7 @@ function Step({ card: c, mode, settled, heroLead, onClose }: { card: StepCard; m
               <p className="sent-title">{c.title}</p>
               {c.amount !== null && <p className="sent-amount">{c.amount}</p>}
               <p className="sent-state"><SentMark card={c} /></p>
+              {c.sendingNote !== null && <p className="sent-note">{c.sendingNote}</p>}
             </div>
             <Middle card={c} />
             <div className="back">
@@ -260,6 +262,7 @@ function Step({ card: c, mode, settled, heroLead, onClose }: { card: StepCard; m
         )}
         {/* The hero already gives this reason when it is the one that stopped the run, so it is said once. */}
         {failed && c.problem !== null && !(heroLead ?? "").includes(c.problem) && <p className="problem"><Icon name="cross" className="icon bug-fill" />{c.problem}</p>}
+        {c.pairing !== null && <PairingLine line={c.pairing} />}
         <details className="details">
           <summary>
             <span className="foot-note">{c.reply === "waiting" && !failed ? (mode === "live" ? "It shows here the moment the store records it. The run listens for 90 s after its last step." : "Shown on the run's recorded clock.") : ""}</span>
@@ -272,12 +275,25 @@ function Step({ card: c, mode, settled, heroLead, onClose }: { card: StepCard; m
   );
 }
 
+/** Amber, never red: the dispute is real, only which purchase it is against is in doubt. */
+function PairingLine({ line }: { line: string }) {
+  return (
+    <p className="pairing" role="note">
+      <Icon name="shield" className="icon wait-fill" />
+      <span>
+        PayPal ties this dispute to a different capture than the bank recorded, so check which purchase it is against.
+        <span className="mono pairing-raw">{line}</span>
+      </span>
+    </p>
+  );
+}
+
 function SentMark({ card: c }: { card: StepCard }) {
   switch (c.sent) {
     case "queued":
       return <Mark kind="stop">Queued</Mark>;
     case "sending":
-      return <span className="mark wait sending"><span className="pulse" aria-hidden="true" />Sending to PayPal</span>;
+      return <span className="mark wait sending"><span className="pulse" aria-hidden="true" />Sending to PayPal{c.sendingS === null ? "" : `, ${dur(c.sendingS)}`}</span>;
     case "accepted":
       return <Mark kind="ok">PayPal accepted</Mark>;
     default:
@@ -373,7 +389,7 @@ function Back({ card: c, mode, settled }: { card: StepCard; mode: "live" | "repl
             {c.reply === "not-seen" ? (
               <>
                 <span className="back-title quiet">Not seen when the wait ended</span>
-                <span className="reply-meta">Not proof it never came: the sandbox has delivered later than that before.</span>
+                <span className="reply-meta">Not proof it never came: {c.lateNote ?? "the sandbox has delivered later than that before."}</span>
               </>
             ) : (
               <>

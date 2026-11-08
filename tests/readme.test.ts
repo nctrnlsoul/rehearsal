@@ -22,6 +22,16 @@ describe("README", () => {
     expect(readme).toContain("Devpost testing notes");
   });
 
+  // 2026-11-07: in PowerShell `--amount 54.00` was silently dropped and 88.00 banked.
+  it("warns Windows users, under the bank commands, that PowerShell drops the flags after --", () => {
+    const bank = readme.indexOf("npm run bank:add -- --amount 54.00");
+    const warn = readme.indexOf("PowerShell drops a bare `--`");
+    expect(bank).toBeGreaterThan(0);
+    expect(warn).toBeGreaterThan(bank);
+    expect(readme.slice(bank, warn)).not.toContain("###");
+    expect(readme).toContain("`npm run bank:add '--' --amount 54.00`");
+  });
+
   it("names a first dry run that succeeds with no keys and no allowed origins", () => {
     const command = "npm run dry-run scenarios/quick-start.json";
     expect(readme).toContain(command);
