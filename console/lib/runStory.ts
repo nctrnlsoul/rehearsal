@@ -362,9 +362,17 @@ function titleOf(step: PlanStep, accepted: boolean): string {
 
 const AMOUNT = /^\d+(\.\d{1,2})?$/;
 
-/** The engine writes this line when PayPal's read-back names a different capture than the bank's. */
+/**
+ * The engine leads a dispute's detail with this line when PayPal's read-back
+ * names a different capture than the bank's. The token alone raises the flag:
+ * however the ids after it print, or wherever a length cap cuts it, it shows.
+ */
 function pairingLine(detail: string | null): string | null {
-  return detail === null ? null : (/pairing_mismatch: banked capture [^;]+?, PayPal says [^;]+/.exec(detail)?.[0] ?? null);
+  const at = detail === null ? -1 : detail.indexOf("pairing_mismatch");
+  if (at < 0) return null;
+  const line = detail!.slice(at);
+  const end = line.indexOf("; ");
+  return end < 0 ? line : line.slice(0, end);
 }
 
 const centsOf = (amount: string): bigint => {
@@ -676,7 +684,8 @@ export function runStory(read: LiveRead): RunStory {
           : `of ${money(plan.currency, fromCents(planned))} planned${finalCards.some((c) => c.sent === "unknown" || c.sent === "never-confirmed") ? "; one step's outcome is unknown" : ""}`,
       disputed: planned === 0n ? null : disputed,
       // Once the run has ended nothing more is waited for, so it says what happened.
-      slowest: slowestReply === null ? (waiting > 0 ? (view.settled ? "none arrived" : "waiting") : "none") : `${slowestReply.exact ? "" : "at most "}${dur(slowestReply.latencyS!)}`,
+      // An event that landed while its step was still checking has no latency, but it did arrive.
+      slowest: slowestReply === null ? (arrived > 0 ? "during its step" : waiting > 0 ? (view.settled ? "none arrived" : "waiting") : "none") : `${slowestReply.exact ? "" : "at most "}${dur(slowestReply.latencyS!)}`,
       signatures: expected === 0 ? (view.settled ? "none" : "none yet") : `${verified} of ${expected}`,
       // A check only when every expected event arrived verified; a cross when one arrived unverified.
       signaturesOk: expected === 0 ? null : verified === expected ? true : arrived > verified ? false : null,

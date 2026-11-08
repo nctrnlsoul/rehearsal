@@ -252,6 +252,19 @@ describe("v0.7.4: a dispute's pairing, a slow step's clock, and a finished run's
     expect(story(tinyBakery(40), 40).cards.every((c) => c.pairing === null)).toBe(true);
   });
 
+  // Found by the cold verifier on d92efb5: a parse of the ids could miss a real mismatch.
+  it("item 1: raises the amber line on the token alone, however the ids print or wherever storage cut the detail", () => {
+    const withDetail = (detail: string) => {
+      const f = disputeRun(210, "E2E-CAPTURE-OTHER-9");
+      f.events.find((e) => e.kind === "step_finished")!.data!["detail"] = detail;
+      return story(f, 210).cards[0]!.pairing;
+    };
+    expect(withDetail("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says \\u{200b}; dispute X open")).toBe("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says \\u{200b}");
+    expect(withDetail("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says")).toBe("pairing_mismatch: banked capture E2E-CAPTURE-BANK-1, PayPal says");
+    expect(withDetail(`pairing_mismatch: banked capture ${"C".repeat(282)}`)).toMatch(/^pairing_mismatch: banked capture C+$/);
+    expect(withDetail("dispute X open; PayPal did not name the capture")).toBeNull();
+  });
+
   it("item 2: a resend in flight counts its seconds and says why it takes this long", () => {
     const c = story(recordedAt(RESEND, 45), 45).cards.find((x) => x.kind === "resend_webhook")!;
     expect(c.sent).toBe("sending");
@@ -287,6 +300,33 @@ describe("v0.7.4: a dispute's pairing, a slow step's clock, and a finished run's
     expect(story(disputeRun(150), 150).figures.slowest).toBe("waiting");
     // A halted run is settled too, and nothing expected at all is still "none".
     expect(story(tokenRefused(), 3).figures.slowest).toBe("none");
+  });
+
+  it("item 3: a halted run with webhooks still unseen says none arrived", () => {
+    const f = tinyBakery(5);
+    f.events.push(
+      { s: 5.5, kind: "step_finished", step: "invoice-1", data: { kind: "invoice_create", status: "failed", detail: "http 422: PayPal refused the request", ids: {}, finished_at: null } },
+      { s: 5.6, kind: "run_halted", data: { reason: "step invoice-1 failed: http 422: PayPal refused the request" } },
+      { s: 6, kind: "run_finished", data: { status: "halted" } },
+    );
+    const s = story({ ...f, status: "halted", reason: "step invoice-1 failed: http 422: PayPal refused the request" }, 6);
+    expect(s.settled).toBe(true);
+    expect(s.counts.arrived).toBe(0);
+    expect(s.counts.expected).toBeGreaterThan(0);
+    expect(s.figures.slowest).toBe("none arrived");
+  });
+
+  // Found by the cold verifier on d92efb5: an event that beat its step's finish has no latency, yet arrived.
+  it("item 3: an event that arrived during its step is never called none arrived", () => {
+    const f = tinyBakery(40);
+    f.events = f.events.filter((e) => e.kind !== "delivery" || (e.data!["event_id"] as string) === "WH-E2E-CAPTURE-1");
+    const d = f.events.find((e) => e.kind === "delivery")!;
+    d.data = { ...d.data, received_at: [{ rel: 2.0 }] };
+    const s = story(f, 40);
+    expect(s.settled).toBe(true);
+    expect(s.counts.arrived).toBe(1);
+    expect(s.cards[0]!.replies[0]!.early).toBe(true);
+    expect(s.figures.slowest).toBe("during its step");
   });
 
   it("item 4: a dispute run shows the disputed amount, kept apart from what was charged", () => {

@@ -114,6 +114,7 @@ export function tinyBakery(tS: number): Fixture {
  */
 export function disputeRun(tS: number, paypalCapture?: string): Fixture {
   const banked = "E2E-CAPTURE-BANK-1";
+  const OPEN = "dispute PP-R-E2E-DISPUTE-1 open at WAITING_FOR_SELLER_RESPONSE, stage INQUIRY";
   const pairing =
     paypalCapture === undefined
       ? "PayPal did not name the capture"
@@ -136,7 +137,8 @@ export function disputeRun(tS: number, paypalCapture?: string): Fixture {
       s: 111,
       kind: "step_finished",
       step: "dispute-1",
-      data: { kind: "open_dispute", status: "succeeded", detail: `dispute PP-R-E2E-DISPUTE-1 open at WAITING_FOR_SELLER_RESPONSE, stage INQUIRY; ${pairing}`, ids, finished_at: null },
+      // As the engine writes it: a mismatch leads the detail, any other note follows it.
+      data: { kind: "open_dispute", status: "succeeded", detail: pairing.startsWith("pairing_mismatch") ? `${pairing}; ${OPEN}` : `${OPEN}; ${pairing}`, ids, finished_at: null },
     });
   }
   if (tS >= 111.5) events.push({ s: 111.5, kind: "deliveries_wait_started", data: { seconds: 90 } });

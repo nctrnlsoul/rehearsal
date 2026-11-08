@@ -20,25 +20,47 @@ const MAX_NAMED = 5;
 const MAX_ID_CHARS = 64;
 
 /**
+ * An id as recorded. Storage trims and strips control characters, so an id
+ * that is not plain has every other character written out; two ids that
+ * differ then never print alike, and none can carry the "; " separator.
+ */
+function shownId(id: string): string {
+  const visible = /^[A-Za-z0-9_-]+$/.test(id)
+    ? id
+    : Array.from(id, (ch) => (/[A-Za-z0-9_-]/.test(ch) ? ch : `\\u{${ch.codePointAt(0)!.toString(16)}}`)).join("");
+  return visible.length <= MAX_ID_CHARS ? visible : `${visible.slice(0, MAX_ID_CHARS)}...`;
+}
+
+type Pairing = { note: string; paypalIds: string | null; mismatch: boolean };
+
+/**
  * What PayPal's read-back says the dispute is against, beside what the bank
  * says it is against. The bank's pairing of buyer txn id to capture can be
- * hand-entered and wrong, so only PayPal's own field is evidence of a match;
- * absent, nothing is claimed either way.
+ * hand-entered and wrong, so only PayPal's own field is evidence of a match,
+ * and only when every disputed transaction names the banked capture. Absent,
+ * nothing is claimed either way.
  */
-function pairingOf(body: unknown, bankedCapture: string | null): { note: string; paypalIds: string | null } {
+function pairingOf(body: unknown, bankedCapture: string | null): Pairing {
   const txns = typeof body === "object" && body !== null ? (body as Record<string, unknown>)["disputed_transactions"] : undefined;
-  const named = Array.isArray(txns)
-    ? [...new Set(txns.flatMap((t) => (typeof t === "object" && t !== null ? [str((t as Record<string, unknown>)["seller_transaction_id"])] : [])).filter((id): id is string => id !== null))]
+  const perTxn = Array.isArray(txns)
+    ? txns.map((t) => (typeof t === "object" && t !== null ? str((t as Record<string, unknown>)["seller_transaction_id"]) : null))
     : [];
-  if (named.length === 0) return { note: "PayPal did not name the capture", paypalIds: null };
-  // The comparison uses PayPal's raw values; only what is recorded and shown is bounded.
-  const shown = named.slice(0, MAX_NAMED).map((id) => id.replace(/[\p{Cc}\p{Cf}]+/gu, "").slice(0, MAX_ID_CHARS));
-  const paypalIds = `${shown.join(", ")}${named.length > MAX_NAMED ? `, and ${named.length - MAX_NAMED} more` : ""}`;
-  if (bankedCapture !== null && named.length === 1 && named[0] === bankedCapture) {
-    return { note: `PayPal names capture ${paypalIds}, the banked capture`, paypalIds };
+  const named = [...new Set(perTxn.filter((id): id is string => id !== null))];
+  if (named.length === 0) return { note: "PayPal did not name the capture", paypalIds: null, mismatch: false };
+  // The comparison uses PayPal's raw values; only what is recorded and shown is rewritten.
+  const paypalIds = `${named.slice(0, MAX_NAMED).map(shownId).join(", ")}${named.length > MAX_NAMED ? `, and ${named.length - MAX_NAMED} more` : ""}`;
+  if (bankedCapture === null || named.some((id) => id !== bankedCapture)) {
+    return { note: `pairing_mismatch: banked capture ${bankedCapture === null ? "(none)" : shownId(bankedCapture)}, PayPal says ${paypalIds}`, paypalIds, mismatch: true };
   }
-  return { note: `pairing_mismatch: banked capture ${bankedCapture ?? "none"}, PayPal says ${paypalIds}`, paypalIds };
+  const unnamed = perTxn.filter((id) => id === null).length;
+  if (unnamed > 0) {
+    return { note: `PayPal names capture ${paypalIds} for ${perTxn.length - unnamed} of ${perTxn.length} disputed transactions, so the pairing is not confirmed`, paypalIds, mismatch: false };
+  }
+  return { note: `PayPal names capture ${paypalIds}, the banked capture`, paypalIds, mismatch: false };
 }
+
+/** A mismatch leads the detail, so no length cap downstream can cut it off. */
+const withPairing = (text: string, p: Pairing) => (p.mismatch ? `${p.note}; ${text}` : `${text}; ${p.note}`);
 
 /**
  * Opens a real buyer-side dispute against a banked purchase.
@@ -128,23 +150,24 @@ export const openDisputeHandler: StepHandler = async (ctx) => {
   }
 
   // A mismatch keeps the outcome: the dispute is real, only its label is in doubt.
-  const pairing = pairingOf(body, purchase.captureId);
+  // A reply with no readable status (an error body, say) is no read-back of the dispute.
+  const pairing = pairingOf(status === null ? null : body, purchase.captureId);
   if (pairing.paypalIds !== null) ids["paypal_seller_transaction_id"] = pairing.paypalIds;
 
   if (status === null) {
-    return unknown(`dispute ${disputeId} was created but never became readable; ${pairing.note}`, ids);
+    return unknown(withPairing(`dispute ${disputeId} was created but never became readable`, pairing), ids);
   }
   if (status === "CREATION_IN_PROGRESS") {
     // The write landed and the id is recorded. The status simply has not settled,
     // which is a timing fact about PayPal, not an undetermined outcome.
     return succeeded(
-      `dispute ${disputeId} created and still settling after ${POLL_BUDGET_MS / 1000}s; ${pairing.note}`,
+      withPairing(`dispute ${disputeId} created and still settling after ${POLL_BUDGET_MS / 1000}s`, pairing),
       ids,
     );
   }
   if (!OPEN_STATUSES.has(status)) {
-    return failed(`dispute ${disputeId} reads ${status}, which is not an open dispute; ${pairing.note}`, ids);
+    return failed(withPairing(`dispute ${disputeId} reads ${status}, which is not an open dispute`, pairing), ids);
   }
 
-  return succeeded(`dispute ${disputeId} open at ${status}, stage ${stage ?? "unknown"}; ${pairing.note}`, ids);
+  return succeeded(withPairing(`dispute ${disputeId} open at ${status}, stage ${stage ?? "unknown"}`, pairing), ids);
 };
