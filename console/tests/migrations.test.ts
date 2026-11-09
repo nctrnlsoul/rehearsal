@@ -1,6 +1,6 @@
-import type { PGlite } from "@electric-sql/pglite";
+import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { freshDb, migrationFiles, sql } from "./pg";
+import { SUPABASE_ROLES, freshDb, migrationFiles, sql } from "./pg";
 
 /**
  * The console's migrations (R-040: its own Supabase project), run in order
@@ -48,7 +48,36 @@ describe("migration files", () => {
       "0002_purchases.sql",
       "0003_plans_counters.sql",
       "0004_start_run.sql",
+      "0005_lock_rls_auto_enable.sql",
     ]);
+  });
+
+  // R-047: applied live on 2026-10-26 as console_0005_lock_rls_auto_enable. The
+  // statements were read back from that project's supabase_migrations history
+  // (version 20261026004948) on 2026-11-08; the committed file must say the same.
+  it("0005 carries the live migration's statements, word for word", () => {
+    const statements = sql("0005_lock_rls_auto_enable.sql")
+      .split(/\r?\n/)
+      .filter((l) => l.trim() !== "" && !l.startsWith("--"))
+      .join("\n");
+    expect(statements).toBe("revoke execute on function public.rls_auto_enable() from public, anon, authenticated;\nnotify pgrst, 'reload schema';");
+  });
+
+  it("0005 leaves no API role, and not public, able to execute rls_auto_enable()", async () => {
+    const before = new PGlite();
+    await before.exec(SUPABASE_ROLES);
+    const can = async (db: PGlite, role: string) =>
+      (await db.query<{ ok: boolean }>(`select has_function_privilege('${role}', 'public.rls_auto_enable()', 'execute') as ok`)).rows[0]!.ok;
+    // What Supabase hands the migration: both API roles can call it.
+    expect(await can(before, "anon")).toBe(true);
+    expect(await can(before, "authenticated")).toBe(true);
+    await before.close();
+    const db = await freshDb();
+    expect(await can(db, "anon")).toBe(false);
+    expect(await can(db, "authenticated")).toBe(false);
+    const acl = (await db.query<{ acl: string }>(`select coalesce(proacl::text, '') as acl from pg_proc where proname = 'rls_auto_enable'`)).rows[0]!.acl;
+    // No "=X/" entry: PUBLIC holds no execute grant.
+    expect(acl).not.toMatch(/(^|[{,])=X/);
   });
 
   it("are idempotent: applying all of them twice changes nothing", async () => {

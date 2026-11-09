@@ -19,6 +19,9 @@ export const SUPABASE_ROLES = `
   alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
   alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+  -- Supabase's own SECURITY DEFINER function behind automatic RLS, which 0005
+  -- locks. A stand-in with the same signature and the same default grants.
+  create function public.rls_auto_enable() returns event_trigger language plpgsql security definer as $$ begin end $$;
 `;
 
 const DIR = join(__dirname, "..", "migrations");
