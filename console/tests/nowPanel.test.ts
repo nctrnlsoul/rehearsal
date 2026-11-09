@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HOSTED_REPLAYS, hostedById, hostedEndS, hostedRead } from "../lib/hostedReplays";
 import type { LiveRead } from "../lib/liveView";
-import { nowPanel, stagesOf } from "../lib/nowPanel";
+import { DISPUTE_WAIT_NOTE, nowPanel, stagesOf } from "../lib/nowPanel";
 import { runStory } from "../lib/runStory";
 import { RUNS } from "../lib/replays";
 import { type Fixture, absolute, disputeRun, recordedAt, tokenRefused } from "./fixtures/liveRuns";
@@ -283,6 +283,25 @@ describe("v0.7.4: the panel while PayPal works on a slow step", () => {
     if (p.body.kind !== "step") throw new Error(p.body.kind);
     expect(p.body.stages[0]!.label).toBe("Sending to PayPal, 1m 30s");
     expect(p.body.note).toBe("PayPal creates the case, then makes it readable.");
+  });
+
+  // R-054: measured 3m04s and 3m21s, so a dispute run's 270 s wait says what to expect.
+  it("while a dispute run waits, adds the one line on when dispute events usually arrive", () => {
+    const p = panel(disputeRun(200, undefined, 270), 200);
+    if (p.body.kind !== "webhooks") throw new Error(p.body.kind);
+    expect(p.body.note).toBe("Dispute events usually arrive about 3 minutes after the dispute is filed.");
+    expect(DISPUTE_WAIT_NOTE).toBe(p.body.note);
+    expect(runStory(read(disputeRun(200, undefined, 270), 200)).view.waitLeftS).toBeCloseTo(181.5, 1);
+  });
+
+  it("says nothing about disputes while a run with no dispute waits, or once a dispute run has finished", () => {
+    for (const t of [12, 40]) {
+      const p = at(t);
+      expect(p.body.kind === "webhooks" && p.body.note).toBeNull();
+    }
+    const done = panel(disputeRun(400, undefined, 270), 400);
+    expect(done.body.kind).toBe("final");
+    expect(JSON.stringify(done)).not.toContain("about 3 minutes");
   });
 
   it("item 5: one step and one webhook read in the singular", () => {

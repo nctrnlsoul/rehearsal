@@ -6,6 +6,8 @@ import { defaultHandlers } from "../lib/engine";
 import {
   CALL_WORST_S,
   DEFAULT_STEP_WORST_CASE_S,
+  DELIVERY_WAIT_S,
+  DISPUTE_DELIVERY_WAIT_S,
   HOSTED_CAPS,
   HOSTED_CLIENT,
   HOSTED_MODEL_LIMITS,
@@ -14,6 +16,7 @@ import {
   STEP_WORST_CASE_S,
   TIME_BUDGET_S,
   TOKEN_WORST_S,
+  deliveryWaitS,
   hostedConfig,
   hostedGate,
   liveRunsEnabled,
@@ -50,6 +53,36 @@ describe("hosted numbers (R-039, R-049)", () => {
 
   it("put maxDuration = 800 on the run route, never more (R-030)", () => {
     expect(MAX_DURATION_S).toBe(800);
+  });
+});
+
+// R-054: dispute webhooks arrived 3m04s and 3m21s after filing, after the 90 s wait had ended.
+describe("the delivery wait (R-054)", () => {
+  it("is 270 s for a plan with a dispute and 90 s for every other plan", () => {
+    expect(DELIVERY_WAIT_S).toBe(90);
+    expect(DISPUTE_DELIVERY_WAIT_S).toBe(270);
+    expect(deliveryWaitS(["open_dispute"])).toBe(270);
+    expect(deliveryWaitS(["card_order", "refund", "open_dispute"])).toBe(270);
+    for (const kind of Object.keys(STEP_WORST_CASE_S).filter((k) => k !== "open_dispute")) expect(deliveryWaitS([kind]), kind).toBe(90);
+    expect(deliveryWaitS([])).toBe(90);
+  });
+
+  it("is not counted in any plan's dry-run worst case, a dispute plan's included, as before", () => {
+    const c = config();
+    const card = hostedGate(scenario([{ id: "o1", kind: "card_order", amount: "10.00" }]), c);
+    const dispute = hostedGate(scenario([{ id: "d1", kind: "open_dispute" }]), c);
+    expect(card.ok && card.budgetS).toBe(STEP_WORST_CASE_S["card_order"]);
+    expect(dispute.ok && dispute.budgetS).toBe(STEP_WORST_CASE_S["open_dispute"]);
+  });
+
+  it("is one rule, defined once and read by the worker and the page", () => {
+    const read = (f: string) => readFileSync(join(__dirname, "..", f), "utf8");
+    expect(read("lib/worker.ts")).toMatch(/deliveryWaitS\(args\.scenario\.steps\.map/);
+    expect(read("lib/runStory.ts")).toMatch(/deliveryWaitS\(plan\.steps\.map/);
+    for (const f of ["lib/hosted.ts", "lib/worker.ts", "lib/runStory.ts", "lib/liveView.ts", "lib/nowPanel.ts", "components/RunView.tsx"]) {
+      expect(read(f), f).not.toMatch(/=\s*(90|270);/);
+      expect(read(f), f).not.toMatch(/\b(90|270) s (wait|after its last)/);
+    }
   });
 });
 

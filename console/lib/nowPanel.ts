@@ -20,7 +20,7 @@ export type Chip = { readonly key: string; readonly label: string; readonly stat
 export type PanelBody =
   | { readonly kind: "queued"; readonly title: string; readonly text: string }
   | { readonly kind: "step"; readonly at: number; readonly of: number; readonly activity: string; readonly stages: readonly Stage[]; readonly note: string | null }
-  | { readonly kind: "webhooks"; readonly title: string; readonly text: string | null; readonly chips: readonly Chip[] }
+  | { readonly kind: "webhooks"; readonly title: string; readonly text: string | null; readonly note: string | null; readonly chips: readonly Chip[] }
   | { readonly kind: "final"; readonly tone: "done" | "stopped"; readonly title: string; readonly text: string | null; readonly note: string | null; readonly chips: readonly Chip[] };
 
 export type NowPanel = {
@@ -33,6 +33,9 @@ export type NowPanel = {
 };
 
 const FAILED = new Set(["refused", "not-sent", "unknown", "never-confirmed"]);
+
+/** Measured 2026-11-08 (3m04s and 3m21s), so a dispute run's longer wait reads as expected, not stuck. */
+export const DISPUTE_WAIT_NOTE = "Dispute events usually arrive about 3 minutes after the dispute is filed.";
 
 /** What a step is doing while it is being sent, in the words of the brief's example. */
 const DOING: Readonly<Record<string, string>> = {
@@ -154,15 +157,16 @@ export function nowPanel(story: RunStory): NowPanel {
   // Every call is done; what is left is PayPal's webhooks.
   const left = story.view.waitLeftS;
   const listening = left === null ? null : `The run keeps listening for ${dur(left)} in case PayPal sends more.`;
+  const note = story.view.phase === "waiting" && cards.some((c) => c.kind === "open_dispute") ? DISPUTE_WAIT_NOTE : null;
   if (replies.length === 0) {
-    return { ...base, key: "webhooks", body: { kind: "webhooks", title: total === 1 ? "The step was sent" : `All ${total} steps sent`, text: `No webhook is tied to these steps.${listening === null ? "" : ` ${listening}`}`, chips } };
+    return { ...base, key: "webhooks", body: { kind: "webhooks", title: total === 1 ? "The step was sent" : `All ${total} steps sent`, text: `No webhook is tied to these steps.${listening === null ? "" : ` ${listening}`}`, note, chips } };
   }
   return {
     ...base,
     key: "webhooks",
     body:
       arrived < expected
-        ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${expected} arrived`, text: story.outOfOrder ?? "Each one turns to a check when it arrives and its signature is verified.", chips }
-        : { kind: "webhooks", title: expected === 1 ? `The webhook arrived, ${verified === 1 ? "verified" : "not verified"}` : `All ${expected} webhooks arrived, ${verified} verified`, text: [story.outOfOrder, listening].filter((x) => x !== null).join(" ") || null, chips },
+        ? { kind: "webhooks", title: `Waiting for PayPal's webhooks: ${arrived} of ${expected} arrived`, text: story.outOfOrder ?? "Each one turns to a check when it arrives and its signature is verified.", note, chips }
+        : { kind: "webhooks", title: expected === 1 ? `The webhook arrived, ${verified === 1 ? "verified" : "not verified"}` : `All ${expected} webhooks arrived, ${verified} verified`, text: [story.outOfOrder, listening].filter((x) => x !== null).join(" ") || null, note, chips },
   };
 }

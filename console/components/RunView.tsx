@@ -105,7 +105,7 @@ export function RunView({ story, name, runId, mode, controls, aside }: Props) {
           <p className="note">{story.settled ? "No step ran." : "No step has started yet."}</p>
         ) : (
           <ol className={`steps${story.settled ? "" : " running"}`} aria-labelledby="steps-h">
-            {story.cards.map((c) => (story.settled ? <Step key={c.id} card={c} mode={mode} settled heroLead={lead} /> : <LineStep key={c.id} card={c} mode={mode} heroLead={lead} />))}
+            {story.cards.map((c) => (story.settled ? <Step key={c.id} card={c} mode={mode} settled heroLead={lead} waitS={story.waitS} /> : <LineStep key={c.id} card={c} mode={mode} heroLead={lead} waitS={story.waitS} />))}
           </ol>
         )}
 
@@ -202,9 +202,9 @@ function linePill(c: StepCard): { cls: string; icon: "check" | "cross" | "clock"
 const arrivedAfter = (r: Reply) => `Arrived ${r.exact ? "" : "at most "}${dur(r.latencyS!)} after the call`;
 
 /** While a run is live: one line per step. A click opens the full card; it stays open until closed. */
-function LineStep({ card: c, mode, heroLead }: { card: StepCard; mode: "live" | "replay"; heroLead: string | null }) {
+function LineStep({ card: c, mode, heroLead, waitS }: { card: StepCard; mode: "live" | "replay"; heroLead: string | null; waitS: number }) {
   const [open, setOpen] = useState(false);
-  if (open) return <Step card={c} mode={mode} settled={false} heroLead={heroLead} onClose={() => setOpen(false)} />;
+  if (open) return <Step card={c} mode={mode} settled={false} heroLead={heroLead} waitS={waitS} onClose={() => setOpen(false)} />;
   const rail = railOf(c);
   const pill = linePill(c);
   return (
@@ -225,7 +225,7 @@ function LineStep({ card: c, mode, heroLead }: { card: StepCard; mode: "live" | 
   );
 }
 
-function Step({ card: c, mode, settled, heroLead, onClose }: { card: StepCard; mode: "live" | "replay"; settled: boolean; heroLead: string | null; onClose?: () => void }) {
+function Step({ card: c, mode, settled, heroLead, waitS, onClose }: { card: StepCard; mode: "live" | "replay"; settled: boolean; heroLead: string | null; waitS: number; onClose?: () => void }) {
   const rail = railOf(c);
   const compact = c.sent === "not-run" || (c.reply === "none-expected" && (c.sent === "accepted" || c.sent === "queued"));
   const failed = c.sent === "refused" || c.sent === "not-sent" || c.sent === "unknown" || c.sent === "never-confirmed";
@@ -265,7 +265,7 @@ function Step({ card: c, mode, settled, heroLead, onClose }: { card: StepCard; m
         {c.pairing !== null && <PairingLine line={c.pairing} />}
         <details className="details">
           <summary>
-            <span className="foot-note">{c.reply === "waiting" && !failed ? (mode === "live" ? "It shows here the moment the store records it. The run listens for 90 s after its last step." : "Shown on the run's recorded clock.") : ""}</span>
+            <span className="foot-note">{c.reply === "waiting" && !failed ? (mode === "live" ? `It shows here the moment the store records it. The run listens for ${waitS} s after its last step.` : "Shown on the run's recorded clock.") : ""}</span>
             <span className="details-toggle">Details <Icon name="chevron" /></span>
           </summary>
           <Details card={c} />

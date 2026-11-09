@@ -659,7 +659,7 @@ describe("v0.7.4, past the gate", () => {
       expect(figures).toMatch(/Slowest arrival\s+none arrived/);
       expect(figures).not.toMatch(/waiting/i);
       expect(figures).toMatch(/Amount in calls\s+USD 88 disputed/);
-      await expect(page.locator(".step .back").innerText()).resolves.toContain("Not proof it never came: PayPal's sandbox has delivered dispute events up to 12 hours later.");
+      await expect(page.locator(".step .back").innerText()).resolves.toContain("Not proof it never came: In our sandbox runs, dispute events arrived about 3 minutes after filing, and once 12 hours later.");
       expect(await noSideScroll(page)).toBe(true);
       await save(page, "dispute-finished", v.width);
       await ctx.close();

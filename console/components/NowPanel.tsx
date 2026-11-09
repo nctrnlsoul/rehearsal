@@ -102,6 +102,7 @@ function Body({ body }: { body: PanelBody }) {
           <p className="np-main np-main-sm">{body.title}</p>
           <Chips chips={body.chips} />
           {body.text !== null && <p className="np-text">{body.text}</p>}
+          {body.note !== null && <p className="np-text np-note">{body.note}</p>}
         </div>
       );
     case "final":

@@ -112,6 +112,21 @@ describe("liveView", () => {
     expect(done.detail).toContain("not proof");
   });
 
+  // R-054: a dispute run waits longer, and a late run's wait is cut short; the page names the wait the worker recorded.
+  it("names the wait the worker recorded, never a fixed 90 s", () => {
+    const events = [
+      ev(1, "step_started", "order", { kind: "card_order" }),
+      ev(4, "step_finished", "order", { kind: "card_order", status: "succeeded", ids: { capture_id: "CAP-1" } }),
+      ev(5, "deliveries_wait_started", null, { seconds: 270 }),
+    ];
+    expect(liveView(read("running", events, {}, 35)).waitLeftS).toBe(240);
+    const done = liveView(read("complete", [...events, ev(275, "deliveries_wait_ended", null, { events_seen: 0 }), ev(276, "run_finished")], { finished_at: T(276) }, 280));
+    expect(done.detail).toContain("1 expected delivery was not seen when the 270 s wait ended");
+    // A finished run with no wait recorded claims no wait at all.
+    const bare = liveView(read("complete", [...events.slice(0, 2), ev(6, "run_finished")], { finished_at: T(6) }, 10));
+    expect(bare.detail).toContain("1 expected delivery was not seen when the run ended");
+  });
+
   it("shows a step in flight while running, and as never confirmed once the run is abandoned", () => {
     const events = [ev(1, "step_started", "d1", { kind: "open_dispute" })];
     expect(liveView(read("running", events)).calls[0]!.status).toBe("in-flight");

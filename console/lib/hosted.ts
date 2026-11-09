@@ -36,8 +36,7 @@ export const MAX_DURATION_S = 800;
 export const TIME_BUDGET_S = 600;
 /** Kept free before each step, for the saves and the delivery wait that follow it. */
 export const STEP_MARGIN_S = 60;
-/** How long the run waits for late deliveries after its last step, as the finder does. */
-export const DELIVERY_WAIT_S = 90;
+export { DELIVERY_WAIT_S, DISPUTE_DELIVERY_WAIT_S, deliveryWaitS } from "./deliveryWait";
 export const DELIVERY_POLL_S = 5;
 
 /**

@@ -362,18 +362,29 @@ describe("v0.7.4: a dispute's pairing, a slow step's clock, and a finished run's
     expect(story(tinyBakery(40), 40).headline).toBe("All 5 steps done.");
   });
 
+  // R-054: the lag line states what was measured (about 3 minutes twice, 12 hours once), not a ceiling.
   it("item 8: a dispute webhook not seen says how late the sandbox has delivered one, and nothing more", () => {
     const s = story(disputeRun(210), 210);
     expect(s.cards[0]!.reply).toBe("not-seen");
     expect(s.cards[0]!.lateNote).toBe(DISPUTE_LAG);
-    expect(DISPUTE_LAG).toBe("PayPal's sandbox has delivered dispute events up to 12 hours later.");
+    expect(DISPUTE_LAG).toBe("In our sandbox runs, dispute events arrived about 3 minutes after filing, and once 12 hours later.");
     expect(s.lead).toContain(DISPUTE_LAG);
     // Said once, in place of the general line, never beside it.
     expect(s.lead!.split("12 hours").length).toBe(2);
     expect(s.lead).not.toContain("later than that before");
+    expect(s.lead).not.toContain("up to 12 hours");
     // A run with no dispute never borrows the dispute measurement.
     const bakery = story(tinyBakery(40), 40);
     expect(bakery.cards.every((c) => c.lateNote === null)).toBe(true);
     expect(bakery.lead ?? "").not.toContain("12 hours");
+  });
+
+  it("knows the wait the run listens for: the plan's rule before it starts, the recorded seconds once it has", () => {
+    // Before the wait: the shared rule, 270 s for a plan with a dispute, 90 s otherwise.
+    expect(story(disputeRun(50, undefined, 270), 50).waitS).toBe(270);
+    expect(story(tinyBakery(5), 5).waitS).toBe(90);
+    // Once started, what the worker recorded wins, a deadline-shortened wait included.
+    expect(story(disputeRun(150), 150).waitS).toBe(90);
+    expect(story(disputeRun(150, undefined, 163), 150).waitS).toBe(163);
   });
 });

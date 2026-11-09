@@ -111,8 +111,9 @@ export function tinyBakery(tS: number): Fixture {
  * readable, then a 90 s wait the dispute webhook did not arrive in. Every id is
  * marked E2E and none resolves at PayPal; the run's own record is not read.
  * paypalCapture: what PayPal's read-back names; undefined when it names none.
+ * waitS: 90 as that run waited; 270 for a run under R-054's dispute wait.
  */
-export function disputeRun(tS: number, paypalCapture?: string): Fixture {
+export function disputeRun(tS: number, paypalCapture?: string, waitS = 90): Fixture {
   const banked = "E2E-CAPTURE-BANK-1";
   const OPEN = "dispute PP-R-E2E-DISPUTE-1 open at WAITING_FOR_SELLER_RESPONSE, stage INQUIRY";
   const pairing =
@@ -141,9 +142,10 @@ export function disputeRun(tS: number, paypalCapture?: string): Fixture {
       data: { kind: "open_dispute", status: "succeeded", detail: pairing.startsWith("pairing_mismatch") ? `${pairing}; ${OPEN}` : `${OPEN}; ${pairing}`, ids, finished_at: null },
     });
   }
-  if (tS >= 111.5) events.push({ s: 111.5, kind: "deliveries_wait_started", data: { seconds: 90 } });
-  const done = tS >= 201.5;
-  if (done) events.push({ s: 201.5, kind: "deliveries_wait_ended", data: { events_seen: 0 } }, { s: 201.5, kind: "run_finished", data: { status: "complete" } });
+  if (tS >= 111.5) events.push({ s: 111.5, kind: "deliveries_wait_started", data: { seconds: waitS } });
+  const end = 111.5 + waitS;
+  const done = tS >= end;
+  if (done) events.push({ s: end, kind: "deliveries_wait_ended", data: { events_seen: 0 } }, { s: end, kind: "run_finished", data: { status: "complete" } });
   return { status: done ? "complete" : "running", events };
 }
 

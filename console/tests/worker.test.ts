@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type FakeResponse, fakePaypal, scenarioWith } from "../../tests/helpers/fakePaypal";
 import { createDb } from "../lib/db";
 import { type HandlerRegistry, type StepHandler, type StoreSnapshot, defaultHandlers, scenarioDigest } from "../lib/engine";
-import { HOSTED_CAPS, STEP_MARGIN_S } from "../lib/hosted";
+import { HOSTED_CAPS, MAX_DURATION_S, STEP_MARGIN_S, TIME_BUDGET_S, timeBudgetS, worstCaseOf } from "../lib/hosted";
 import type { LiveEvent, LiveRead, LiveRunRow } from "../lib/liveView";
 import { runStory } from "../lib/runStory";
 import { runFinderWorker, runScenarioWorker, timeGuarded } from "../lib/worker";
@@ -150,6 +150,59 @@ describe("runScenarioWorker", () => {
     expect(ev.filter((e) => e.kind === "delivery")).toEqual([]);
     expect(ev.find((e) => e.kind === "deliveries_wait_ended")!.data).toEqual({ events_seen: 0 });
     expect((await h.run()).status).toBe("complete");
+  });
+
+  // R-054: the dispute webhook arrived 3m04s and 3m21s after filing, after a 90 s wait had ended.
+  it("waits 90 s for a plan with no dispute, and records that", async () => {
+    const h = await harness({ readStore: async () => snapshot([]) });
+    await work(h);
+    expect((await h.events()).find((e) => e.kind === "deliveries_wait_started")!.data).toEqual({ seconds: 90 });
+  });
+
+  it("waits 270 s for a plan with a dispute, and records that", async () => {
+    const h = await harness({ readStore: async () => snapshot([]) });
+    await work(h, scenarioWith([{ id: "d1", kind: "open_dispute" }]));
+    const ev = await h.events();
+    expect(ev.find((e) => e.kind === "deliveries_wait_started")!.data).toEqual({ seconds: 270 });
+    expect((await h.run()).status).toBe("complete");
+    // The worker's own clock: the steps took no time, so the wait is the run.
+    expect(h.clockNow() - T0).toBeGreaterThanOrEqual(270_000);
+    expect(h.clockNow() - T0).toBeLessThan(290_000);
+  });
+
+  it("finishes a dispute plan at the full 600 s budget inside the route's 800 s, recording the wait it really had", async () => {
+    // 239 + 149 + 106 + 106 = 600 s, the hosted limit exactly.
+    const plan = scenarioWith([
+      { id: "d1", kind: "open_dispute" },
+      { id: "i1", kind: "invoice_create", amount: "20.00", itemName: "Cake", dueInDays: 7 },
+      { id: "i1-send", kind: "invoice_send", from: "i1", needs: ["i1"] },
+      { id: "i1-pay", kind: "invoice_record_payment", from: "i1", amount: "20.00", needs: ["i1-send"] },
+    ]);
+    expect(timeBudgetS(plan)).toBe(TIME_BUDGET_S);
+    let h!: Harness;
+    // Every step takes its full worst case on the worker's clock.
+    const slow = (kind: string): StepHandler => async (ctx) => {
+      h.ran.push(ctx.step.id);
+      h.advance(worstCaseOf(kind) * 1000);
+      return { kind: "success", detail: "ok", ids: {} };
+    };
+    // The run route's deadline: 800 s less its 20 s margin, the harness default.
+    h = await harness({
+      readStore: async () => snapshot([]),
+      handlers: Object.fromEntries(["open_dispute", "invoice_create", "invoice_send", "invoice_record_payment"].map((k) => [k, slow(k)])),
+    });
+    expect(h.deps.deadlineMs - T0).toBe((MAX_DURATION_S - 20) * 1000);
+    await work(h, plan);
+    expect(h.ran).toEqual(["d1", "i1", "i1-send", "i1-pay"]);
+    expect((await h.run()).status).toBe("complete");
+    const kinds = (await h.events()).map((e) => e.kind);
+    expect(kinds.at(-1)).toBe("run_finished");
+    expect(h.clockNow() - T0).toBeLessThan(MAX_DURATION_S * 1000);
+    // Cut short by the deadline, and the event says the shorter wait, not 270.
+    const seconds = (await h.events()).find((e) => e.kind === "deliveries_wait_started")!.data["seconds"] as number;
+    expect(seconds).toBeLessThan(270);
+    expect(seconds).toBeGreaterThan(100);
+    expect(seconds).toBeLessThanOrEqual(MAX_DURATION_S - 20 - 20 - TIME_BUDGET_S);
   });
 
   it("says once that the store could not be read, and keeps going", async () => {
