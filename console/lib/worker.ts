@@ -24,7 +24,7 @@ import {
   webhookHandlerUrl,
 } from "./engine";
 import { MAX_DETAIL_CHARS, type PlanFacts, type RunEvent, type SeenDeliveries, deliveryEvents, planFacts, savedState, stateEvents } from "./events";
-import { DELIVERY_POLL_S, DELIVERY_WAIT_S, STEP_MARGIN_S, worstCaseOf } from "./hosted";
+import { DELIVERY_POLL_S, STEP_MARGIN_S, deliveryWaitS, worstCaseOf } from "./hosted";
 
 /**
  * Runs one hosted scenario inside the run route's after().
@@ -293,12 +293,15 @@ async function runTracked(
 
   bodyDone = true;
   // Nothing PayPal accepted means nothing for it to deliver, so a halted run
-  // with no write that may have landed finishes now rather than wait 90 s.
+  // with no write that may have landed finishes now rather than wait.
   const wait = opts.deliveryWaitS > 0 && !haltedBeforeAnyWrite(result.state);
   if (wait) {
-    waitUntilMs = Math.min(deps.now().getTime() + opts.deliveryWaitS * 1000, deps.deadlineMs - FINISH_MARGIN_MS);
+    const startMs = deps.now().getTime();
+    waitUntilMs = Math.min(startMs + opts.deliveryWaitS * 1000, deps.deadlineMs - FINISH_MARGIN_MS);
     if (!fenced) {
-      await rpcOk("console_add_events", { p_events: [{ kind: "deliveries_wait_started", data: { seconds: opts.deliveryWaitS } }] }).catch(() => false);
+      // The seconds it will really wait: a late run's wait is cut short by the deadline, and the page counts down from this.
+      const seconds = Math.max(0, Math.floor((waitUntilMs - startMs) / 1000));
+      await rpcOk("console_add_events", { p_events: [{ kind: "deliveries_wait_started", data: { seconds } }] }).catch(() => false);
     }
   } else {
     waitUntilMs = 0;
@@ -343,7 +346,7 @@ export function haltedBeforeAnyWrite(state: RunState | null): boolean {
 }
 
 export async function runScenarioWorker(args: { runId: string; scenario: Scenario; digest: string }, deps: WorkerDeps): Promise<void> {
-  await runTracked(args.runId, deps, { deliveryWaitS: DELIVERY_WAIT_S }, async (execute) => ({
+  await runTracked(args.runId, deps, { deliveryWaitS: deliveryWaitS(args.scenario.steps.map((s) => s.kind)) }, async (execute) => ({
     state: await execute(args.scenario, args.digest),
   }));
 }

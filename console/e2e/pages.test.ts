@@ -659,7 +659,7 @@ describe("v0.7.4, past the gate", () => {
       expect(figures).toMatch(/Slowest arrival\s+none arrived/);
       expect(figures).not.toMatch(/waiting/i);
       expect(figures).toMatch(/Amount in calls\s+USD 88 disputed/);
-      await expect(page.locator(".step .back").innerText()).resolves.toContain("Not proof it never came: PayPal's sandbox has delivered dispute events up to 12 hours later.");
+      await expect(page.locator(".step .back").innerText()).resolves.toContain("Not proof it never came: In our sandbox runs, dispute events arrived about 3 minutes after filing, and once 12 hours later.");
       expect(await noSideScroll(page)).toBe(true);
       await save(page, "dispute-finished", v.width);
       await ctx.close();
@@ -685,6 +685,63 @@ describe("v0.7.4, past the gate", () => {
       expect(gap).toBeLessThanOrEqual(24);
       expect(await noSideScroll(page)).toBe(true);
       await save(page, "finder-result", v.width);
+      await ctx.close();
+    }
+  });
+});
+
+// Brief v0.7.5 (R-054): items 1 and 4 as a browser draws them, and their screenshots when E2E_SCREENSHOT_DIR is set.
+describe("v0.7.5, the dispute wait and the out-of-order replay", () => {
+  const sizes = [{ width: 1440, height: 900 }, { width: 390, height: 844 }];
+  let n = 0;
+  const nextId = () => `20261108120000-e75${String(++n).padStart(3, "0")}`;
+  const save = (page: Page, name: string, w: number, full = true) => (SHOTS === undefined ? Promise.resolve() : page.screenshot({ path: join(SHOTS, `${name}-${w}.png`), fullPage: full }));
+
+  it("item 1: a dispute run mid-wait says when dispute events usually arrive, and names its 270 s wait", async () => {
+    for (const v of sizes) {
+      const id = nextId();
+      // 88.5 s into the 270 s wait that follows the dispute step.
+      await seedFixture(db.pg, id, disputeRun(200, undefined, 270), 200);
+      const { ctx, page, watch } = await unlocked(v);
+      await expectCleanPage(page, watch, `/live/${id}`, 200);
+      await page.waitForSelector(".now-panel .np-note");
+      await expect(page.locator(".now-panel .np-note").innerText()).resolves.toBe("Dispute events usually arrive about 3 minutes after the dispute is filed.");
+      await expect(page.locator(".now-panel .np-main").innerText()).resolves.toBe("Waiting for PayPal's webhooks: 0 of 1 arrived");
+      // The note sits inside the panel's content box, never clipped and never in its padding.
+      const box = await page.locator(".now-panel").boundingBox();
+      const noteBox = await page.locator(".now-panel .np-note").boundingBox();
+      const padBottom = await page.locator(".now-panel").evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+      expect(noteBox!.y + noteBox!.height).toBeLessThanOrEqual(box!.y + box!.height - padBottom + 1);
+      await page.locator(".step.line").first().locator(".line-row").click();
+      await expect(page.locator(".step .foot-note").first().innerText()).resolves.toBe("It shows here the moment the store records it. The run listens for 270 s after its last step.");
+      await page.locator(".line-close").click();
+      expect(await noSideScroll(page)).toBe(true);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await save(page, "dispute-mid-wait", v.width, false);
+      await db.pg.exec(`update public.console_runs set status = 'complete', finished_at = now() where id = '${id}'`);
+      await ctx.close();
+    }
+  });
+
+  it("item 4: the c0a4d0 replay states, in plain words, that PayPal's webhooks arrived out of order", async () => {
+    const ooo = HOSTED_REPLAYS.find((h) => h.runId === "20261108005357-c0a4d0")!;
+    for (const v of sizes) {
+      const { ctx, page, watch } = await watched({ reducedMotion: "reduce" });
+      await page.setViewportSize(v);
+      await expectCleanPage(page, watch, "/runs", 200);
+      await expect(page.locator(`a[href="/runs/${ooo.runId}"] .rc-name`).innerText()).resolves.toBe("Tiny Bakery, webhooks out of order");
+      await expectCleanPage(page, watch, `/runs/${ooo.runId}`, 200);
+      await hydrated(page);
+      await expect(page.locator("#run-h").innerText()).resolves.toBe("All 5 steps done.");
+      await expect(page.locator(".proof-order").innerText()).resolves.toBe("Step 2's webhook arrived before step 1's. PayPal does not deliver webhooks in order; your app has to handle that.");
+      const banner = await page.locator(".replay-banner").innerText();
+      expect(banner).toContain("PayPal delivered step 2's payment webhook before step 1's, and the invoice's UNPAID event before its CREATED event.");
+      // The finished panel's note says the same and is never cut short, at either width.
+      const note = page.locator(".now-panel .np-text").last();
+      await expect(note.innerText()).resolves.toContain("Step 2's webhook arrived before step 1's.");
+      await expect(note.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).resolves.toBe(true);
+      expect(await noSideScroll(page)).toBe(true);
+      await save(page, "replay-out-of-order", v.width);
       await ctx.close();
     }
   });

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HOSTED_REPLAYS, hostedById, hostedEndS, hostedRead } from "../lib/hostedReplays";
 import type { LiveRead } from "../lib/liveView";
-import { nowPanel, stagesOf } from "../lib/nowPanel";
+import { DISPUTE_WAIT_NOTE, nowPanel, stagesOf } from "../lib/nowPanel";
 import { runStory } from "../lib/runStory";
 import { RUNS } from "../lib/replays";
 import { type Fixture, absolute, disputeRun, recordedAt, tokenRefused } from "./fixtures/liveRuns";
@@ -12,14 +12,51 @@ const ID = "20261107230012-f3bb0a";
 const hosted = hostedById(ID)!;
 const at = (tS: number) => nowPanel(runStory(hostedRead(hosted, tS)));
 const END = hostedEndS(hosted);
+const OOO = "20261108005357-c0a4d0";
+
+// R-054 item 4: hosted run c0a4d0, where PayPal's webhooks arrived out of order.
+describe("the out-of-order hosted replay", () => {
+  const ooo = hostedById(OOO)!;
+  const story = (tS: number) => runStory(hostedRead(ooo, tS));
+  const ORDER = "Step 2's webhook arrived before step 1's. PayPal does not deliver webhooks in order; your app has to handle that.";
+
+  it("says in plain words that step 2's payment webhook beat step 1's, while waiting and once done", () => {
+    expect(story(30).outOfOrder).toBe(ORDER);
+    expect(nowPanel(story(30)).body).toMatchObject({ kind: "webhooks", text: ORDER });
+    const done = story(hostedEndS(ooo));
+    expect(done.headline).toBe("All 5 steps done.");
+    expect(done.outOfOrder).toBe(ORDER);
+    const p = nowPanel(done);
+    expect(p.body.kind === "final" && p.body.note).toContain(ORDER);
+  });
+
+  it("lists the UNPAID event under Other events, tied to step 3's invoice, and its summary names both reorderings", () => {
+    const done = story(hostedEndS(ooo));
+    expect(done.other.map((o) => [o.eventType, o.plain])).toEqual([["INVOICING.INVOICE.UNPAID", "PayPal says the invoice is awaiting payment"]]);
+    expect(done.counts).toEqual({ expected: 4, arrived: 4, verified: 4 });
+    expect(ooo.summary).toContain("step 2's payment webhook before step 1's");
+    expect(ooo.summary).toContain("UNPAID event before its CREATED event");
+    // The store's own receive times bear the summary out.
+    const received = (type: string) => ooo.record.events.find((e) => e.kind === "delivery" && e.data["event_type"] === type)!.data["received_at"] as string[];
+    expect(Date.parse(received("INVOICING.INVOICE.UNPAID")[0]!)).toBeLessThan(Date.parse(received("INVOICING.INVOICE.CREATED")[0]!));
+  });
+});
 
 describe("the hosted replay's fixture", () => {
-  it("is the evidence file, byte for byte", () => {
+  it("is the evidence file, byte for byte, for every hosted replay", () => {
     const repo = join(__dirname, "..", "..");
-    const evidence = readFileSync(join(repo, "evidence", `hosted-run-${ID}.json`));
-    const fixture = readFileSync(join(__dirname, "..", "fixtures", `hosted-run-${ID}.json`));
-    expect(fixture.equals(evidence)).toBe(true);
-    expect(HOSTED_REPLAYS.map((h) => [h.runId, h.title, h.evidence])).toEqual([[ID, "Tiny Bakery, a hosted live run", `evidence/hosted-run-${ID}.json`]]);
+    expect(HOSTED_REPLAYS.map((h) => [h.runId, h.title, h.evidence])).toEqual([
+      [ID, "Tiny Bakery, a hosted live run", `evidence/hosted-run-${ID}.json`],
+      [OOO, "Tiny Bakery, webhooks out of order", `evidence/hosted-run-${OOO}.json`],
+    ]);
+    for (const h of HOSTED_REPLAYS) {
+      const evidence = readFileSync(join(repo, h.evidence));
+      const fixture = readFileSync(join(__dirname, "..", "fixtures", `hosted-run-${h.runId}.json`));
+      expect(fixture.equals(evidence), h.runId).toBe(true);
+      // The record the page plays is that file's own content, run id included.
+      expect(h.record).toEqual(JSON.parse(evidence.toString("utf8")));
+      expect(h.record.run.id).toBe(h.runId);
+    }
   });
 
   it("ends at the row's own finish time and, there, serves the exported rows unchanged", () => {
@@ -283,6 +320,25 @@ describe("v0.7.4: the panel while PayPal works on a slow step", () => {
     if (p.body.kind !== "step") throw new Error(p.body.kind);
     expect(p.body.stages[0]!.label).toBe("Sending to PayPal, 1m 30s");
     expect(p.body.note).toBe("PayPal creates the case, then makes it readable.");
+  });
+
+  // R-054: measured 3m04s and 3m21s, so a dispute run's 270 s wait says what to expect.
+  it("while a dispute run waits, adds the one line on when dispute events usually arrive", () => {
+    const p = panel(disputeRun(200, undefined, 270), 200);
+    if (p.body.kind !== "webhooks") throw new Error(p.body.kind);
+    expect(p.body.note).toBe("Dispute events usually arrive about 3 minutes after the dispute is filed.");
+    expect(DISPUTE_WAIT_NOTE).toBe(p.body.note);
+    expect(runStory(read(disputeRun(200, undefined, 270), 200)).view.waitLeftS).toBeCloseTo(181.5, 1);
+  });
+
+  it("says nothing about disputes while a run with no dispute waits, or once a dispute run has finished", () => {
+    for (const t of [12, 40]) {
+      const p = at(t);
+      expect(p.body.kind === "webhooks" && p.body.note).toBeNull();
+    }
+    const done = panel(disputeRun(400, undefined, 270), 400);
+    expect(done.body.kind).toBe("final");
+    expect(JSON.stringify(done)).not.toContain("about 3 minutes");
   });
 
   it("item 5: one step and one webhook read in the singular", () => {

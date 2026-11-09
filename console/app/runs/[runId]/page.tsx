@@ -15,7 +15,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
       <div className="s-replay">
         <a className="skip" href="#run-h">Skip to the run</a>
         <Topbar current="runs" />
-        <ReplayBanner>Hosted live run from {hosted.record.run.created_at.slice(0, 10)}, played on its recorded clock by the same view a live run uses. Nothing here is live.</ReplayBanner>
+        <ReplayBanner>Hosted live run from {hosted.record.run.created_at.slice(0, 10)}, played on its recorded clock by the same view a live run uses. Nothing here is live. {hosted.summary}</ReplayBanner>
         <main>
           <ReplayRun replay={{ kind: "hosted", run: hosted }} />
           <div className="wrap">

@@ -115,7 +115,7 @@ export type LiveView = {
   readonly detail: string | null;
   readonly elapsedS: number;
   readonly lastContactS: number | null;
-  /** Seconds left in the 90 s delivery wait, while it runs. */
+  /** Seconds left in the delivery wait, while it runs. */
   readonly waitLeftS: number | null;
   /** True once nothing more can arrive on this page: the run has finished or died. */
   readonly settled: boolean;
@@ -410,7 +410,9 @@ export function liveView(read: LiveRead): LiveView {
   if (phase === "halted" || phase === "abandoned" || phase === "failed") detail = run.halt_reason;
   if (phase === "complete") {
     const missing = pairs.filter((p) => p.arrivedT === null).length;
-    if (missing > 0) detail = `${missing} expected ${missing === 1 ? "delivery was" : "deliveries were"} not seen when the 90 s wait ended. That is not proof the store missed ${missing === 1 ? "it" : "them"}: PayPal's sandbox has delivered later than that before.`;
+    // The seconds the worker recorded, so a dispute run's longer wait is named as it ran.
+    const ended = waitStart === undefined ? "when the run ended" : `when the ${num(waitStart.data["seconds"])} s wait ended`;
+    if (missing > 0) detail = `${missing} expected ${missing === 1 ? "delivery was" : "deliveries were"} not seen ${ended}. That is not proof the store missed ${missing === 1 ? "it" : "them"}: PayPal's sandbox has delivered later than that before.`;
   }
 
   return {

@@ -1,3 +1,4 @@
+import { deliveryWaitS } from "./deliveryWait";
 import { type LiveRead, type LiveView, liveView } from "./liveView";
 
 /**
@@ -118,6 +119,8 @@ export type RunStory = {
   readonly cards: readonly StepCard[];
   readonly other: readonly OtherEvent[];
   readonly notes: readonly string[];
+  /** How long the run listens for deliveries after its last step: as recorded once the wait starts, else the plan's rule. */
+  readonly waitS: number;
   readonly view: LiveView;
 };
 
@@ -171,8 +174,11 @@ export const SLOW_SEND: Readonly<Record<string, string>> = {
   open_dispute: "PayPal creates the case, then makes it readable.",
 };
 
-/** Measured on 2026-10-23: a CUSTOMER.DISPUTE.CREATED arrived 12h17m after its dispute was filed. */
-export const DISPUTE_LAG = "PayPal's sandbox has delivered dispute events up to 12 hours later.";
+/**
+ * Measured in this sandbox: CUSTOMER.DISPUTE.CREATED arrived 12h17m after
+ * filing on 2026-10-23, and 3m04s and 3m21s after filing on 2026-11-08.
+ */
+export const DISPUTE_LAG = "In our sandbox runs, dispute events arrived about 3 minutes after filing, and once 12 hours later.";
 
 /** Kinds liveView joins to a delivery (its PAIR_RULES, plus a resend's second copy). */
 const JOINED_KINDS = new Set(["card_order", "refund", "open_dispute", "invoice_create", "invoice_record_payment", "resend_webhook"]);
@@ -693,8 +699,14 @@ export function runStory(read: LiveRead): RunStory {
     cards: finalCards,
     other,
     notes,
+    waitS: waitSOf(read, plan),
     view,
   };
+}
+
+function waitSOf(read: LiveRead, plan: Plan): number {
+  const started = read.events.find((e) => e.kind === "deliveries_wait_started")?.data["seconds"];
+  return typeof started === "number" && Number.isFinite(started) ? started : deliveryWaitS(plan.steps.map((s) => s.kind));
 }
 
 /** Every copy the store recorded passed PayPal's signature check. */

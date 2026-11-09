@@ -72,7 +72,7 @@ export type ServerDeps = {
 };
 
 export const SERVER_NAME = "rehearsal";
-export const SERVER_VERSION = "0.7.4";
+export const SERVER_VERSION = "0.7.5";
 
 export const MAX_DESCRIPTION_CHARS = 4000;
 export const MAX_SCENARIO_JSON_CHARS = 32_768;
