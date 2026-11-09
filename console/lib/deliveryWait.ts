@@ -1,7 +1,8 @@
 /**
  * How long a hosted run listens for PayPal's deliveries after its last step.
  * One rule in one place, with no engine import, so the worker that waits and
- * the page that shows the wait can never disagree.
+ * the page that shows the wait read the same rule. Once the wait starts, the
+ * page shows the seconds the worker recorded, which the deadline can shorten.
  */
 
 /** As the finder does. */

@@ -13,7 +13,7 @@ import { Icon } from "./chrome";
 export function NowPanelBox({ panel }: { panel: NowPanel }) {
   const body = <Body body={panel.body} />;
   return (
-    <section className={`card now-panel${panel.sticky ? " sticky" : ""} now-${panel.body.kind}${panel.body.kind === "step" && panel.body.note !== null ? " has-note" : ""}`} aria-label="Now running">
+    <section className={`card now-panel${panel.sticky ? " sticky" : ""} now-${panel.body.kind}${(panel.body.kind === "step" || panel.body.kind === "webhooks") && panel.body.note !== null ? " has-note" : ""}`} aria-label="Now running">
       <Bar panel={panel} />
       <Swap swapKey={panel.key}>{body}</Swap>
     </section>
