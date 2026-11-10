@@ -137,7 +137,7 @@
 .step.compact .step-card { background: var(--bg-muted); box-shadow: none; }
 .step.s-queued:not(.compact) .step-card { background: var(--bg-muted); box-shadow: none; }
 
-.row { display: grid; grid-template-columns: minmax(0, 1fr) 200px minmax(0, 1fr); gap: 24px; padding: 22px 24px 18px; align-items: start; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, max-content) minmax(0, 1fr); gap: 24px; padding: 22px 24px 18px; align-items: start; }
 .step-n { font-size: 14px; color: var(--text-2); }
 .sent-title { margin-top: 4px; font-size: 20px; font-weight: 500; line-height: 1.3; }
 .sent-amount { margin-top: 2px; font-size: clamp(24px, 2.6vw, 30px); font-weight: 600; letter-spacing: -0.01em; }
