@@ -1,12 +1,12 @@
 {
   "note": "Measured by running each package's test suite. The console count is its unit tests plus its browser tests. Updated by hand when the counts change; tests/replays.test.ts checks the total adds up.",
-  "measuredOn": "2026-11-08",
-  "version": "v0.7.5",
+  "measuredOn": "2026-11-10",
+  "version": "v0.7.6",
   "tests": {
     "engine": 640,
     "store": 142,
     "receiver": 76,
-    "console": 398,
-    "total": 1256
+    "console": 399,
+    "total": 1257
   }
 }

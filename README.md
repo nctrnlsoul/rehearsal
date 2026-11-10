@@ -34,7 +34,7 @@ The hosted console fires only at the sample store, for safety.
   The dry run validates the scenario, checks it against the spend caps and
   prints the plan. It makes no network call.
 
-**Status: v0.7.5.** Scenario schema, executor, step handlers, purchase bank,
+**Status: v0.7.6.** Scenario schema, executor, step handlers, purchase bank,
 CLI, AI planner, edge-case finder, a stdio MCP server for Claude Code, and a
 web console with live sandbox runs behind the judge passcode. Day-1 capability
 findings are in [gate/RESULTS.md](gate/RESULTS.md).

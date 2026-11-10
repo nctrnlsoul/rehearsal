@@ -747,6 +747,43 @@ describe("v0.7.5, the dispute wait and the out-of-order replay", () => {
   });
 });
 
+// v0.7.6: a reply that takes minutes ("Arrived 3m 10s after the call") must not run into the reply column.
+// Live run 20261110051621-6c2e39 on 2026-11-10 drew the pill over "Arrived / Dispute opened" at 1920 wide,
+// because the middle column was a fixed 200 px and the pill never wraps.
+describe("v0.7.6, a slow reply's pill keeps clear of both columns", () => {
+  it("a dispute that arrives 3m 10s after its call: the pill sits between the columns at every desktop width", async () => {
+    const banked = "E2E-CAPTURE-BANK-1";
+    const f = disputeRun(400, banked, 270);
+    const events = [...f.events, {
+      s: 301,
+      kind: "delivery",
+      data: { event_id: "WH-E2E-DISPUTE-1", event_type: "CUSTOMER.DISPUTE.CREATED", deliveries: 1, fulfilled: 0, duplicates_ignored: 0, other: 1, refused: 0, cert_hosts: ["api.sandbox.paypal.com"], capture_ids: [banked], received_at: [{ rel: 301 }] },
+    }].sort((a, b) => a.s - b.s);
+    let n = 0;
+    for (const v of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }, { width: 1000, height: 800 }]) {
+      const id = `20261110120000-e76${String(++n).padStart(3, "0")}`;
+      await seedFixture(db.pg, id, { ...f, events }, 400);
+      const { ctx, page, watch } = await unlocked(v);
+      await expectCleanPage(page, watch, `/live/${id}`, 200);
+      await page.waitForSelector(".step .mid .pill");
+      const pill = page.locator(".step .mid .pill").first();
+      await expect(pill.innerText()).resolves.toBe("Arrived 3m 10s after the call");
+      const pillBox = (await pill.boundingBox())!;
+      const backBox = (await page.locator(".step .row .back").first().boundingBox())!;
+      const sentBox = (await page.locator(".step .row > :first-child").first().boundingBox())!;
+      // At least 12 px of air on each side of the pill.
+      expect(pillBox.x + pillBox.width).toBeLessThanOrEqual(backBox.x - 12);
+      expect(pillBox.x).toBeGreaterThanOrEqual(sentBox.x + sentBox.width + 12);
+      expect(await noSideScroll(page)).toBe(true);
+      if (SHOTS !== undefined) {
+        await page.locator(".step").first().scrollIntoViewIfNeeded();
+        await page.screenshot({ path: join(SHOTS, `slow-reply-pill-${v.width}.png`) });
+      }
+      await ctx.close();
+    }
+  });
+});
+
 // The D2 build screenshots (brief v0.7.0, section 6, and v0.7.1, section 7), when E2E_SCREENSHOT_DIR is set.
 describe.runIf(SHOTS !== undefined)("D2 screenshots at 1440 and 390", () => {
   const sizes = [{ width: 1440, height: 900 }, { width: 390, height: 844 }];
