@@ -1,6 +1,6 @@
 # REHEARSAL
 
-A PayPal sandbox scenario engine. Describe a business in plain English or a
+A PayPal sandbox scenario engine for developers building on PayPal. Describe a business in plain English or a
 scenario file and it builds that business for real in the PayPal sandbox: card
 orders, refunds, payouts, invoices, disputes, and real webhook events that
 verify. Then its edge-case finder checks how a merchant app handled them.
@@ -62,7 +62,7 @@ bin/mcp.ts       the MCP server's stdio entry point.
 scenarios/       scenario files. quick-start.json runs anywhere; candle-shop.json uses every step kind.
 gate/            the day-1 capability gates that proved each API path.
 receiver/        separate tiny Next.js app: the public webhook endpoint.
-store/           the sample merchant app the edge-case finder tests.
+store/           the sample merchant app the edge-case finder tests (setup: store/README.md).
 console/         the web console (Next.js): replays, the judge gate, live runs.
 evidence/        finder reports and run state from real sandbox runs.
 tests/           unit tests over src/. None of them opens a socket.
@@ -102,7 +102,7 @@ Run state lands in `runs/<runId>.json` and a readable report in
 ### Disputes need a banked purchase
 
 A PayPal-wallet payment cannot be approved server to server, and the buyer-side
-transaction id a dispute needs is not visible anywhere on the seller side. So
+transaction id a dispute needs is not in the seller's order or capture records. So
 purchases are banked ahead of time, one human click each:
 
 ```

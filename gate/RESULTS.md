@@ -189,19 +189,23 @@ What remains on gate 6 is not an approval but the claim-stage problem above.
 answer is yes. `POST /v1/customer/disputes` with the buyer app's own
 client_credentials token, no `PayPal-Auth-Assertion` header, returned **201** and
 created dispute `PP-R-DXC-10194171` on buyer transaction `176520997B301664B`.
-The endpoint is absent from PayPal's published OpenAPI spec, so this is a
-capability the spec does not admit to having.
+PayPal documents this endpoint as sandbox-only in its
+[dispute testing guide](https://developer.paypal.com/platforms/disputes/test-go-live),
+called with a `PayPal-Auth-Assertion` header. It also works with the buyer app's
+own token and no assertion, which is how REHEARSAL calls it.
 
 Three things it took to get there, each a finding in its own right:
 
 1. **`buyer_transaction_id`, not the seller's capture id.** Using the capture id
    returned `400 TRANSACTION_NOT_ELIGIBLE`. That error also proved the body shape
    itself was accepted, including the `extensions` block.
-2. **The buyer-side transaction id is not reachable from the seller side at all.**
+2. **The buyer-side transaction id is not in the seller's order or capture.**
    Dumped both the full order and the full capture: the only related id is
    `supplementary_data.related_ids.order_id`. Buyer-side Transaction Search
-   returns `403` because the buyer app has no reporting scope. Brian read the id
-   from the buyer's activity page.
+   returned `403` because the buyer app had no reporting scope then. Brian read
+   the id from the buyer's activity page. (The scope was granted later; with
+   `fields=all`, each buyer payment's `paypal_reference_id` names the seller's
+   capture, which pairs them exactly. Checked 2026-11-09.)
 3. **The new dispute's id exists only in a self link.** The 201 body is
    `{"links":[{"href":".../disputes/PP-R-DXC-10194171","rel":"self"}]}` with no
    `id` or `dispute_id` field. Our first run reported FAIL on a write that had
@@ -218,9 +222,10 @@ require-evidence  -> 400 ACTION_NOT_ALLOWED_IN_CURRENT_DISPUTE_STATE
 adjudicate        -> 400 ACTION_NOT_ALLOWED_IN_CURRENT_DISPUTE_STATE
 ```
 
-The spec states the precondition for both as "the dispute `status` must be
-`UNDER_REVIEW`". Our status **is** `UNDER_REVIEW` and both still refuse, so that
-documented precondition is necessary but **not sufficient**. Both are claim-stage
+PayPal's testing guide gives two preconditions for both: the dispute `status`
+must be `UNDER_REVIEW`, and the matching action link (`require-evidence` or
+`adjudicate`) must be offered. Our status **is** `UNDER_REVIEW`, but at the
+INQUIRY stage neither link is offered and both calls refuse. Both are claim-stage
 tools, and PayPal does not adjudicate an inquiry.
 
 **Getting to the claim stage is the unsolved part.** `POST /{id}/escalate`
@@ -236,8 +241,8 @@ as a chargeback would already be at the stage these two endpoints want. Testing
 it needs another approved order, so another human click and another manual
 transaction id read.
 
-**Observed sandbox dispute lifecycle**, which is documented nowhere and takes
-minutes per transition:
+**Observed sandbox dispute lifecycle.** PayPal's testing guide says only to wait
+a few minutes after creating a dispute; each transition below took minutes:
 
 ```
 created -> UNDER_REVIEW / UNDER_PAYPAL_REVIEW   no actions offered
