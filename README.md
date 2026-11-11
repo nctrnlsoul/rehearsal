@@ -1,6 +1,6 @@
 # REHEARSAL
 
-A PayPal sandbox scenario engine. Describe a business in plain English or a
+A PayPal sandbox scenario engine for developers building on PayPal. Describe a business in plain English or a
 scenario file and it builds that business for real in the PayPal sandbox: card
 orders, refunds, payouts, invoices, disputes, and real webhook events that
 verify. Then its edge-case finder checks how a merchant app handled them.
@@ -48,6 +48,43 @@ the verify-webhook-signature endpoint, cannot be resent, and match no real
 transaction. So an app that verifies through that endpoint rejects them.
 REHEARSAL creates real records and fires real events that do verify.
 
+## How it uses PayPal and AI
+
+**PayPal, sandbox only** (`api-m.sandbox.paypal.com`, pinned in code):
+
+| PayPal API | What REHEARSAL does with it |
+|---|---|
+| Orders v2 (`/v2/checkout/orders`) | Card payments captured in one call (intent `CAPTURE` with `payment_source.card`, no buyer step); wallet orders for the purchase bank |
+| Payments v2 (`/v2/payments/captures/{id}/refund`) | Full and partial refunds |
+| Invoicing v2 (`/v2/invoicing/invoices`) | Create, send (with no email to anyone), record a payment, cancel |
+| Payouts v1 (`/v1/payments/payouts`) | Payout batches, including items left unclaimed (CLI and MCP) |
+| Disputes v1 (`/v1/customer/disputes`) | Opens a dispute on a banked purchase (PayPal's sandbox-only create), then reads PayPal's record back to check it names the banked capture |
+| Webhooks v1 (`/v1/notifications/...`) | Registers and looks up webhooks, verifies every delivery through `verify-webhook-signature`, lists events, and asks PayPal to resend one for the duplicate-delivery test |
+| Transaction Search v1 (`/v1/reporting/transactions`) | Finds the buyer-side transaction a dispute needs |
+| OAuth 2.0 and Identity | Client-credentials tokens; proves the buyer and seller are different sandbox accounts |
+
+**AI: Claude Sonnet 5 (`claude-sonnet-5`) through the Anthropic API**, called with
+the Vercel AI SDK (`ai`, `@ai-sdk/anthropic`). The model name is the default in
+`src/ai/planner.ts`; `REHEARSAL_PLANNER_MODEL` can change it.
+
+- **AI planner:** turns a plain-English business description into a scenario.
+  Every reply is re-checked against the schema, the spend caps and the
+  event-target allowlist before it can run. At most 4,000 output tokens and 60
+  seconds per call.
+- **AI finder:** for each bug class the model fills a fixed template (values
+  only, never steps). The verdict never comes from the model: it comes from the
+  sample store's verified records or PayPal's own read-back.
+- **MCP server:** an AI coding assistant such as Claude Code can plan, dry run
+  and run scenarios, with an explicit `confirm` before anything writes.
+
+**Other tools:** TypeScript on Node 22, Next.js 15 and React (console, sample
+store, receiver), Supabase Postgres, Vercel hosting and its WAF rate limits,
+zod, the MCP TypeScript SDK, Vitest, Playwright and PGlite for tests, and the
+fonts Instrument Sans and JetBrains Mono (OFL). No sponsor tools are used.
+
+**Built with AI assistance:** Claude Code (implementation and tests), Claude
+(planning, audits and review) and Claude Design (the console's visual direction).
+
 ## Layout
 
 ```
@@ -62,7 +99,7 @@ bin/mcp.ts       the MCP server's stdio entry point.
 scenarios/       scenario files. quick-start.json runs anywhere; candle-shop.json uses every step kind.
 gate/            the day-1 capability gates that proved each API path.
 receiver/        separate tiny Next.js app: the public webhook endpoint.
-store/           the sample merchant app the edge-case finder tests.
+store/           the sample merchant app the edge-case finder tests (setup: store/README.md).
 console/         the web console (Next.js): replays, the judge gate, live runs.
 evidence/        finder reports and run state from real sandbox runs.
 tests/           unit tests over src/. None of them opens a socket.
@@ -102,7 +139,7 @@ Run state lands in `runs/<runId>.json` and a readable report in
 ### Disputes need a banked purchase
 
 A PayPal-wallet payment cannot be approved server to server, and the buyer-side
-transaction id a dispute needs is not visible anywhere on the seller side. So
+transaction id a dispute needs is not in the seller's order or capture records. So
 purchases are banked ahead of time, one human click each:
 
 ```

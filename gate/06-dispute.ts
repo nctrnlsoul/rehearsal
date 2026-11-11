@@ -303,7 +303,7 @@ await runGate({
       if (disputeId === null) {
         return {
           ok: false,
-          reason: `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.debugId)}. Sandbox dispute creation is absent from PayPal's public OpenAPI spec, so this is the finding, not a code bug.`,
+          reason: `buyer app could not create a dispute: http ${filed.status}, ${errorSummary(filed.body, filed.debugId)}. Dispute creation is a sandbox-only PayPal endpoint: check the buyer app's credentials and the buyer transaction id before the code.`,
           ...(filed.status === 403 || filed.status === 404 ? { qualifier: "BLOCKED" } : {}),
         };
       }
