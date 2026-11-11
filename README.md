@@ -105,6 +105,41 @@ evidence/        finder reports and run state from real sandbox runs.
 tests/           unit tests over src/. None of them opens a socket.
 ```
 
+## Run it yourself, from zero
+
+The hosted console needs nothing installed. To run it all on your own machine,
+go in this order; each step works without the ones after it.
+
+1. **Offline, no accounts.** Node 22 or later, then `npm install`, `npm test`
+   and `npm run dry-run scenarios/quick-start.json`. Nothing touches the network.
+2. **PayPal sandbox.** In the
+   [PayPal developer dashboard](https://developer.paypal.com/dashboard/), use two
+   sandbox business accounts and create one REST app on each: a seller app, which
+   runs every step, and a buyer app, which files disputes. Set the four variables
+   named in [.env.example](.env.example) in your OS environment, never in a file.
+   Then run `npm run gate:0`: it checks both apps authenticate against the sandbox
+   and lists any capability the later steps need that an app's token lacks. Turn
+   the missing ones on in that app's settings in the dashboard. This project had
+   to turn on Invoicing for the seller app, and Transaction Search for the buyer
+   app, which disputes use.
+3. **First live run.** `npm run rehearsal -- run scenarios/quick-start.json`
+   creates a card order, a partial refund and an overdue invoice in your sandbox.
+4. **The AI planner.** Add `ANTHROPIC_API_KEY`, run
+   `npm run rehearsal -- plan "a candle shop that invoices wholesale buyers" --out plan.json`,
+   read `plan.json`, then `npm run rehearsal -- run plan.json`.
+5. **Webhooks to your own app.** Allow your app's https origin in
+   `REHEARSAL_EVENT_ORIGINS` and point a scenario's `webhook.target` at
+   `https://<your-app>/api/paypal/webhook`. The run registers that webhook on your
+   sandbox seller app, so PayPal delivers real, verifiable events to your handler.
+6. **The sample store and the finder.** Set up the store with
+   [store/README.md](store/README.md), set `REHEARSAL_STORE_ORIGIN` and
+   `REHEARSAL_STORE_TOKEN`, then run `npm run find`.
+7. **Disputes.** Bank a buyer-approved purchase first:
+   [Disputes need a banked purchase](#disputes-need-a-banked-purchase).
+8. **Claude Code.** Register the MCP server: [Use with Claude Code](#use-with-claude-code).
+9. **The web console.** It has its own Supabase and Vercel projects:
+   [Web console](#web-console-console) and [console/.env.example](console/.env.example).
+
 ## Use it
 
 ```
