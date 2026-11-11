@@ -82,8 +82,11 @@ store, receiver), Supabase Postgres, Vercel hosting and its WAF rate limits,
 zod, the MCP TypeScript SDK, Vitest, Playwright and PGlite for tests, and the
 fonts Instrument Sans and JetBrains Mono (OFL). No sponsor tools are used.
 
-**Built with AI assistance:** Claude Code (implementation and tests), Claude
-(planning, audits and review) and Claude Design (the console's visual direction).
+**Built with AI assistance:** Claude Code (implementation and tests) and Claude
+(planning, audits and review), both running Claude Opus 5.5, with Claude Opus 5
+for the first two days (the commit trailers name the model on each commit), and
+Claude Design (the console's visual direction). The product itself calls Claude
+Sonnet 5, as above.
 
 ## Layout
 
