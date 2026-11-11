@@ -18,7 +18,7 @@ The hosted console fires only at the sample store, for safety.
   real runs are open to everyone. Live runs are behind a passcode.
 - **Passcode:** in the private Devpost testing notes. It unlocks live runs for
   2 hours in that browser.
-- **Video:** linked from the Devpost submission.
+- **Video (2:16):** https://www.youtube.com/watch?v=ehJ-sJr2lAY
 - **Evidence:** [evidence/](evidence/) holds the finder's reports and the run
   state from real sandbox runs, including the finder run that reproduces the
   classic duplicate-delivery bug with PayPal's real redelivery, then proves the
