@@ -18,7 +18,7 @@ const OOO = "20261108005357-c0a4d0";
 describe("the out-of-order hosted replay", () => {
   const ooo = hostedById(OOO)!;
   const story = (tS: number) => runStory(hostedRead(ooo, tS));
-  const ORDER = "Step 2's webhook arrived before step 1's. PayPal does not deliver webhooks in order; your app has to handle that.";
+  const ORDER = "Step 2's webhook arrived before step 1's. Webhooks can arrive out of order, as here; your app has to handle that.";
 
   it("says in plain words that step 2's payment webhook beat step 1's, while waiting and once done", () => {
     expect(story(30).outOfOrder).toBe(ORDER);

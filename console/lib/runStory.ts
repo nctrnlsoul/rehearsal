@@ -643,7 +643,7 @@ export function runStory(read: LiveRead): RunStory {
   for (const b of [...ranked].sort((x, y) => x.rank - y.rank)) {
     const a = ranked.find((x) => x.n < b.n && x.rank > b.rank);
     if (a !== undefined) {
-      outOfOrder = `Step ${b.n}'s webhook arrived before step ${a.n}'s. PayPal does not deliver webhooks in order; your app has to handle that.`;
+      outOfOrder = `Step ${b.n}'s webhook arrived before step ${a.n}'s. Webhooks can arrive out of order, as here; your app has to handle that.`;
       break;
     }
   }

@@ -388,7 +388,7 @@ describe("the live run, past the gate", () => {
       await expect(page.locator(".other").innerText()).resolves.toContain("INVOICING.INVOICE.UPDATED");
       expect(await page.locator(".nodes li.in").count()).toBe(4);
       // Step 3's invoice event beat step 2's payment in this fixture, and the strip says so.
-      await expect(page.locator(".proof-order").innerText()).resolves.toBe("Step 3's webhook arrived before step 2's. PayPal does not deliver webhooks in order; your app has to handle that.");
+      await expect(page.locator(".proof-order").innerText()).resolves.toBe("Step 3's webhook arrived before step 2's. Webhooks can arrive out of order, as here; your app has to handle that.");
       await expect(page.locator(".nodes li.in .node-label").first().innerText()).resolves.toBe("Step 1, payment");
       expect(await noSideScroll(page)).toBe(true);
       await ctx.close();
@@ -733,7 +733,7 @@ describe("v0.7.5, the dispute wait and the out-of-order replay", () => {
       await expectCleanPage(page, watch, `/runs/${ooo.runId}`, 200);
       await hydrated(page);
       await expect(page.locator("#run-h").innerText()).resolves.toBe("All 5 steps done.");
-      await expect(page.locator(".proof-order").innerText()).resolves.toBe("Step 2's webhook arrived before step 1's. PayPal does not deliver webhooks in order; your app has to handle that.");
+      await expect(page.locator(".proof-order").innerText()).resolves.toBe("Step 2's webhook arrived before step 1's. Webhooks can arrive out of order, as here; your app has to handle that.");
       const banner = await page.locator(".replay-banner").innerText();
       expect(banner).toContain("PayPal delivered step 2's payment webhook before step 1's, and the invoice's UNPAID event before its CREATED event.");
       // The finished panel's note says the same and is never cut short, at either width.

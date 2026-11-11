@@ -80,7 +80,7 @@ describe("the live state sequence, on a Tiny Bakery run", () => {
     expect(s.lead).toBe("4 of 4 expected events arrived, all verified.");
     expect(s.proof.map((p) => `Step ${p.step}, ${p.label} ${dur(p.latencyS!)}`)).toEqual(["Step 1, Payment 12s", "Step 3, Invoice 12s", "Step 2, Payment 20s", "Step 5, Invoice paid 16s"]);
     // Step 3's invoice event beat step 2's payment, so the page says so in one sentence.
-    expect(s.outOfOrder).toBe("Step 3's webhook arrived before step 2's. PayPal does not deliver webhooks in order; your app has to handle that.");
+    expect(s.outOfOrder).toBe("Step 3's webhook arrived before step 2's. Webhooks can arrive out of order, as here; your app has to handle that.");
     expect(s.figures).toEqual({ steps: "5 of 5", amount: "USD 345", amountNote: null, disputed: null, slowest: "20s", signatures: "4 of 4", signaturesOk: true });
     expect(s.counts).toEqual({ expected: 4, arrived: 4, verified: 4 });
     expect(s.rejected).toBeNull();
